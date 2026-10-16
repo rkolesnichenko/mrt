@@ -25,7 +25,9 @@ func ExampleRoutes() {
 	var n, bad int
 	first := true
 	for route, err := range mrt.Routes(mrt.Records(r)) {
-		if err != nil { // a bad record or entry; the stream goes on
+		if err != nil {
+			// A bad record or entry is reported and the stream goes on;
+			// ErrTruncated or a read error ends it (errors.Is(err, mrt.ErrTruncated)).
 			bad++
 			continue
 		}

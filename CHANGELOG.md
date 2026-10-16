@@ -42,7 +42,9 @@ First release: 0.1.0. Every figure below comes from a command run on
     claims more bytes than the stream holds costs at most about twice the bytes
     present.
   - `Routes` yields one `Route` per (peer, prefix, path ID) from RIB entries and
-    UPDATEs, with the path decoded once per entry or UPDATE and shared.
+    UPDATEs, with the path decoded once per entry or UPDATE and shared. A RIB
+    entry or an UPDATE that a fault leaves without routes is a `*RecordError`
+    (offset unknown), never silence.
   - `Decompress` detects gzip (multistream too) and bzip2 by magic bytes.
 - `cmd/mrtdump`: `mrtdump [-m | -M] [-l] [-u] FILE...`, bgpdump `-m`'s output
   line for line (docs/mrtdump.md). Exit status 0, 1 (malformed input

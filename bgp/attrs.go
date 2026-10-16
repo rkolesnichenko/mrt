@@ -71,7 +71,7 @@ func (a Attrs) All() iter.Seq2[Attribute, error] {
 type Path struct {
 	Origin            Origin
 	HasOrigin         bool
-	ASPath            ASPath // AS_PATH merged with AS4_PATH (RFC 6793 §4.2.3)
+	ASPath            ASPath // AS_PATH merged with AS4_PATH (RFC 6793 §4.2.3); shares ReceivedASPath's slices when no merge happened
 	ReceivedASPath    ASPath // AS_PATH as it was on the wire
 	AS4Path           ASPath // AS4_PATH as it was on the wire, if any
 	NextHop           netip.Addr
@@ -98,6 +98,7 @@ type Path struct {
 // Unknown with a diagnostic and decoding continues. Broken framing puts the
 // rest of the block, header included, in one Unknown entry (Flags and Code
 // zero) and stops. Diagnostic.Offset is the attribute's offset in the block.
+// Path.Unknown[i].Value, MPReach.RawNLRI and MPUnreach.RawNLRI alias the block.
 func (a Attrs) Decode() (Path, []Diagnostic) {
 	var (
 		p     Path

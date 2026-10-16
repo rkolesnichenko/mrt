@@ -19,8 +19,8 @@ mrtdump [-m | -M] [-l] [-u] FILE...
 |---|---|
 | `-m` | one line per entry, Unix timestamps (the default; bgpdump's `-m`) |
 | `-M` | human-readable UTC timestamps (`11/14/23 22:13:20`), and only the columns bgpdump's `-M` prints; the last of `-m` and `-M` wins |
-| `-l` | print large communities after the communities field (in the one-line output of `-m` and `-M`) |
-| `-u` | print unknown attributes (likewise) |
+| `-l` | print large communities after the communities field; `-m` only, `-M` ignores it |
+| `-u` | print unknown attributes; `-m` only, `-M` ignores it |
 
 `FILE` is raw, gzip or bzip2 MRT, told apart by its first bytes (`mrt.Decompress`),
 not by its name. `-` is standard input. Several files are printed in order; a
@@ -35,13 +35,15 @@ The line formats are bgpdump's, at the pinned commit
 
 ```
 B and A, -m:  TYPE|time|B|peer|peerAS|prefix|[pathID|]path|origin|nexthop|localpref|med|communities|[large|]AG|aggregator|[unknown|]
-W, -m:        TYPE|time|W|peer|peerAS|prefix[|pathID]
-STATE, -m:    TYPE|time|STATE|peer|peerAS|old|new
+B and A, -M:  TYPE|time|B|peer|peerAS|prefix|[pathID|]path|origin
+W:            TYPE|time|W|peer|peerAS|prefix[|pathID]
+STATE:        TYPE|time|STATE|peer|peerAS|old|new
 ```
 
 `TYPE` is `TABLE_DUMP`, `TABLE_DUMP2`, `BGP4MP` or `BGP4MP_ET`, with `_AP`
 appended for add-path records; `BGP4MP_ET` times carry `.%06d` microseconds.
-Large communities appear only with `-l`, unknown attributes only with `-u`.
+With `-M`, `time` is `MM/DD/YY HH:MM:SS` in UTC on every line. Large
+communities appear only with `-m -l`, unknown attributes only with `-m -u`.
 Records that are not routes or state changes (OSPF, IS-IS, GEO_PEER_TABLE,
 non-UPDATE BGP messages, `*_LOCAL` messages, other families) print no line.
 

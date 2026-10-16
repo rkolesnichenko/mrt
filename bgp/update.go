@@ -54,7 +54,7 @@ type Update struct {
 // ("bgp/update-length") and what parsed before them is kept. A message cut
 // short of its header's length is read as far as its bytes go, whole
 // withdrawn prefixes, whole attributes and whole NLRI only, with one Error
-// diagnostic ("bgp/message-truncated") at the cut.
+// diagnostic ("bgp/message-truncated") at the cut. Update.Attrs aliases msg.
 func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic) {
 	var u Update
 	hdr, err := ParseMessageHeader(msg)

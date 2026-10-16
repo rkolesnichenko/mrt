@@ -7,7 +7,7 @@ import (
 
 // MPReach is a decoded MP_REACH_NLRI attribute (RFC 4760).
 type MPReach struct {
-	Family      Family
+	Family      Family     // zero in the abbreviated form: the record supplies it
 	NextHop     netip.Addr // global
 	LinkLocal   netip.Addr // second IPv6 next hop, when present
 	NLRI        []NLRI     // decoded for IPv4/IPv6 unicast and multicast only, outside a RIB entry

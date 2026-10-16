@@ -44,10 +44,15 @@ the differential test.
   every byte after the SAFI, `EntryCount` 0, no entries, not malformed. For prefix families the NLRI
   is parsed by `bgp.ParseNLRI`. RIB_GENERIC_ADDPATH entries carry no path ID (RFC 8050 §4.2).
   Trailing bytes after `EntryCount` entries are ignored.
-- **Routes (R12, R13).** A RIB entry with a missing peer index, or a BGP4MP message whose `MessageType()`
-  fails, is a `*RecordError{Offset: -1, ...}` wrapping `ErrMalformed`. After a PEER_INDEX_TABLE
+- **Routes (R12, R13, R22).** A RIB entry with a missing peer index or broken framing, a BGP4MP
+  message whose `MessageType()` fails, and an UPDATE that yields no route but has a Warning or Error
+  diagnostic (the threshold mrtdump exits 1 on) are each a `*RecordError{Offset: -1, ...}` of the
+  record, wrapping `ErrMalformed`; `Error()` then says "offset unknown". After a PEER_INDEX_TABLE
   record error the table is cleared (never resolve against a stale one). Non-UPDATE messages, LOCAL
-  subtypes and families without prefixes are skipped silently.
+  subtypes, families without prefixes and End-of-RIB (no route, no diagnostic) are skipped
+  silently. `Route.Diagnostics` offsets count from the BGP message for UPDATE routes (attribute
+  diagnostics rebased) and from the entry's attribute block for RIB routes. The zero `Kind` is no
+  route (`KindRIB` is 1).
 - **Truncated messages (R17, R17a).** `ParseMessageHeader` errors only for len < 19, a bad marker or
   header length < 19; a length beyond the bytes present is not a header error. `ParseUpdate` parses
   as far as the bytes go (whole prefixes and attributes) and adds one Error `bgp/message-truncated`.
