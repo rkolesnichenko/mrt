@@ -10,3 +10,8 @@ Written by `go run ./internal/mrtgen/cmd/mrtgen -out testdata/synthetic`; determ
 - `attrs-malformed.mrt`: UPDATEs with a malformed MED, a duplicate ORIGIN, an attribute whose length runs past the block, and a valid UPDATE last.
 - `otc-large.mrt`: UPDATEs carrying OTC (35), large communities, standard and extended communities.
 - `concat-peer-tables.mrt`: peer table A, a RIB, peer table B (a different peer at index 0), a RIB.
+- `state-changes.mrt`: a session cycle: BGP4MP_STATE_CHANGE (2-byte, IPv4) Idle to Established, BGP4MP_STATE_CHANGE_AS4 (IPv6) Active to Established, one 2-byte BGP4MP_MESSAGE UPDATE, then both sessions to Idle in BGP4MP_ET records.
+- `short-message.mrt`: 2-byte BGP4MP_MESSAGE UPDATEs: a valid one, one whose BGP header claims 3 bytes more than the record holds (the NLRI present ends after a whole prefix), and one cut inside its last prefix (as RouteViews' 2003 files hold, see testdata/bgpdump/divergences.md).
+- `as4-confed.mrt`: 2-byte BGP4MP_MESSAGE UPDATEs: a confed segment leading AS_PATH (counts 0 in the RFC 6793 merge), AS_PATH of only a confed segment and AS_TRANS, AS4_AGGREGATOR without AGGREGATOR, and a confed segment in AS4_PATH (discarded, RFC 6793 section 6).
+- `rib-multicast.mrt`: PEER_INDEX_TABLE, RIB_IPV4_MULTICAST and RIB_IPV6_MULTICAST.
+- `mp-ipv4-large-values.mrt`: BGP4MP_MESSAGE_AS4 UPDATEs with LOCAL_PREF 3000000000 and MED 4000000000, one announcing in MP_REACH_NLRI (IPv4 unicast), one in the NLRI field.

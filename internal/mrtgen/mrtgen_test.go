@@ -2,9 +2,11 @@ package mrtgen_test
 
 import (
 	"bytes"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -240,8 +242,8 @@ const dir = "../../testdata/synthetic"
 
 func TestGeneratedFiles(t *testing.T) {
 	files := mrtgen.Synthetic()
-	if len(files) != 8 {
-		t.Fatalf("%d files, want 8", len(files))
+	if len(files) != 13 {
+		t.Fatalf("%d files, want 13", len(files))
 	}
 	again := mrtgen.Synthetic()
 	for i, f := range files {
@@ -263,10 +265,14 @@ func TestGeneratedFiles(t *testing.T) {
 				}
 				n++
 			}
-			var diags int
+			var diags, routeErrs int
 			for rt, err := range mrt.Routes(mrt.Records(bytes.NewReader(disk))) {
 				if err != nil {
-					t.Fatalf("route error: %v", err)
+					if f.Name != "short-message.mrt" {
+						t.Fatalf("route error: %v", err)
+					}
+					routeErrs++
+					continue
 				}
 				routes++
 				diags += len(rt.Diagnostics)
@@ -274,14 +280,149 @@ func TestGeneratedFiles(t *testing.T) {
 			if n == 0 || routes == 0 {
 				t.Errorf("%d records, %d routes", n, routes)
 			}
+			if f.Name == "short-message.mrt" && routeErrs != 2 {
+				t.Errorf("%d route errors, want one per short message (2)", routeErrs)
+			}
 			malformed := f.Name == "attrs-malformed.mrt"
 			if malformed && diags == 0 {
 				t.Error("attrs-malformed.mrt should produce attribute diagnostics")
 			}
-			if !malformed && f.Name != "as4-merge.mrt" && diags != 0 {
+			if !malformed && f.Name != "as4-merge.mrt" && f.Name != "as4-confed.mrt" && diags != 0 {
 				t.Errorf("%d unexpected diagnostics", diags)
 			}
 		})
+	}
+}
+
+// TestStateChanges pins state-changes.mrt: a session cycle with 2-byte and
+// 4-byte state changes, IPv4 and IPv6, BGP4MP and BGP4MP_ET.
+func TestStateChanges(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(dir, "state-changes.mrt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type sc struct {
+		typ      mrt.Type
+		sub      mrt.Subtype
+		peer     string
+		as       bgp.ASN
+		old, new mrt.State
+	}
+	want := []sc{
+		{mrt.TypeBGP4MP, mrt.SubStateChange, "192.0.2.10", 64500, mrt.StateIdle, mrt.StateConnect},
+		{mrt.TypeBGP4MP, mrt.SubStateChange, "192.0.2.10", 64500, mrt.StateConnect, mrt.StateOpenSent},
+		{mrt.TypeBGP4MP, mrt.SubStateChange, "192.0.2.10", 64500, mrt.StateOpenSent, mrt.StateOpenConfirm},
+		{mrt.TypeBGP4MP, mrt.SubStateChange, "192.0.2.10", 64500, mrt.StateOpenConfirm, mrt.StateEstablished},
+		{mrt.TypeBGP4MP, mrt.SubStateChangeAS4, "2001:db8::11", 4200000001, mrt.StateActive, mrt.StateEstablished},
+		{mrt.TypeBGP4MPET, mrt.SubStateChangeAS4, "2001:db8::11", 4200000001, mrt.StateEstablished, mrt.StateIdle},
+		{mrt.TypeBGP4MPET, mrt.SubStateChange, "192.0.2.10", 64500, mrt.StateEstablished, mrt.StateIdle},
+	}
+	var got []sc
+	updates := 0
+	for rec, err := range mrt.Records(bytes.NewReader(b)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch r := rec.(type) {
+		case mrt.BGP4MPStateChange:
+			h := r.Header()
+			got = append(got, sc{h.Type, h.Subtype, r.PeerAddr.String(), r.PeerAS, r.Old, r.New})
+		case mrt.BGP4MPMessage:
+			updates++
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("state changes:\n got %v\nwant %v", got, want)
+	}
+	if updates != 1 {
+		t.Errorf("%d messages, want 1 UPDATE between Established and Idle", updates)
+	}
+}
+
+// TestShortMessage pins short-message.mrt: a valid UPDATE, then two whose
+// BGP header claims more bytes than the record holds, one cut after a whole
+// prefix and one inside a prefix.
+func TestShortMessage(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(dir, "short-message.mrt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for rec, err := range mrt.Records(bytes.NewReader(b)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := rec.(mrt.BGP4MPMessage)
+		_, err := m.Type()
+		got = append(got, fmt.Sprintf("%d bytes: %v", len(m.Message), err))
+	}
+	want := []string{
+		"55 bytes: <nil>",
+		"55 bytes: bgp: message shorter than its header: header length 58, message 55 bytes",
+		"54 bytes: bgp: message shorter than its header: header length 55, message 54 bytes",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("messages:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestNewFamilies pins what Routes reads from rib-multicast.mrt and
+// mp-ipv4-large-values.mrt.
+func TestNewFamilies(t *testing.T) {
+	routes := func(name string) []string {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for rt, err := range mrt.Routes(mrt.Records(bytes.NewReader(b))) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, fmt.Sprintf("%v %d/%d %v lp=%d med=%d", rt.Kind, rt.Family.AFI, rt.Family.SAFI, rt.Prefix, rt.Path.LocalPref, rt.Path.MED))
+		}
+		return got
+	}
+	if got, want := routes("rib-multicast.mrt"), []string{
+		"B 1/2 198.51.102.0/24 lp=0 med=0",
+		"B 2/2 2001:db8:500::/48 lp=0 med=0",
+	}; !slices.Equal(got, want) {
+		t.Errorf("rib-multicast.mrt: %q, want %q", got, want)
+	}
+	if got, want := routes("mp-ipv4-large-values.mrt"), []string{
+		"A 1/1 198.51.110.0/24 lp=3000000000 med=4000000000",
+		"A 1/1 198.51.111.0/24 lp=3000000000 med=4000000000",
+	}; !slices.Equal(got, want) {
+		t.Errorf("mp-ipv4-large-values.mrt: %q, want %q", got, want)
+	}
+}
+
+// TestAS4Confed pins the effective paths and aggregators of as4-confed.mrt
+// (RFC 6793 sections 4.2.3 and 6; Rulings R5 and R6).
+func TestAS4Confed(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(dir, "as4-confed.mrt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for rt, err := range mrt.Routes(mrt.Records(bytes.NewReader(b))) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		agg := "-"
+		if rt.Path.HasAggregator {
+			agg = fmt.Sprint(rt.Path.Aggregator.AS)
+		}
+		got = append(got, fmt.Sprintf("%v: %s agg %s", rt.Prefix, rt.Path.ASPath, agg))
+	}
+	want := []string{
+		"198.51.106.0/24: (65001) 64500 196608 196609 agg -",
+		"198.51.107.0/24: (65001 65002) 196608 agg -",
+		"198.51.108.0/24: 64500 196608 agg 196610",
+		"198.51.109.0/24: 64500 196608 196609 agg -",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("as4-confed.mrt:\n got %q\nwant %q", got, want)
 	}
 }
 

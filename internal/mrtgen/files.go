@@ -60,6 +60,11 @@ func Synthetic() []File {
 		{"attrs-malformed.mrt", attrsMalformed()},
 		{"otc-large.mrt", otcLarge()},
 		{"concat-peer-tables.mrt", concatTables()},
+		{"state-changes.mrt", stateChanges()},
+		{"short-message.mrt", shortMessage()},
+		{"as4-confed.mrt", as4Confed()},
+		{"rib-multicast.mrt", ribMulticast()},
+		{"mp-ipv4-large-values.mrt", mpIPv4LargeValues()},
 	}
 }
 
@@ -215,4 +220,116 @@ func concatTables() []byte {
 		pit(at(1), peerC),
 		rib(mrt.SubRIBIPv4Unicast, at(1), 0, "198.51.100.0/24", Entry{0, at(1), 0, a(peerC.AS, peerC.Addr)}),
 	)
+}
+
+// stateChanges is a session cycle: a 2-byte IPv4 peer goes from Idle to
+// Established, a 4-byte IPv6 peer comes up from Active, one UPDATE is
+// received, and both sessions drop (in BGP4MP_ET records, with microseconds).
+func stateChanges() []byte {
+	state := func(n int, typ mrt.Type, st mrt.Subtype, p mrt.Peer, local netip.Addr, old, new mrt.State) []byte {
+		ts := at(n)
+		if typ == mrt.TypeBGP4MPET {
+			ts = ts.Add(250 * time.Microsecond)
+		}
+		return Header(typ, st, ts, StateChange(st, p.AS, 64496, p.Addr, local, old, new))
+	}
+	upd := Update(nil, []bgp.NLRI{nlri("198.51.100.0/24")},
+		Attrs(Origin(bgp.OriginIGP), ASPath(false, Seq(64500, 64501)), NextHop(peerA.Addr)), false)
+	return catRecords(
+		state(0, mrt.TypeBGP4MP, mrt.SubStateChange, peerA, local4, mrt.StateIdle, mrt.StateConnect),
+		state(1, mrt.TypeBGP4MP, mrt.SubStateChange, peerA, local4, mrt.StateConnect, mrt.StateOpenSent),
+		state(2, mrt.TypeBGP4MP, mrt.SubStateChange, peerA, local4, mrt.StateOpenSent, mrt.StateOpenConfirm),
+		state(3, mrt.TypeBGP4MP, mrt.SubStateChange, peerA, local4, mrt.StateOpenConfirm, mrt.StateEstablished),
+		state(4, mrt.TypeBGP4MP, mrt.SubStateChangeAS4, peerB, local6, mrt.StateActive, mrt.StateEstablished),
+		Header(mrt.TypeBGP4MP, mrt.SubMessage, at(5), BGP4MP(mrt.SubMessage, peerA.AS, 64496, peerA.Addr, local4, upd)),
+		state(6, mrt.TypeBGP4MPET, mrt.SubStateChangeAS4, peerB, local6, mrt.StateEstablished, mrt.StateIdle),
+		state(7, mrt.TypeBGP4MPET, mrt.SubStateChange, peerA, local4, mrt.StateEstablished, mrt.StateIdle),
+	)
+}
+
+// shortMessage holds 2-byte BGP4MP_MESSAGE UPDATEs: a valid one, one whose
+// BGP header claims 3 bytes more than the record holds (the NLRI present ends
+// after a whole prefix), and one cut 1 byte short (inside its last prefix),
+// as Zebra wrote messages longer than its 4096-byte buffer in 2003.
+func shortMessage() []byte {
+	attrs := Attrs(Origin(bgp.OriginIGP), ASPath(false, Seq(64500, 64501)), NextHop(peerA.Addr))
+	upd := func(prefixes ...string) []byte {
+		var n []bgp.NLRI
+		for _, p := range prefixes {
+			n = append(n, nlri(p))
+		}
+		return Update(nil, n, attrs, false)
+	}
+	valid := upd("198.51.100.0/24", "198.51.101.0/24", "198.51.102.0/24")
+	long := upd("198.51.103.0/24", "198.51.104.0/24", "198.51.105.0/24")
+	long[17] += 3 // the header's length, low byte
+	cut := upd("198.51.106.0/24", "198.51.107.0/24", "198.51.108.0/24")
+	cut = cut[:len(cut)-1]
+	msg := func(n int, m []byte) []byte {
+		return Header(mrt.TypeBGP4MP, mrt.SubMessage, at(n), BGP4MP(mrt.SubMessage, peerA.AS, 64496, peerA.Addr, local4, m))
+	}
+	return catRecords(msg(0, valid), msg(1, long), msg(2, cut))
+}
+
+// as4Confed holds 2-byte BGP4MP_MESSAGE UPDATEs where RFC 6793 and bgpdump
+// part: confederation segments in AS_PATH (which count 0) and in AS4_PATH
+// (which are discarded, section 6), and an AS4_AGGREGATOR without AGGREGATOR.
+func as4Confed() []byte {
+	nh := NextHop(peerA.Addr)
+	org := Origin(bgp.OriginIGP)
+	agg := netip.MustParseAddr("192.0.2.77")
+	cseq := func(asns ...bgp.ASN) bgp.Segment { return bgp.Segment{Type: bgp.ASConfedSequence, ASNs: asns} }
+	cases := []struct {
+		prefix string
+		attrs  []byte
+	}{
+		// A confed segment leads AS_PATH: it counts 0, so AS_PATH has 3.
+		{"198.51.106.0/24", Attrs(org, ASPath(false, cseq(65001), Seq(64500, bgp.ASTrans, bgp.ASTrans)), nh,
+			AS4PathAttr(Seq(196608, 196609)))},
+		// Only a confed segment and one AS_TRANS: AS_PATH has 1, as AS4_PATH.
+		{"198.51.107.0/24", Attrs(org, ASPath(false, cseq(65001, 65002), Seq(bgp.ASTrans)), nh,
+			AS4PathAttr(Seq(196608)))},
+		// AS4_AGGREGATOR without AGGREGATOR.
+		{"198.51.108.0/24", Attrs(org, ASPath(false, Seq(64500, bgp.ASTrans)), nh,
+			AS4PathAttr(Seq(196608)), AS4AggregatorAttr(196610, agg))},
+		// A confed segment in AS4_PATH: discarded, the rest merges.
+		{"198.51.109.0/24", Attrs(org, ASPath(false, Seq(64500, bgp.ASTrans, bgp.ASTrans)), nh,
+			AS4PathAttr(cseq(65001), Seq(196608, 196609)))},
+	}
+	var recs [][]byte
+	for i, c := range cases {
+		msg := Update(nil, []bgp.NLRI{nlri(c.prefix)}, c.attrs, false)
+		recs = append(recs, Header(mrt.TypeBGP4MP, mrt.SubMessage, at(i), BGP4MP(mrt.SubMessage, peerA.AS, 64496, peerA.Addr, local4, msg)))
+	}
+	return catRecords(recs...)
+}
+
+// ribMulticast holds a PEER_INDEX_TABLE, a RIB_IPV4_MULTICAST and a
+// RIB_IPV6_MULTICAST record.
+func ribMulticast() []byte {
+	t := at(0)
+	return catRecords(
+		pit(t, peerA, peerB),
+		rib(mrt.SubRIBIPv4Multicast, t, 0, "198.51.102.0/24",
+			Entry{0, t, 0, Attrs(Origin(bgp.OriginIGP), ASPath(true, Seq(64500, 64501)), NextHop(peerA.Addr))}),
+		rib(mrt.SubRIBIPv6Multicast, t, 1, "2001:db8:500::/48",
+			Entry{1, t, 0, Attrs(Origin(bgp.OriginIGP), ASPath(true, Seq(4200000001, 64501)),
+				MPReachAbbrev(netip.MustParseAddr("2001:db8::11")))}),
+	)
+}
+
+// mpIPv4LargeValues holds two BGP4MP_MESSAGE_AS4 UPDATEs with LOCAL_PREF and
+// MED of 2^31 or more: one announces an IPv4 prefix in MP_REACH_NLRI, the
+// other in the NLRI field.
+func mpIPv4LargeValues() []byte {
+	nh := netip.MustParseAddr("192.0.2.20")
+	common := func(extra ...[]byte) []byte {
+		return Attrs(append([][]byte{Origin(bgp.OriginIGP), ASPath(true, Seq(64500, 64501)), MED(4000000000), LocalPref(3000000000)}, extra...)...)
+	}
+	mp := Update(nil, nil, common(MPReach(v4u, []netip.Addr{nh}, []bgp.NLRI{nlri("198.51.110.0/24")}, false)), false)
+	plain := Update(nil, []bgp.NLRI{nlri("198.51.111.0/24")}, common(NextHop(nh)), false)
+	msg := func(n int, m []byte) []byte {
+		return Header(mrt.TypeBGP4MP, mrt.SubMessageAS4, at(n), BGP4MP(mrt.SubMessageAS4, peerA.AS, 64496, peerA.Addr, local4, m))
+	}
+	return catRecords(msg(0, mp), msg(1, plain))
 }
