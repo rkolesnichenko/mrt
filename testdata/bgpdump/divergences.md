@@ -23,9 +23,13 @@ sections hold differences no fixture shows; nothing checks them.
 
 Reason: the MED in `attrs-malformed` record 1 is 3 bytes long. bgpdump reads 4
 bytes anyway and prints 256 (`00 00 01` and the next byte); the value is not
-in the data. mrt treats the attribute as malformed (RFC 7606 section 7.5:
-attribute discard), reports `bgp/attr-length` and leaves the MED absent;
-mrtdump exits 1.
+in the data. RFC 7606 section 7.4: "The attribute is considered malformed if
+its length is not 4" and "An UPDATE message with a malformed MULTI_EXIT_DISC
+attribute SHALL be handled using the approach of "treat-as-withdraw"". RFC
+7606's actions are out of mrt's scope (spec §11): mrt keeps the route with the
+MED absent, keeps the raw attribute in `Path.Unknown`, and reports the fault
+as a Warning `bgp/attr-length` on the MED, so a consumer can apply
+treat-as-withdraw itself; mrtdump exits 1.
 
 Decides: bgpkit-parser, which also drops the MED (its golden has med 0 and the
 attribute among its unknown attributes).
@@ -349,7 +353,11 @@ Reason: when an UPDATE carries both NEXT_HOP and MP_REACH_NLRI,
 bgpkit-parser 0.22.0 gives NEXT_HOP as the next hop of every route in it
 (`get_relevant_attributes` falls back to MP_REACH_NLRI's next hop only when
 NEXT_HOP is absent). RFC 4760 section 3 carries the next hop of the routes in
-MP_REACH_NLRI in that attribute; NEXT_HOP belongs to the NLRI field. Peer AS
+MP_REACH_NLRI in that attribute, and says of NEXT_HOP: "An UPDATE message that
+carries no NLRI, other than the one encoded in the MP_REACH_NLRI attribute,
+SHOULD NOT carry the NEXT_HOP attribute. If such a message contains the
+NEXT_HOP attribute, the BGP speaker that receives the message SHOULD ignore
+this attribute." Peer AS
 3130 at route-views6 sends both on IPv6 announcements (in the full file,
 6386 of 88544 records carry both, all from AS 3130), so its IPv6 routes get
 the IPv4 address 206.81.81.212 as next hop. The fixture window was chosen to hold only three.
@@ -387,7 +395,9 @@ not fixtures. Each is malformed or unusual data; mrt's side is the RFC's.
 - S2. A known attribute with a wrong length (LOCAL_PREF, MED, NEXT_HOP,
   ORIGIN, AGGREGATOR, COMMUNITIES not a multiple of 4, LARGE_COMMUNITY not a
   multiple of 12): bgpdump prints what its partial read gives (B1 is one case);
-  mrt leaves the field absent and reports it.
+  mrt leaves the field absent and reports it in a diagnostic. RFC 7606's
+  actions for these (treat-as-withdraw for most, attribute discard for
+  AGGREGATOR) are out of scope (spec §11); the diagnostic carries the fault.
 - S3. An AS_PATH segment of length 0: bgpdump prints a stray space; mrt treats
   the attribute as malformed (Ruling R4) and mrtdump prints `! Error !`.
 - S4. An aggregator whose address is 255.255.255.255: bgpdump hides it (its
