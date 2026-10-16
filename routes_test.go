@@ -340,8 +340,10 @@ func TestRoutesMalformedUpdateWithoutRoutes(t *testing.T) {
 		}
 		wantRecordError(t, errs[0], rec, tc.msg)
 	}
-	// End-of-RIB, an empty UPDATE, stays silent.
-	rs, errs := routesOf(t, bgp4mp(SubMessageAS4, updateMsg(nil, nil, nil)))
+	// End-of-RIB stays silent: an empty UPDATE (IPv4), and one holding only
+	// an empty MP_UNREACH_NLRI (IPv6, RFC 4724 section 2).
+	rs, errs := routesOf(t, cat(bgp4mp(SubMessageAS4, updateMsg(nil, nil, nil)),
+		bgp4mp(SubMessageAS4, updateMsg(nil, mpAttr(15, 2, 1, nil, nil), nil))))
 	if len(rs) != 0 || len(errs) != 0 {
 		t.Errorf("empty UPDATE: %v %v", rs, errs)
 	}

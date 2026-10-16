@@ -79,7 +79,7 @@ func TestBGP4MPMessageAS4Appendix(t *testing.T) {
 		t.Fatalf("%+v", m)
 	}
 	if mt, err := m.MessageType(); err != nil || mt != bgp.MessageUpdate {
-		t.Fatalf("Type = %v, %v", mt, err)
+		t.Fatalf("MessageType = %v, %v", mt, err)
 	}
 	u, diags := bgp.ParseUpdate(m.Message, m.Context())
 	if len(diags) != 0 {
@@ -163,11 +163,11 @@ func TestBGP4MPBadMessageIsLazy(t *testing.T) {
 	}
 	m := recs[0].(BGP4MPMessage)
 	if _, err := m.MessageType(); !errors.Is(err, bgp.ErrMarker) {
-		t.Fatalf("Type error %v, want ErrMarker", err)
+		t.Fatalf("MessageType error %v, want ErrMarker", err)
 	}
 	m.Message = msg[:5]
 	if _, err := m.MessageType(); !errors.Is(err, bgp.ErrShortMessage) {
-		t.Fatalf("Type error %v, want ErrShortMessage", err)
+		t.Fatalf("MessageType error %v, want ErrShortMessage", err)
 	}
 }
 
