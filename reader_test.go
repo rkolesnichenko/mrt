@@ -187,34 +187,56 @@ func TestRecordsReadError(t *testing.T) {
 	}
 }
 
-type countReader struct {
-	r     io.Reader
-	reads int
+func TestRecordsStopEarly(t *testing.T) {
+	ok := frame(9, TypeBGP4MP, 1, 0, []byte{1})
+	cases := map[string][]byte{
+		"too large": append(frame(1, TypeBGP4MP, 1, 0, make([]byte, 100)), ok...),
+		"ET short":  append([]byte{0, 0, 0, 1, 0, 17, 0, 1, 0, 0, 0, 2, 0xAA, 0xBB}, ok...),
+		"record":    append(append([]byte{}, ok...), ok...),
+	}
+	for name, in := range cases {
+		n := 0
+		for range RecordsWith(bytes.NewReader(in), Options{MaxRecordLen: 64}) {
+			n++
+			break
+		}
+		if n != 1 {
+			t.Errorf("%s: iterations = %d", name, n)
+		}
+	}
 }
 
-func (c *countReader) Read(p []byte) (int, error) { c.reads++; return c.r.Read(p) }
+func TestRecordsLyingLengthBounded(t *testing.T) {
+	in := append([]byte{0, 0, 0, 1, 0, 16, 0, 1}, 0x01, 0, 0, 0) // Length 16 MiB
+	in = append(in, make([]byte, 100)...)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	recs, errs := collect(t, in, Options{})
+	runtime.ReadMemStats(&after)
+	if len(recs) != 0 || len(errs) != 1 || !errors.Is(errs[0], ErrTruncated) {
+		t.Fatalf("recs=%d errs=%v", len(recs), errs)
+	}
+	if d := after.TotalAlloc - before.TotalAlloc; d >= 1<<20 {
+		t.Errorf("allocated %d bytes for 100 present", d)
+	}
+}
 
-func TestRecordsStopEarly(t *testing.T) {
-	var in []byte
-	for i := 0; i < 5; i++ {
-		in = append(in, frame(uint32(i), TypeBGP4MP, 1, 0, []byte{1})...)
+func TestRecordsLargeBodyExact(t *testing.T) {
+	body := bytes.Repeat([]byte{5}, 300<<10)
+	in := frame(1, TypeBGP4MP, 1, 0, body)
+	recs, errs := collect(t, in, Options{})
+	if len(errs) != 0 || len(recs) != 1 || !bytes.Equal(recs[0].Raw(), in) {
+		t.Fatalf("recs=%d errs=%v", len(recs), errs)
 	}
-	cr := &countReader{r: bytes.NewReader(in)}
-	n := 0
-	for range Records(cr) {
-		n++
-		break
-	}
-	reads := cr.reads
-	if n != 1 {
-		t.Fatalf("n = %d", n)
-	}
-	if cr.reads != reads {
-		t.Error("reader read after break")
-	}
-	// yield false on an error record stops too
-	for range Records(bytes.NewReader(make([]byte, 5))) {
-		break
+}
+
+func TestRecordsOffsetAfterET(t *testing.T) {
+	et := frame(1, TypeBGP4MPET, 1, 5, []byte{1, 2, 3}) // 16 + 3 = 19 bytes
+	bad := []byte{0, 0, 0, 1, 0, 17, 0, 1, 0, 0, 0, 1, 0xAA}
+	_, errs := collect(t, append(append([]byte{}, et...), bad...), Options{})
+	var re *RecordError
+	if len(errs) != 1 || !errors.As(errs[0], &re) || re.Offset != 19 {
+		t.Fatalf("errs=%v", errs)
 	}
 }
 

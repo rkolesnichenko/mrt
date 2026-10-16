@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"slices"
 	"time"
 )
 
@@ -48,9 +49,9 @@ func Records(r io.Reader) iter.Seq2[Record, error] {
 // malformed or oversize record yields a *RecordError and reading continues; a
 // truncated stream or a read error yields one error and ends the iteration.
 func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
-	max := opts.MaxRecordLen
-	if max == 0 {
-		max = DefaultMaxRecordLen
+	limit := opts.MaxRecordLen
+	if limit == 0 {
+		limit = DefaultMaxRecordLen
 	}
 	return func(yield func(Record, error) bool) {
 		br, ok := r.(*bufio.Reader)
@@ -111,7 +112,7 @@ func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
 			if hlen == 16 {
 				bodyLen -= 4
 			}
-			if h.Length > max {
+			if h.Length > limit {
 				n, err := io.CopyN(io.Discard, br, bodyLen)
 				off += n
 				if err != nil {
@@ -123,10 +124,8 @@ func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
 				}
 				continue
 			}
-			raw := make([]byte, hlen+int(bodyLen))
-			copy(raw, hb[:hlen])
-			n, err = io.ReadFull(br, raw[hlen:])
-			off += int64(n)
+			raw, got, err := readRecord(br, hb[:hlen], bodyLen)
+			off += got
 			if err != nil {
 				yield(nil, endErr(start, h, err))
 				return
@@ -134,7 +133,7 @@ func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
 			rec, derr := decodeBody(h, raw)
 			if derr != nil {
 				if !errors.Is(derr, ErrMalformed) {
-					derr = fmt.Errorf("%w: %v", ErrMalformed, derr)
+					derr = fmt.Errorf("%w: %w", ErrMalformed, derr)
 				}
 				if !yield(nil, &RecordError{Offset: start, Header: h, Raw: raw, Err: derr}) {
 					return
@@ -155,4 +154,38 @@ func endErr(off int64, h Header, err error) error {
 		return &RecordError{Offset: off, Header: h, Err: ErrTruncated}
 	}
 	return fmt.Errorf("mrt: reading record at offset %d: %w", off, err)
+}
+
+// smallBody is the largest body allocated in one piece before any of it is read.
+const smallBody = 64 << 10
+
+// readRecord reads bodyLen bytes after hdr into one slice holding both. A body
+// up to smallBody is allocated exactly; a larger one grows as bytes arrive, so
+// a header that lies about its length costs about twice the bytes present.
+// It returns the number of body bytes consumed.
+func readRecord(br *bufio.Reader, hdr []byte, bodyLen int64) ([]byte, int64, error) {
+	if bodyLen <= smallBody {
+		raw := make([]byte, len(hdr)+int(bodyLen))
+		copy(raw, hdr)
+		n, err := io.ReadFull(br, raw[len(hdr):])
+		return raw, int64(n), err
+	}
+	raw := make([]byte, len(hdr), len(hdr)+smallBody)
+	copy(raw, hdr)
+	var got int64
+	for got < bodyLen {
+		chunk := int64(cap(raw) - len(raw))
+		if chunk == 0 {
+			chunk = int64(len(raw))
+		}
+		chunk = min(chunk, bodyLen-got)
+		raw = slices.Grow(raw, int(chunk))
+		n, err := io.ReadFull(br, raw[len(raw):len(raw)+int(chunk)])
+		raw = raw[:len(raw)+n]
+		got += int64(n)
+		if err != nil {
+			return raw, got, err
+		}
+	}
+	return raw, got, nil
 }
