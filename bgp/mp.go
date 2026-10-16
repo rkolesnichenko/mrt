@@ -60,7 +60,9 @@ func decodeMPReach(v []byte, ctx Context, off int) (r MPReach, ok bool, diags []
 			return r, false, diags
 		}
 		r.Abbreviated = true
-		setMPNextHop(&r, v[1:])
+		if !setMPNextHop(&r, v[1:]) { // a RIB's family is always IP
+			diag(SeverityWarning, "bgp/attr-value", fmt.Sprintf("MP_REACH_NLRI next hop of %d bytes", nh))
+		}
 		return r, true, diags
 	}
 	if len(v) < 5 {

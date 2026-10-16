@@ -3,6 +3,7 @@ package bgp
 import (
 	"bytes"
 	"net/netip"
+	"slices"
 	"testing"
 )
 
@@ -99,6 +100,22 @@ func TestMPReachNextHopLengths(t *testing.T) {
 	p, d = decodeMP(t, Context{}, 14, append([]byte{0, 1, 128, 24}, make([]byte, 25)...)...)
 	if p.MPReach == nil || len(d) != 0 || p.MPReach.NextHop.IsValid() {
 		t.Fatalf("%+v %v", p.MPReach, d)
+	}
+}
+
+// In a RIB entry the family is always IP, so an abbreviated next hop of a
+// length other than 4, 16 or 32 is a Warning; the attribute stays decoded.
+func TestMPReachAbbreviatedNextHopLength(t *testing.T) {
+	for _, n := range []int{4, 16, 32} {
+		_, d := decodeMP(t, Context{RIB: true}, 14, append([]byte{byte(n)}, make([]byte, n)...)...)
+		if len(d) != 0 {
+			t.Errorf("%d bytes: %v", n, d)
+		}
+	}
+	p, d := decodeMP(t, Context{RIB: true}, 14, append([]byte{12}, make([]byte, 12)...)...)
+	want := []Diagnostic{{SeverityWarning, "bgp/attr-value", 0, AttrMPReach, "MP_REACH_NLRI next hop of 12 bytes"}}
+	if r := p.MPReach; r == nil || !r.Abbreviated || r.NextHop.IsValid() || len(p.Unknown) != 0 || !slices.Equal(d, want) {
+		t.Fatalf("%+v %v, want %v", r, d, want)
 	}
 }
 
