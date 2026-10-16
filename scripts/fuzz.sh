@@ -43,8 +43,13 @@ fuzz() {
 	return "$rc"
 }
 
-# One target per line: "<dir> <pkg> <FuzzName>". Task 13 fills the list.
+# One target per line: "<dir> <pkg> <FuzzName>".
 targets='
+. . FuzzRecords
+. . FuzzRoutes
+bgp . FuzzParseUpdate
+bgp . FuzzDecodeAttrs
+bgp . FuzzASPathMerge
 '
 
 # dir package fuzz-target; shard i of n takes targets i, i+n, i+2n, ...
