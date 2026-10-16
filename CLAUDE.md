@@ -123,7 +123,12 @@ the differential test.
 ## Heavy runs
 
 Real-data runs, `internal/compare` and the benchmarks hold hundreds of MB. Run them one at a time,
-alone, under `memguard.sh`, never beside `check.sh` or each other. Every figure in a doc or the
+alone, under `memguard.sh`, never beside `check.sh` or each other. `memguard.sh LIMIT_GB TIMEOUT_S
+CMD...` is the maintainer's local memory watchdog, not part of this repo: it refuses to start
+without enough free memory, kills the command past LIMIT_GB of RSS, memory pressure, swap growth
+or TIMEOUT_S, and ends with SUCCESS, FAILURE, MEMLIMIT, PRESSURE, SWAP, LOWMEM, TIMEOUT or
+NOT STARTED. Without it, run the same command with a memory cap of your own (e.g. `GOMEMLIMIT`
+and a watchdog). Every figure in a doc or the
 CHANGELOG comes from a command run in this work, with its log named; otherwise it is unknown.
 
 ## Process
