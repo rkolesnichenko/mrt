@@ -5,9 +5,9 @@ type Severity uint8
 
 // Diagnostic severities.
 const (
-	SeverityInfo Severity = iota
-	SeverityWarning
-	SeverityError
+	SeverityInfo    Severity = 0
+	SeverityWarning Severity = 1
+	SeverityError   Severity = 2
 )
 
 // Diagnostic describes something wrong or noteworthy found while decoding.

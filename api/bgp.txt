@@ -33,9 +33,10 @@ const OriginIGP Origin = 0
 const OriginIncomplete Origin = 2
 const SAFIMulticast SAFI = 2
 const SAFIUnicast SAFI = 1
-const SeverityError Severity
-const SeverityInfo Severity = iota
-const SeverityWarning Severity
+const SeverityError Severity = 2
+const SeverityInfo Severity = 0
+const SeverityWarning Severity = 1
+func NewAttrs(raw []byte, ctx Context) Attrs
 type AFI uint16
 type ASN uint32
 type ASPath struct
@@ -51,6 +52,10 @@ type Attribute struct
 	Flags uint8
 	Code AttrCode
 	Value []byte
+type Attrs struct
+func (Attrs) All() iter.Seq2[Attribute, error]
+func (Attrs) Decode() (Path, []Diagnostic)
+func (Attrs) Raw() []byte
 type Community uint32
 func (Community) String() string
 type Context struct
@@ -72,12 +77,47 @@ type LargeCommunity struct
 	Local1 uint32
 	Local2 uint32
 func (LargeCommunity) String() string
+type MPReach struct
+	Family Family
+	NextHop netip.Addr
+	LinkLocal netip.Addr
+	NLRI []NLRI
+	RawNLRI []byte
+	Abbreviated bool
+type MPUnreach struct
+	Family Family
+	Withdrawn []NLRI
+	RawNLRI []byte
 type MessageType uint8
 type NLRI struct
 	Prefix netip.Prefix
 	PathID uint32
 	HasPathID bool
 type Origin uint8
+type Path struct
+	Origin Origin
+	HasOrigin bool
+	ASPath ASPath
+	ReceivedASPath ASPath
+	AS4Path ASPath
+	NextHop netip.Addr
+	MED uint32
+	HasMED bool
+	LocalPref uint32
+	HasLocalPref bool
+	AtomicAggregate bool
+	Aggregator Aggregator
+	HasAggregator bool
+	Communities []Community
+	ExtCommunities []ExtCommunity
+	LargeCommunities []LargeCommunity
+	OnlyToCustomer ASN
+	HasOnlyToCustomer bool
+	OriginatorID netip.Addr
+	ClusterList []netip.Addr
+	MPReach *MPReach
+	MPUnreach *MPUnreach
+	Unknown []Attribute
 type SAFI uint8
 type Segment struct
 	Type SegmentType
