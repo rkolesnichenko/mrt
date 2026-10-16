@@ -46,6 +46,28 @@ type Header struct
 type Options struct
 	MaxRecordLen uint32
 type Other struct
+type Peer struct
+	BGPID netip.Addr
+	Addr netip.Addr
+	AS bgp.ASN
+type PeerIndexTable struct
+	CollectorID netip.Addr
+	ViewName string
+	Peers []Peer
+type RIB struct
+	Sequence uint32
+	Family bgp.Family
+	Prefix netip.Prefix
+	PathID uint32
+	RawNLRI []byte
+	AddPath bool
+func (RIB) Entries() iter.Seq2[RIBEntry, error]
+func (RIB) EntryCount() uint16
+type RIBEntry struct
+	PeerIndex uint16
+	Originated time.Time
+	PathID uint32
+	Attrs bgp.Attrs
 type Record interface
 	Header() Header
 	Raw() []byte
@@ -58,4 +80,12 @@ type RecordError struct
 func (*RecordError) Error() string
 func (*RecordError) Unwrap() error
 type Subtype uint16
+type TableDump struct
+	View uint16
+	Sequence uint16
+	Prefix netip.Prefix
+	Status uint8
+	Originated time.Time
+	Peer Peer
+	Attrs bgp.Attrs
 type Type uint16

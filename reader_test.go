@@ -39,7 +39,7 @@ func collect(t *testing.T, in []byte, o Options) (recs []Record, errs []error) {
 
 func TestRecordsET(t *testing.T) {
 	a := frame(1700000000, TypeBGP4MPET, SubMessageAS4, 123456, []byte{1, 2, 3})
-	b := frame(1700000001, TypeTableDumpV2, SubPeerIndexTable, 0, []byte{9})
+	b := frame(1700000001, TypeTableDumpV2, SubGeoPeerTable, 0, []byte{9})
 	recs, errs := collect(t, append(append([]byte{}, a...), b...), Options{})
 	if len(errs) != 0 || len(recs) != 2 {
 		t.Fatalf("recs=%d errs=%v", len(recs), errs)
@@ -81,8 +81,8 @@ func TestRecordsLossless(t *testing.T) {
 }
 
 func TestRecordsTooLargeSkippedWithoutBuffering(t *testing.T) {
-	big := frame(1, TypeTableDumpV2, 2, 0, make([]byte, 1<<20))
-	ok := frame(2, TypeTableDumpV2, 2, 0, []byte{1, 2})
+	big := frame(1, TypeTableDumpV2, SubGeoPeerTable, 0, make([]byte, 1<<20))
+	ok := frame(2, TypeTableDumpV2, SubGeoPeerTable, 0, []byte{1, 2})
 	in := append(append([]byte{}, big...), ok...)
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)

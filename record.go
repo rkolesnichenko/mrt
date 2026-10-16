@@ -25,5 +25,18 @@ type Other struct{ record }
 // decodeBody turns one whole framed record (raw: header and body) into its
 // typed form. A non-nil error means the record is malformed.
 func decodeBody(h Header, raw []byte) (Record, error) {
+	switch h.Type {
+	case TypeTableDump:
+		if h.Subtype == SubAFIIPv4 || h.Subtype == SubAFIIPv6 {
+			return decodeTableDump(h, raw)
+		}
+	case TypeTableDumpV2:
+		switch s := h.Subtype; {
+		case s == SubPeerIndexTable:
+			return decodePeerIndexTable(h, raw)
+		case s >= SubRIBIPv4Unicast && s <= SubRIBGeneric, s >= SubRIBIPv4UnicastAddPath && s <= SubRIBGenericAddPath:
+			return decodeRIB(h, raw)
+		}
+	}
 	return Other{record{hdr: h, raw: raw}}, nil
 }
