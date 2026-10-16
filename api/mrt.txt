@@ -1,8 +1,8 @@
 package mrt
 const DefaultMaxRecordLen = 16 << 20
-const KindAnnounce Kind = 1
-const KindRIB Kind = 0
-const KindWithdraw Kind = 2
+const KindAnnounce Kind = 2
+const KindRIB Kind = 1
+const KindWithdraw Kind = 3
 const StateActive State = 3
 const StateConnect State = 2
 const StateEstablished State = 6
@@ -60,7 +60,7 @@ type BGP4MPMessage struct
 	AddPath bool
 	Message []byte
 func (BGP4MPMessage) Context() bgp.Context
-func (BGP4MPMessage) Type() (bgp.MessageType, error)
+func (BGP4MPMessage) MessageType() (bgp.MessageType, error)
 type BGP4MPStateChange struct
 	PeerAS bgp.ASN
 	LocalAS bgp.ASN

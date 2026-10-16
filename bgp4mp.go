@@ -24,7 +24,7 @@ const (
 
 // BGP4MPMessage is a BGP4MP or BGP4MP_ET message record (RFC 6396 section
 // 4.4.2 and later, RFC 8050): one BGP message seen on a session. Only the
-// fixed fields are read; Message is not validated until Type or
+// fixed fields are read; Message is not validated until MessageType or
 // bgp.ParseUpdate looks at it.
 type BGP4MPMessage struct {
 	record
@@ -52,11 +52,11 @@ func (m BGP4MPMessage) Context() bgp.Context {
 	return bgp.Context{AS4: m.AS4, AddPath: m.AddPath}
 }
 
-// Type returns the BGP message type from Message's header. The error wraps
-// bgp.ErrMarker or bgp.ErrShortMessage when the header is broken. A message
-// cut short of its header's length still has a type (bgp.ParseUpdate reads
-// what is there and reports the cut).
-func (m BGP4MPMessage) Type() (bgp.MessageType, error) {
+// MessageType returns the BGP message type from Message's header. The error
+// wraps bgp.ErrMarker or bgp.ErrShortMessage when the header is broken. A
+// message cut short of its header's length still has a type (bgp.ParseUpdate
+// reads what is there and reports the cut).
+func (m BGP4MPMessage) MessageType() (bgp.MessageType, error) {
 	h, err := bgp.ParseMessageHeader(m.Message)
 	if err != nil {
 		return 0, err

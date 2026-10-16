@@ -10,17 +10,18 @@ import (
 	"github.com/rkolesnichenko/mrt/bgp"
 )
 
-// Kind says where a Route came from.
+// Kind says where a Route came from. The zero Kind is no route, as on the
+// Route that comes with an error.
 type Kind uint8
 
 // Route kinds.
 const (
-	KindRIB      Kind = 0 // an entry of a RIB dump
-	KindAnnounce Kind = 1 // announced by an UPDATE
-	KindWithdraw Kind = 2 // withdrawn by an UPDATE
+	KindRIB      Kind = 1 // an entry of a RIB dump
+	KindAnnounce Kind = 2 // announced by an UPDATE
+	KindWithdraw Kind = 3 // withdrawn by an UPDATE
 )
 
-// String returns "B", "A" or "W".
+// String returns "B", "A" or "W", and "?" for the zero Kind or any other value.
 func (k Kind) String() string {
 	switch k {
 	case KindRIB:
@@ -144,7 +145,7 @@ func messageRoutes(m BGP4MPMessage, yield func(Route, error) bool) bool {
 	if m.Local {
 		return true
 	}
-	t, err := m.Type()
+	t, err := m.MessageType()
 	if err != nil {
 		return yield(Route{}, &RecordError{Offset: -1, Header: m.Header(), Raw: m.Raw(),
 			Err: fmt.Errorf("%w: %w", ErrMalformed, err)})

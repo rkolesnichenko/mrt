@@ -8,6 +8,7 @@ import (
 	"io"
 	"iter"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -28,14 +29,21 @@ type Options struct {
 // RecordError describes a record that could not be returned. Reading
 // continues after it, except for ErrTruncated and read errors.
 type RecordError struct {
-	Offset int64  // of the record's first byte in the stream
+	Offset int64  // of the record's first byte in the stream; -1 when not known (from Routes)
 	Header Header // zero when the header was not read completely
 	Raw    []byte // nil when the record was over MaxRecordLen and skipped, or truncated
 	Err    error  // ErrMalformed, ErrTooLarge, ErrTruncated
 }
 
+// Error says "mrt: record at offset N: cause", or "mrt: record (offset
+// unknown): cause" when Offset is negative (as from Routes), with the cause's
+// own "mrt: " prefix dropped.
 func (e *RecordError) Error() string {
-	return fmt.Sprintf("mrt: record at offset %d: %v", e.Offset, e.Err)
+	cause := strings.TrimPrefix(fmt.Sprint(e.Err), "mrt: ")
+	if e.Offset < 0 {
+		return "mrt: record (offset unknown): " + cause
+	}
+	return fmt.Sprintf("mrt: record at offset %d: %s", e.Offset, cause)
 }
 
 func (e *RecordError) Unwrap() error { return e.Err }

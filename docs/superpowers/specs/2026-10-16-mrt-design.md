@@ -409,7 +409,7 @@ type BGP4MPMessage struct {
 }
 
 func (m BGP4MPMessage) Context() bgp.Context
-func (m BGP4MPMessage) Type() (bgp.MessageType, error)
+func (m BGP4MPMessage) MessageType() (bgp.MessageType, error)
 
 type BGP4MPStateChange struct {
 	PeerAS, LocalAS     bgp.ASN
@@ -461,7 +461,7 @@ func Decompress(r io.Reader) (io.Reader, error) // gzip by 1f 8b, bzip2 by "BZh"
   - A broken RIB entry is found only by `RIB.Entries`. The entries before it
     survive.
   - A broken BGP message inside a `BGP4MPMessage` (bad marker, bad length)
-    is found only by `Type()` or `bgp.ParseUpdate`, as diagnostics. A record over `MaxRecordLen` is discarded without
+    is found only by `MessageType()` or `bgp.ParseUpdate`, as diagnostics. A record over `MaxRecordLen` is discarded without
   being buffered, yielding `ErrTooLarge`, and iteration continues.
 - **A stream that ends mid-record**, or a read error, yields one error
   wrapping `ErrTruncated` (or the reader's error) and iteration ends.

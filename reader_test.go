@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"runtime"
 	"testing"
@@ -241,8 +242,22 @@ func TestRecordsOffsetAfterET(t *testing.T) {
 }
 
 func TestRecordErrorMessage(t *testing.T) {
-	e := &RecordError{Offset: 42, Err: ErrMalformed}
-	if !errors.Is(e, ErrMalformed) || !bytes.Contains([]byte(e.Error()), []byte("42")) {
-		t.Errorf("Error() = %q", e.Error())
+	tests := []struct {
+		err  *RecordError
+		want string
+	}{
+		{&RecordError{Offset: 42, Err: ErrMalformed}, "mrt: record at offset 42: malformed record"},
+		{&RecordError{Offset: 0, Err: fmt.Errorf("%w: prefix length 33", ErrMalformed)}, "mrt: record at offset 0: malformed record: prefix length 33"},
+		{&RecordError{Offset: -1, Err: fmt.Errorf("%w: peer index 5", ErrMalformed)}, "mrt: record (offset unknown): malformed record: peer index 5"},
+		{&RecordError{Offset: -1, Err: errors.New("bgp: bad marker")}, "mrt: record (offset unknown): bgp: bad marker"},
+		{&RecordError{Offset: 7, Err: ErrTruncated}, "mrt: record at offset 7: truncated record"},
+	}
+	for _, tc := range tests {
+		if got := tc.err.Error(); got != tc.want {
+			t.Errorf("Error() = %q, want %q", got, tc.want)
+		}
+		if !errors.Is(tc.err, tc.err.Err) {
+			t.Errorf("%q does not unwrap", tc.err.Error())
+		}
 	}
 }

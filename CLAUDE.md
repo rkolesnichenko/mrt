@@ -44,7 +44,7 @@ the differential test.
   every byte after the SAFI, `EntryCount` 0, no entries, not malformed. For prefix families the NLRI
   is parsed by `bgp.ParseNLRI`. RIB_GENERIC_ADDPATH entries carry no path ID (RFC 8050 §4.2).
   Trailing bytes after `EntryCount` entries are ignored.
-- **Routes (R12, R13).** A RIB entry with a missing peer index, or a BGP4MP message whose `Type()`
+- **Routes (R12, R13).** A RIB entry with a missing peer index, or a BGP4MP message whose `MessageType()`
   fails, is a `*RecordError{Offset: -1, ...}` wrapping `ErrMalformed`. After a PEER_INDEX_TABLE
   record error the table is cleared (never resolve against a stale one). Non-UPDATE messages, LOCAL
   subtypes and families without prefixes are skipped silently.

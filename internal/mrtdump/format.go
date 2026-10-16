@@ -334,7 +334,7 @@ func (d *dumper) tableDump(r mrt.TableDump) {
 // message prints the withdrawals, then the announcements, of a BGP4MP UPDATE.
 // Other BGP messages print nothing.
 func (d *dumper) message(m mrt.BGP4MPMessage) {
-	t, err := m.Type()
+	t, err := m.MessageType()
 	if err != nil {
 		d.malformed("%v", err)
 		return

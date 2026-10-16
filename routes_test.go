@@ -48,8 +48,12 @@ func routesOf(t *testing.T, in []byte) (rs []Route, errs []error) {
 var origin = []byte{0x40, 0x01, 0x01, 0x00} // ORIGIN IGP
 
 func TestKindString(t *testing.T) {
-	if KindRIB.String() != "B" || KindAnnounce.String() != "A" || KindWithdraw.String() != "W" {
+	if KindRIB.String() != "B" || KindAnnounce.String() != "A" || KindWithdraw.String() != "W" || Kind(0).String() != "?" {
 		t.Error("Kind.String")
+	}
+	// The zero Kind is no route: what an error result carries.
+	if KindRIB != 1 || KindAnnounce != 2 || KindWithdraw != 3 {
+		t.Errorf("Kind values %d %d %d, want 1 2 3", KindRIB, KindAnnounce, KindWithdraw)
 	}
 }
 
