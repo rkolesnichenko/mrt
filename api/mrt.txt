@@ -1,5 +1,8 @@
 package mrt
 const DefaultMaxRecordLen = 16 << 20
+const KindAnnounce Kind
+const KindRIB Kind = iota
+const KindWithdraw Kind
 const StateActive State = 3
 const StateConnect State = 2
 const StateEstablished State = 6
@@ -42,8 +45,10 @@ const TypeTableDumpV2 Type = 13
 var ErrMalformed = errors.New(…)
 var ErrTooLarge = errors.New(…)
 var ErrTruncated = errors.New(…)
+func Decompress(r io.Reader) (io.Reader, error)
 func Records(r io.Reader) iter.Seq2[Record, error]
 func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error]
+func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error]
 type BGP4MPMessage struct
 	PeerAS bgp.ASN
 	LocalAS bgp.ASN
@@ -70,6 +75,8 @@ type Header struct
 	Type Type
 	Subtype Subtype
 	Length uint32
+type Kind uint8
+func (Kind) String() string
 type Options struct
 	MaxRecordLen uint32
 type Other struct
@@ -106,6 +113,16 @@ type RecordError struct
 	Err error
 func (*RecordError) Error() string
 func (*RecordError) Unwrap() error
+type Route struct
+	Time time.Time
+	Kind Kind
+	Peer Peer
+	Family bgp.Family
+	Prefix netip.Prefix
+	PathID uint32
+	HasPathID bool
+	Path *bgp.Path
+	Diagnostics []bgp.Diagnostic
 type State uint16
 type Subtype uint16
 type TableDump struct
