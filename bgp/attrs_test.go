@@ -159,3 +159,28 @@ func TestAllWalksRawInOrder(t *testing.T) {
 		t.Errorf("yielded %d", n)
 	}
 }
+
+func TestDecodeMalformedFirstCopyStillWins(t *testing.T) {
+	raw := concat(attr(0x80, 4, 0, 0, 10), attr(0x80, 4, 0, 0, 0, 20))
+	p, diags := NewAttrs(raw, Context{}).Decode()
+	if p.HasMED || len(p.Unknown) != 2 {
+		t.Fatalf("p = %+v", p)
+	}
+	if len(diags) != 2 || diags[0].Code != "bgp/attr-length" || diags[1].Code != "bgp/attr-duplicate" ||
+		diags[1].Severity != SeverityWarning || diags[1].Offset != 6 {
+		t.Errorf("diags = %+v", diags)
+	}
+}
+
+func TestDecodeDuplicateUnknownAndDeferredCodes(t *testing.T) {
+	for _, code := range []byte{99, 2, 17, 7, 18, 14, 15} {
+		raw := concat(attr(0xC0, code, 1), attr(0xC0, code, 2))
+		p, diags := NewAttrs(raw, Context{}).Decode()
+		if len(p.Unknown) != 2 {
+			t.Errorf("code %d: unknown = %v", code, p.Unknown)
+		}
+		if len(diags) != 1 || diags[0].Code != "bgp/attr-duplicate" || diags[0].Attr != AttrCode(code) {
+			t.Errorf("code %d: diags = %+v", code, diags)
+		}
+	}
+}

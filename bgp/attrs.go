@@ -124,16 +124,13 @@ func (a Attrs) Decode() (Path, []Diagnostic) {
 			off = next
 			continue
 		}
-		if d, ok := a.decodeAttr(&p, at, off); ok {
-			seen[at.Code] = true
-			if d != nil {
-				diags = append(diags, *d)
-			}
-		} else {
+		seen[at.Code] = true // the first copy wins even when it is malformed (RFC 7606 §3.g)
+		d, ok := a.decodeAttr(&p, at, off)
+		if !ok {
 			p.Unknown = append(p.Unknown, at)
-			if d != nil {
-				diags = append(diags, *d)
-			}
+		}
+		if d != nil {
+			diags = append(diags, *d)
 		}
 		off = next
 	}
