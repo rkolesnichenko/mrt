@@ -24,7 +24,7 @@ go install github.com/rkolesnichenko/mrt/cmd/mrtdump@latest   # the bgpdump -m c
 ## Routes
 
 ```go
-f, err := os.Open("updates.20261015.1200.bz2") // or .gz, or raw MRT
+f, err := os.Open("updates.20261015.1200.bz2")
 if err != nil {
 	log.Fatal(err)
 }
@@ -34,18 +34,30 @@ r, err := mrt.Decompress(f) // gzip, bzip2 or raw, by magic bytes
 if err != nil {
 	log.Fatal(err)
 }
+var n, bad int
+first := true
 for route, err := range mrt.Routes(mrt.Records(r)) {
 	if err != nil { // a bad record or entry; the stream goes on
+		bad++
 		continue
 	}
-	origin, _ := route.Path.ASPath.Origin()
-	fmt.Printf("%s via AS%d, path %s, origin AS%d\n", route.Prefix, route.Peer.AS, route.Path.ASPath, origin)
+	n++
+	if route.Kind != mrt.KindAnnounce { // a withdrawal has no Path
+		continue
+	}
+	if first {
+		first = false
+		origin, _ := route.Path.ASPath.Origin()
+		fmt.Printf("%s via AS%d, path %s, origin AS%d\n", route.Prefix, route.Peer.AS, route.Path.ASPath, origin)
+	}
 }
+fmt.Println(n, "routes,", bad, "errors")
 ```
 
 This is `ExampleRoutes` in [example_test.go](example_test.go), which `go test`
-runs over a committed fixture. A withdrawal has a nil `Path`; check
-`route.Kind` (`KindRIB`, `KindAnnounce`, `KindWithdraw`) before reading it.
+runs over a committed fixture (the path differs). A withdrawal has a nil
+`Path`, so check `route.Kind` (`KindRIB`, `KindAnnounce`, `KindWithdraw`) before
+reading it; a RIB dump's routes are `KindRIB`.
 
 `mrt.Records` is the layer below: every record, typed (`PeerIndexTable`, `RIB`,
 `TableDump`, `BGP4MPMessage`, `BGP4MPStateChange`, or `Other`), each with its

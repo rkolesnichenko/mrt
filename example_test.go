@@ -23,16 +23,21 @@ func ExampleRoutes() {
 		log.Fatal(err)
 	}
 	var n, bad int
+	first := true
 	for route, err := range mrt.Routes(mrt.Records(r)) {
 		if err != nil { // a bad record or entry; the stream goes on
 			bad++
 			continue
 		}
-		if n == 0 && route.Kind == mrt.KindAnnounce {
+		n++
+		if route.Kind != mrt.KindAnnounce { // a withdrawal has no Path
+			continue
+		}
+		if first {
+			first = false
 			origin, _ := route.Path.ASPath.Origin()
 			fmt.Printf("%s via AS%d, path %s, origin AS%d\n", route.Prefix, route.Peer.AS, route.Path.ASPath, origin)
 		}
-		n++
 	}
 	fmt.Println(n, "routes,", bad, "errors")
 	// Output:

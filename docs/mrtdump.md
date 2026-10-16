@@ -19,8 +19,8 @@ mrtdump [-m | -M] [-l] [-u] FILE...
 |---|---|
 | `-m` | one line per entry, Unix timestamps (the default; bgpdump's `-m`) |
 | `-M` | human-readable UTC timestamps (`11/14/23 22:13:20`), and only the columns bgpdump's `-M` prints; the last of `-m` and `-M` wins |
-| `-l` | print large communities after the communities field |
-| `-u` | print unknown attributes |
+| `-l` | print large communities after the communities field (in the one-line output of `-m` and `-M`) |
+| `-u` | print unknown attributes (likewise) |
 
 `FILE` is raw, gzip or bzip2 MRT, told apart by its first bytes (`mrt.Decompress`),
 not by its name. `-` is standard input. Several files are printed in order; a

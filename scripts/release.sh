@@ -73,7 +73,10 @@ fail() {
 }
 
 # remote_tag prints the commit a tag names on the remote, or nothing.
-remote_tag() { git ls-remote --tags "$REMOTE" "refs/tags/$1" | cut -f1; }
+remote_tag() {
+	refs=$(git ls-remote --tags "$REMOTE" "refs/tags/$1") || fail "git ls-remote $REMOTE"
+	printf '%s\n' "$refs" | cut -f1
+}
 
 # problems lists, one per line, what would make the release refuse now,
 # reading only the tree and the changelog.
@@ -154,7 +157,12 @@ if [ -z "$tag_commit" ]; then
 			refuse "no terminal to confirm on: pass --yes"
 		fi
 	fi
-	git rev-parse -q --verify "refs/tags/$V" >/dev/null || git tag "$V"
+	if git rev-parse -q --verify "refs/tags/$V" >/dev/null; then
+		[ "$(git rev-parse "$V^{commit}")" = "$(git rev-parse HEAD)" ] ||
+			refuse "the local tag $V names $(git rev-parse --short "$V^{commit}"), not HEAD: delete it (git tag -d $V) or check out its commit"
+	else
+		git tag "$V"
+	fi
 	git push -q "$REMOTE" "$V"
 	echo "pushed $V"
 else
@@ -204,8 +212,10 @@ mkdir -p "$c"
 	latest=$(go list -m "$M@latest")
 	[ "$latest" = "$M $V" ] || fail "$M@latest is $latest, not $V"
 	go get "$M@$V" >/dev/null 2>&1 || fail "go get $M@$V"
-	got=$(go list -m all | sed 1d | cut -d' ' -f1)
-	[ -z "$got" ] || fail "a consumer of $M needs $(echo $got): the module must have no requirements"
+	mods=$(go list -m all) || fail "go list -m all"
+	# The first line is the consumer, then $M itself; anything else is a requirement.
+	got=$(printf '%s\n' "$mods" | sed 1d | grep -v "^$M " || true)
+	[ -z "$got" ] || fail "a consumer of $M needs $(echo "$got" | cut -d' ' -f1 | tr '\n' ' '): the module must have no requirements"
 	echo "$M@latest is $V, with no requirements"
 )
 dir=$(cd "$c" && go list -m -f '{{.Dir}}' "$M")
@@ -261,7 +271,7 @@ for p in $PLATFORMS; do
 	x=$tmp/check-$os-$arch
 	mkdir -p "$x"
 	if [ "$os" = windows ]; then (cd "$x" && unzip -q "$a"); else tar -xzf "$a" -C "$x"; fi
-	[ "$(ls "$x" | tr '\n' ' ')" = "LICENSE README.txt $exe " ] || fail "$a holds $(ls "$x" | tr '\n' ' ')"
+	[ "$(LC_ALL=C ls "$x" | tr '\n' ' ')" = "LICENSE README.txt $exe " ] || fail "$a holds $(LC_ALL=C ls "$x" | tr '\n' ' ')"
 	info=$(go version -m "$x/$exe")
 	{ echo "$info" | grep -q "GOOS=$os" && echo "$info" | grep -q "GOARCH=$arch"; } || fail "$a is not built for $p"
 	echo "$info" | grep -Eq "(mod|dep)[[:space:]]+$M[[:space:]]+$V[[:space:]]+h1:" ||
