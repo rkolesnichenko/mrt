@@ -206,7 +206,7 @@ func attrBlock(code bgp.AttrCode, v []byte) []byte {
 func segments(raw []byte, width int) []byte {
 	var out []byte
 	for len(raw) >= 2 && len(out) < 1<<12 {
-		typ, n := raw[0]%5, int(raw[1]%8)
+		typ, n := 1+raw[0]%4, 1+int(raw[1]%7)
 		raw = raw[2:]
 		out = append(out, typ, byte(n))
 		for i := 0; i < n; i++ {
@@ -224,44 +224,92 @@ func segments(raw []byte, width int) []byte {
 }
 
 func FuzzASPathMerge(f *testing.F) {
-	f.Add([]byte{2, 2, 0, 1, 0, 2}, []byte{2, 1, 0, 0, 0, 9})
-	f.Add([]byte{2, 3, 0, 1, 0x5b, 0xa0, 0, 3}, []byte{2, 2, 0, 0, 0xff, 0xff, 0, 0, 0, 7})
-	f.Add([]byte{}, []byte{})
-	f.Fuzz(func(t *testing.T, asRaw, as4Raw []byte) {
+	f.Add([]byte{1, 2, 0, 1, 0, 2}, []byte{1, 1, 0, 0, 0, 9}, false)
+	f.Add([]byte{1, 3, 0, 1, 0x5b, 0xa0, 0, 3}, []byte{1, 2, 0, 0, 0xff, 0xff, 0, 0, 0, 7}, false)
+	f.Add([]byte{1, 2, 0, 1, 0, 2, 0, 1, 3, 4}, []byte{0, 1, 0, 0, 0, 9}, true)
+	f.Add([]byte{}, []byte{}, false)
+	f.Fuzz(func(t *testing.T, asRaw, as4Raw []byte, withAgg bool) {
 		block := append(attrBlock(bgp.AttrASPath, segments(asRaw, 2)), attrBlock(bgp.AttrAS4Path, segments(as4Raw, 4))...)
-		p, diags := bgp.NewAttrs(block, bgp.Context{AS4: false}).Decode()
-		used := len(p.AS4Path.Segments) > 0
-		for _, d := range diags {
-			if d.Code == "bgp/as4path-ignored" {
-				used = false
-			}
+		if withAgg { // AGGREGATOR alone does not change the merge (it needs AS4_AGGREGATOR too)
+			block = append(block, attrBlock(bgp.AttrAggregator, []byte{0, 1, 1, 2, 3, 4})...)
 		}
-		if used && p.ASPath.Len() != p.ReceivedASPath.Len() {
+		p, _ := bgp.NewAttrs(block, bgp.Context{AS4: false}).Decode()
+		// Decided from the decoded inputs, not from diagnostics: AS4_PATH merges
+		// when it is present and counts no more ASes than AS_PATH.
+		used := len(p.AS4Path.Segments) > 0 && p.AS4Path.Len() <= p.ReceivedASPath.Len()
+		if !used {
+			if !reflect.DeepEqual(p.ASPath, p.ReceivedASPath) {
+				t.Fatalf("AS4_PATH not used but ASPath %v != received %v", p.ASPath, p.ReceivedASPath)
+			}
+			return
+		}
+		if p.ASPath.Len() != p.ReceivedASPath.Len() {
 			t.Fatalf("merged Len %d != received Len %d", p.ASPath.Len(), p.ReceivedASPath.Len())
+		}
+		merged, as4 := flatten(p.ASPath), flatten(p.AS4Path)
+		if len(merged) < len(as4) || !reflect.DeepEqual(merged[len(merged)-len(as4):], as4) {
+			t.Fatalf("AS4_PATH %v is not the tail of the merged path %v", as4, merged)
 		}
 	})
 }
 
-// TestHugeCountsAllocateLittle: short values claiming 65,535 segments or
-// communities cost little (spec §7.4). Not parallel: it reads TotalAlloc.
+// flatten lists the ASNs of the counted segments (not confederation ones) in order.
+func flatten(p bgp.ASPath) []bgp.ASN {
+	var out []bgp.ASN
+	for _, s := range p.Segments {
+		if s.Type == bgp.ASConfedSequence || s.Type == bgp.ASConfedSet {
+			continue
+		}
+		out = append(out, s.ASNs...)
+	}
+	return out
+}
+
+// TestHugeCountsAllocateLittle: a short attribute claiming a lot must cost a
+// small multiple of its input, and must reach the check that refuses it. The
+// encoding cannot claim 65,535 AS_PATH segments or ASNs: a segment's count is
+// one byte (at most 255 ASNs) and each segment needs 2 header bytes, so the
+// largest claim is what the bytes present can frame; a believed claim of 255
+// ASNs costs 1 KiB per segment. Communities have no count (length/4), and the
+// length field's 65,535 is checked against the bytes present. Not parallel: it
+// reads the process-wide TotalAlloc.
 func TestHugeCountsAllocateLittle(t *testing.T) {
-	long := attrBlock(bgp.AttrASPath, []byte{2, 255, 0, 1})                  // one segment claiming 255 ASNs
-	segs := attrBlock(bgp.AttrASPath, bytes.Repeat([]byte{2, 0xff}, 16))     // many segments, none backed
-	comm := attrBlock(bgp.AttrCommunities, []byte{0xff, 0xff, 0xff, 0xff})   // one community, 4 bytes
-	big := append([]byte{0x90, byte(bgp.AttrCommunities), 0xff, 0xff}, 1, 2) // length 65535, 2 bytes present
-	mp := attrBlock(bgp.AttrMPReach, []byte{0, 2, 1, 16, 0})
-	for name, blk := range map[string][]byte{"long-segment": long, "segments": segs, "community": comm, "community-length": big, "mp": mp} {
-		if len(blk) > 64 {
-			t.Fatalf("%s is %d bytes", name, len(blk))
+	cases := []struct {
+		name  string
+		blk   []byte
+		diag  string
+		bound uint64
+	}{
+		// one segment claiming 255 ASNs, 2 present
+		{"long-segment", attrBlock(bgp.AttrASPath, append([]byte{2, 255}, 0, 1, 0, 2)), "bgp/aspath-width", 4 << 10},
+		// 29 segment headers each claiming 255 ASNs, none backed
+		{"segments", attrBlock(bgp.AttrASPath, bytes.Repeat([]byte{2, 0xff}, 29)), "bgp/aspath-width", 4 << 10},
+		// extended length 65535 with 2 bytes present
+		{"attr-length", []byte{0x90, byte(bgp.AttrCommunities), 0xff, 0xff, 1, 2}, "bgp/attr-truncated", 4 << 10},
+		// communities attribute whose length is no multiple of 4
+		{"community", attrBlock(bgp.AttrCommunities, []byte{0xff, 0xff, 0xff}), "bgp/attr-length", 4 << 10},
+		// MP_REACH IPv6 unicast claiming a 16-byte next hop that is absent
+		{"mp", attrBlock(bgp.AttrMPReach, []byte{0, 2, 1, 16, 0}), "", 4 << 10},
+	}
+	for _, c := range cases {
+		if len(c.blk) > 64 {
+			t.Fatalf("%s is %d bytes", c.name, len(c.blk))
 		}
 		for _, ctx := range []bgp.Context{{}, {AS4: true}} {
 			runtime.GC()
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
-			bgp.NewAttrs(blk, ctx).Decode()
+			_, diags := bgp.NewAttrs(c.blk, ctx).Decode()
 			runtime.ReadMemStats(&after)
-			if d := after.TotalAlloc - before.TotalAlloc; d >= 64<<10 {
-				t.Errorf("%s %+v: allocated %d bytes for %d input bytes", name, ctx, d, len(blk))
+			if d := after.TotalAlloc - before.TotalAlloc; d > c.bound {
+				t.Errorf("%s %+v: allocated %d bytes (bound %d) for %d input bytes", c.name, ctx, d, c.bound, len(c.blk))
+			}
+			found := c.diag == "" && len(diags) > 0
+			for _, d := range diags {
+				found = found || d.Code == c.diag
+			}
+			if !found {
+				t.Errorf("%s %+v: diagnostics %v lack %q", c.name, ctx, diags, c.diag)
 			}
 		}
 	}
