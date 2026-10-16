@@ -433,10 +433,10 @@ func compareSources(oursNext, theirsNext func() (string, bool)) compareStats {
 // classified:
 //
 //   - B5: LOCAL_PREF or MED printed with %d, negative, the same value modulo 2^32.
-//   - S16: a community or large-community field cut at bgpdump's BUFSIZ
-//     (1024 on macOS): a prefix of mrtdump's of at least maxCommunityField
-//     characters.
-//   - S17: an AS path cut with "..." appended (MAX_ASPATH_LEN).
+//   - S16: a community or large-community field cut at bgpdump's BUFSIZ:
+//     a prefix of mrtdump's of exactly BUFSIZ-2 characters (communityCuts).
+//   - S17: an AS path cut with "..." appended right after the ASN that
+//     passed 7900 characters (aspathCutAfter, aspathCutMax).
 func classify(ours, theirs string) (ids []string, ok bool) {
 	if ours == "" || theirs == "" {
 		return nil, false
@@ -478,20 +478,50 @@ func signedValue(ours, theirs string) bool {
 	return err1 == nil && err2 == nil && v < 0 && uint32(int32(v)) == uint32(u)
 }
 
+// bgpdump builds a community or large-community field in char buf[BUFSIZ],
+// each value with a leading space, snprintf/strlcat filling it to BUFSIZ-1,
+// and prints it from the second character (bgpdump_lib.c
+// process_attr_community_string, process_attr_lcommunity_string; bgpdump.c
+// `community->str+1`): a cut field is exactly BUFSIZ-2 characters, 1022 on
+// macOS (BUFSIZ 1024) and 8190 with glibc (8192).
+var communityCuts = []int{1024 - 2, 8192 - 2}
+
 // cutCommunities: theirs is ours cut at bgpdump's buffer (S16).
 func cutCommunities(ours, theirs string) bool {
-	return len(theirs) >= maxCommunityField && len(theirs) < len(ours) && strings.HasPrefix(ours, theirs)
+	return slices.Contains(communityCuts, len(theirs)) && len(theirs) < len(ours) && strings.HasPrefix(ours, theirs)
 }
 
-// cutPath: theirs is ours cut with "..." appended (S17).
+// bgpdump writes an AS path into MAX_ASPATH_LEN (8000) bytes and, right
+// after the ASN that takes the text past MAX_ASPATH_LEN-100, appends "..."
+// and stops (bgpdump_lib.c process_attr_aspath_string). Before that ASN the
+// text was at most 7900 characters; a segment's closing and opening
+// characters, a separator and at most 10 digits follow, so the part kept is
+// 7901 to 7913 characters and ends with a digit.
+const (
+	aspathCutAfter = 8000 - 100
+	aspathCutMax   = aspathCutAfter + 3 + 10
+)
+
+// cutPath: theirs is ours cut with "..." appended (S17). The ASN that crossed
+// the limit may have been the last, so the kept part may be all of ours.
 func cutPath(ours, theirs string) bool {
 	p, ok := strings.CutSuffix(theirs, "...")
-	return ok && len(p) >= maxCommunityField && len(p) < len(ours) && strings.HasPrefix(ours, p)
+	if !ok || len(p) <= aspathCutAfter || len(p) > aspathCutMax || !strings.HasPrefix(ours, p) {
+		return false
+	}
+	isDigit := func(c byte) bool { return '0' <= c && c <= '9' }
+	return isDigit(p[len(p)-1]) && (len(p) == len(ours) || !isDigit(ours[len(p)]))
 }
 
 func TestClassifyRealDataMismatch(t *testing.T) {
 	long := strings.Repeat("65000:1 ", 200) // 1600 characters
 	cut := long[:1022]
+	longer := strings.Repeat("65000:1 ", 1100) // 8800 characters
+	path1500 := strings.TrimSpace(strings.Repeat("64500 ", 1500))
+	set7900 := "{" + strings.Repeat("64500,", 1316) + "645" // 7900 characters
+	rib := func(path string) string {
+		return "TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|" + path + "|IGP|192.0.2.20|0|0|||NAG|||"
+	}
 	for _, tc := range []struct {
 		name, ours, theirs string
 		want               string // "" for unclassified
@@ -516,14 +546,34 @@ func TestClassifyRealDataMismatch(t *testing.T) {
 			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|0|0||" + long + "|NAG|||",
 			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|0|0||" + cut + "|NAG|||",
 			"S16"},
+		{"S16 communities cut at glibc's BUFSIZ",
+			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|0|0|" + longer + "||NAG|||",
+			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|0|0|" + longer[:8190] + "||NAG|||",
+			"S16"},
+		{"a 1010-character prefix is not bgpdump's cut",
+			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|0|0|" + long + "||NAG|||",
+			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|0|0|" + long[:1010] + "||NAG|||",
+			""},
+		{"a 1022-character field that is not a prefix",
+			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|0|0|" + long + "||NAG|||",
+			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|0|0|" + "7" + cut[1:] + "||NAG|||",
+			""},
 		{"a short community field cut is not S16",
 			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|0|0|65000:1 65000:2||NAG|||",
 			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|0|0|65000:1||NAG|||",
 			""},
-		{"S17 AS path cut with ...",
-			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|" + strings.TrimSpace(strings.Repeat("64500 ", 1500)) + "|IGP|192.0.2.20|0|0|||NAG|||",
-			"TABLE_DUMP2|1|B|192.0.2.10|64500|198.51.110.0/24|" + strings.Repeat("64500 ", 1320) + "...|IGP|192.0.2.20|0|0|||NAG|||",
-			"S17"},
+		// bgpdump appends "..." as soon as the text passes 7900 characters
+		// right after an ASN: with 6-character steps ASN 1317 ends at 7901.
+		{"S17 AS path cut with ...", rib(path1500), rib(path1500[:7901] + "..."), "S17"},
+		{"S17: the ASN that crossed 7900 was the last", rib(path1500[:7901]), rib(path1500[:7901] + "..."), "S17"},
+		{"S17: a kept part of 7895, not past 7900, is not bgpdump's", rib(path1500), rib(path1500[:7895] + "..."), ""},
+		{"S17: cut past 7913 is not bgpdump's", rib(path1500), rib(path1500[:7919] + "..."), ""},
+		// The longest kept part: an AS_SET's text reaches exactly 7900, then
+		// "} {" and a 10-digit ASN in the next set: 7913.
+		{"S17 at 7913", rib(set7900 + "} {4200000000}"), rib(set7900 + "} {4200000000..."), "S17"},
+		{"S17: 7914 is past bgpdump's longest", rib(set7900 + "} {42000000001}"), rib(set7900 + "} {42000000001..."), ""},
+		{"S17: cut inside an ASN is not bgpdump's", rib(path1500), rib(path1500[:7903] + "..."), ""},
+		{"S17: theirs not a prefix", rib(path1500), rib("1" + path1500[1:7901] + "..."), ""},
 		{"B5 and S16 on one line",
 			"BGP4MP|1|A|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|3000000000|0|" + long + "||NAG|||",
 			"BGP4MP|1|A|192.0.2.10|64500|198.51.110.0/24|64500|IGP|192.0.2.20|-1294967296|0|" + cut + "||NAG|||",

@@ -27,8 +27,10 @@ In one process, after a garbage collection each, it measures wall time and the
 
 It prints:
 
-- the **release gate**: `mrt.Routes` (pass 4) allocates less than gobgp
-  (pass 2) on the same file; exit status 1 when it does not;
+- the **release gate**: `mrt.Routes` (pass 4) yields no error, yields one
+  route per RIB entry gobgp decoded (pass 2; so the file must be a RIB), and
+  allocates less than gobgp on the same file; the counts are printed, and the
+  exit status is 1 when any of the three fails (Ruling R21);
 - `mrt.Records`' bytes allocated per decompressed byte (aim ≤ 1.25; reported,
   not a gate);
 - decompression's share of the full pass's wall time (pass 1 / pass 5).
