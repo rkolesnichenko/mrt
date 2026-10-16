@@ -617,9 +617,20 @@ func lookPath(t *testing.T, name string) string {
 }
 
 // checkLive compares an oracle's output with its golden, or rewrites it.
-func checkLive(t *testing.T, path string, out []byte) {
+//
+// crashed says the oracle died on a signal (bgpdump asserting). Its stdout then
+// ends wherever the C library last flushed, which differs by platform: glibc
+// buffers a pipe fully and abort() discards the buffer, while on macOS the lines
+// printed before the assertion arrive. So a crashed oracle's output need only be a
+// prefix of the golden, and an update never shortens a golden to such a prefix.
+func checkLive(t *testing.T, path string, out []byte, crashed bool) {
 	t.Helper()
 	if update() {
+		if crashed {
+			if old, err := oracle.ReadGolden(path); err == nil && bytes.HasPrefix(old, out) {
+				return
+			}
+		}
 		if err := oracle.WriteGolden(path, out); err != nil {
 			t.Fatal(err)
 		}
@@ -628,6 +639,9 @@ func checkLive(t *testing.T, path string, out []byte) {
 	golden, err := oracle.ReadGolden(path)
 	if err != nil {
 		t.Fatalf("%v (MRT_GOLDEN_UPDATE=1 writes it)", err)
+	}
+	if crashed && bytes.HasPrefix(golden, out) {
+		return
 	}
 	if !bytes.Equal(out, golden) {
 		t.Errorf("the oracle's output differs from %s at %s\n(MRT_GOLDEN_UPDATE=1 rewrites it; review the diff)",
@@ -644,9 +658,9 @@ func TestMatchesBgpdump(t *testing.T) {
 				t.Fatal(err)
 			}
 			if status != 0 {
-				t.Logf("bgpdump exited with status %d (-1: killed by a signal, as when it asserts); its output so far is the golden", status)
+				t.Logf("bgpdump exited with status %d (-1: killed by a signal, as when it asserts); its output must be a prefix of the golden", status)
 			}
-			checkLive(t, f.golden(".bgpdump"), out)
+			checkLive(t, f.golden(".bgpdump"), out, status < 0)
 		})
 	}
 }
@@ -668,7 +682,7 @@ func TestMatchesBgpkitLive(t *testing.T) {
 				b.WriteString(l)
 				b.WriteByte('\n')
 			}
-			checkLive(t, f.golden(".bgpkit.json"), b.Bytes())
+			checkLive(t, f.golden(".bgpkit.json"), b.Bytes(), false)
 		})
 	}
 }
