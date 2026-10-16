@@ -11,6 +11,12 @@
   when larger than 64 KiB. `MRT_GOLDEN_UPDATE=1 go test -run 'TestMatches' .`
   rewrites them; `golden_test.go` says what each test compares.
 - `bgpdump/divergences.md`: every difference between mrt and the oracles.
+- `bench/rv2-updates-et.20261015.1200.bz2`: the fixture
+  `mrt/rv2-updates-et.20261015.1200.gz` decompressed and recompressed with
+  `bzip2 -9` (bzip2 1.0.8), for `BenchmarkBzip2` (`bench_test.go`), since no
+  committed fixture is bzip2; its decompressed bytes are the fixture's (slice
+  sha256 8b74dfbdc55bfbead57e7fde987de4a575cf08a74f5556c977e69e8dc9d9e5ef),
+  which the benchmark checks.
 
 ## Real fixtures
 

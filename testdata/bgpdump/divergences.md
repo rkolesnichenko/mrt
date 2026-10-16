@@ -438,6 +438,12 @@ not fixtures. Each is malformed or unusual data; mrt's side is the RFC's.
   as 1022 characters cut mid-value; mrtdump prints all 150 (1799 characters).
   So no fixture route has a community field of 1000 characters or more
   (Ruling R16, `TestCommunityFieldsFitBgpdumpBuffer`).
+  Real data has many: the opt-in `TestRealData` (`realdata_test.go`, whose
+  `classify` names S16, B5 and S17 and nothing else) found 33552 such lines
+  in RIS rrc00's bview.20261016.0800, 4055 in route-views2's
+  rib.20261016.1400, 2249 in route-views6's rib.20261016.1400 and 1862 in
+  the hour 14:00-14:59 of rrc00 and route-views2 updates on 2026-10-16, and
+  no other difference.
 - S17. AS_PATH text stops at about 7900 characters with `...` appended
   (MAX_ASPATH_LEN 8000); mrtdump prints the whole path.
 
