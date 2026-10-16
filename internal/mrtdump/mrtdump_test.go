@@ -58,6 +58,20 @@ func TestMrtdumpRefusesUnknownFlags(t *testing.T) {
 	}
 }
 
+// TestMrtdumpCommandLineDivergences pins two command-line differences from
+// bgpdump (testdata/bgpdump/divergences.md): clustered flags are refused,
+// and every argument after the first file name is a file name.
+func TestMrtdumpCommandLineDivergences(t *testing.T) {
+	code, out, errs := run(t, nil, "-ml", synthetic+"nh32.mrt")
+	if code != 2 || out != "" || !strings.Contains(errs, "-ml") {
+		t.Errorf("-ml: exit %d, stdout %q, stderr %q; want 2, nothing, a message naming -ml", code, out, errs)
+	}
+	code, out, errs = run(t, nil, synthetic+"nh32.mrt", "-l")
+	if code != 3 || !strings.Contains(errs, "open -l") || !strings.Contains(out, "2001:db8:400::/48") {
+		t.Errorf("FILE -l: exit %d, stderr %q; want 3, the file printed and -l opened as a file", code, errs)
+	}
+}
+
 func TestMrtdumpMissingFile(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "absent.mrt")
 	code, out, errs := run(t, nil, "-m", missing, synthetic+"nh32.mrt")
