@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"net/netip"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/rkolesnichenko/mrt/bgp"
@@ -293,4 +295,83 @@ func TestRoutesBrokenPeerTableClearsOld(t *testing.T) {
 	if !errors.As(errs[1], &re) || re.Offset != -1 || !errors.Is(errs[1], ErrMalformed) {
 		t.Errorf("second error %#v, want the R12 error", errs[1])
 	}
+}
+
+// wantRecordError checks the R12 shape of a Routes error for record rec:
+// Offset -1, the record's header and bytes, ErrMalformed, and text containing
+// want.
+func wantRecordError(t *testing.T, err error, rec []byte, want string) {
+	t.Helper()
+	var re *RecordError
+	if !errors.As(err, &re) {
+		t.Fatalf("%#v is not a *RecordError", err)
+	}
+	if re.Offset != -1 || !bytes.Equal(re.Raw, rec) || re.Header.Length != uint32(len(rec)-12) || !errors.Is(err, ErrMalformed) ||
+		!strings.Contains(err.Error(), want) {
+		t.Errorf("%v: offset %d, header %+v, raw %d bytes; want offset -1, the record's header and %d bytes, ErrMalformed, %q",
+			err, re.Offset, re.Header, len(re.Raw), len(rec), want)
+	}
+}
+
+// An UPDATE that yields no route but has a Warning or Error diagnostic is a
+// RecordError, not silence; one with no such diagnostic stays silent.
+func TestRoutesMalformedUpdateWithoutRoutes(t *testing.T) {
+	// Withdrawn-routes length 65520 in a message whose header length is right.
+	longWithdrawn := cat(bytesOf(0xff, 16), be16(21), []byte{2}, be16(65520))
+	tests := []struct {
+		name, msg string
+		upd       []byte
+	}{
+		{"withdrawn length", "bgp/update-length: withdrawn routes run past the message", longWithdrawn},
+		{"/33 NLRI", "bgp/nlri-length: prefix length 33 exceeds 32", updateMsg(nil, origin, []byte{33, 10, 0, 0, 0, 0})},
+		{"malformed MP_REACH", "bgp/attr-length: MP_REACH_NLRI next hop runs past the attribute",
+			updateMsg(nil, cat(origin, mpAttr(14, 2, 1, []byte{16, 1, 2}, nil)), nil)},
+	}
+	for _, tc := range tests {
+		rec := bgp4mp(SubMessageAS4, tc.upd)
+		rs, errs := routesOf(t, rec)
+		if len(rs) != 0 || len(errs) != 1 {
+			t.Errorf("%s: %d routes, errors %v; want one error", tc.name, len(rs), errs)
+			continue
+		}
+		wantRecordError(t, errs[0], rec, tc.msg)
+	}
+	// End-of-RIB, an empty UPDATE, stays silent.
+	rs, errs := routesOf(t, bgp4mp(SubMessageAS4, updateMsg(nil, nil, nil)))
+	if len(rs) != 0 || len(errs) != 0 {
+		t.Errorf("empty UPDATE: %v %v", rs, errs)
+	}
+}
+
+// An UPDATE that yields routes carries its diagnostics on them, and the
+// attribute diagnostics are rebased onto the BGP message.
+func TestRoutesUpdateDiagnostics(t *testing.T) {
+	// 2 withdrawn bytes; a duplicate ORIGIN at offset 4 of the attribute
+	// block, which starts at 19+2+2+2 = 25 in the message; a /33 after a /24,
+	// at 25+8+4 = 37.
+	msg := updateMsg([]byte{8, 10}, cat(origin, origin), []byte{24, 192, 0, 2, 33, 1, 2, 3, 4, 5})
+	rs, errs := routesOf(t, bgp4mp(SubMessageAS4, msg))
+	if len(errs) != 0 || len(rs) != 2 {
+		t.Fatalf("%v %v", rs, errs)
+	}
+	want := []bgp.Diagnostic{
+		{Severity: bgp.SeverityError, Code: "bgp/nlri-length", Offset: 37, Message: "prefix length 33 exceeds 32"},
+		{Severity: bgp.SeverityWarning, Code: "bgp/attr-duplicate", Offset: 29, Attr: bgp.AttrOrigin, Message: "duplicate path attribute ignored"},
+	}
+	for i, r := range rs {
+		if !slices.Equal(r.Diagnostics, want) {
+			t.Errorf("route %d (%s): diagnostics %+v, want %+v", i, r.Kind, r.Diagnostics, want)
+		}
+	}
+}
+
+// A RIB entry that runs past its record is a RecordError of that record.
+func TestRoutesBrokenRIBEntryIsRecordError(t *testing.T) {
+	bad := cat(be16(0), be32(ts), be16(200), origin)
+	rib := frame(ts, TypeTableDumpV2, SubRIBIPv4Unicast, 0, cat(be32(1), []byte{8, 10}, be16(1), bad))
+	rs, errs := routesOf(t, cat(peerTable("192.0.2.1"), rib))
+	if len(rs) != 0 || len(errs) != 1 {
+		t.Fatalf("%v %v", rs, errs)
+	}
+	wantRecordError(t, errs[0], rib, "RIB entry 1 attributes (200 bytes) run past the record")
 }
