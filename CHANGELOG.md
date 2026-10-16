@@ -6,13 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the module follows [Semantic Versioning](https://semver.org/): until v1.0.0,
 a minor version may change the API.
 
-To release, `scripts/release.sh` needs the `[Unreleased]` heading renamed to
-`## [0.1.0] - YYYY-MM-DD` and a link line `[0.1.0]: https://github.com/rkolesnichenko/mrt/releases/tag/v0.1.0`
-at the end of this file. The date is set when the release is made.
-
 ## [Unreleased]
 
-First release: 0.1.0. Every figure below comes from a command run on
+## [0.1.0] - 2026-10-16
+
+First release. Every figure below comes from a command run on
 2026-10-16 (Go 1.27.2, Apple M3 Max, `GOMAXPROCS=4`); the log is named.
 
 ### Added
@@ -99,3 +97,6 @@ First release: 0.1.0. Every figure below comes from a command run on
   mrtdump's output past the cut is checked against no oracle.
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
+
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/rkolesnichenko/mrt/releases/tag/v0.1.0
