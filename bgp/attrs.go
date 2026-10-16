@@ -103,6 +103,7 @@ func (a Attrs) Decode() (Path, []Diagnostic) {
 		p     Path
 		diags []Diagnostic
 		seen  [256]bool
+		as4   as4State
 	)
 	for off := 0; off < len(a.raw); {
 		at, next, err := nextAttr(a.raw, off)
@@ -125,7 +126,7 @@ func (a Attrs) Decode() (Path, []Diagnostic) {
 			continue
 		}
 		seen[at.Code] = true // the first copy wins even when it is malformed (RFC 7606 §3.g)
-		d, ok := a.decodeAttr(&p, at, off)
+		d, ok := a.decodeAttr(&p, &as4, at, off)
 		if !ok {
 			p.Unknown = append(p.Unknown, at)
 		}
@@ -134,12 +135,14 @@ func (a Attrs) Decode() (Path, []Diagnostic) {
 		}
 		off = next
 	}
+	diags = append(diags, applyAS4(&p, &as4, a.ctx)...)
 	return p, diags
 }
 
-// decodeAttr stores at into p. ok is false when at was not decoded and belongs
-// in Unknown; the diagnostic, if any, explains why (or notes a decoded oddity).
-func (a Attrs) decodeAttr(p *Path, at Attribute, off int) (d *Diagnostic, ok bool) {
+// decodeAttr stores at into p, or into st for what the AS4 rule decides later.
+// ok is false when at was not decoded and belongs in Unknown; the diagnostic,
+// if any, explains why (or notes a decoded oddity).
+func (a Attrs) decodeAttr(p *Path, st *as4State, at Attribute, off int) (d *Diagnostic, ok bool) {
 	diag := func(sev Severity, code, msg string) *Diagnostic {
 		return &Diagnostic{sev, code, off, at.Code, msg}
 	}
@@ -154,6 +157,45 @@ func (a Attrs) decodeAttr(p *Path, at Attribute, off int) (d *Diagnostic, ok boo
 			return diag(SeverityWarning, "bgp/attr-value", "ORIGIN value above 2"), false
 		}
 		p.Origin, p.HasOrigin = Origin(v[0]), true
+	case AttrASPath:
+		width := 2
+		if a.ctx.AS4 {
+			width = 4
+		}
+		asp, good := parseASPath(v, width)
+		if !good {
+			return diag(SeverityWarning, "bgp/aspath-width", "AS_PATH does not parse at the record's AS width"), false
+		}
+		p.ReceivedASPath = asp // ASPath is set from it after the AS4 rule
+	case AttrAS4Path:
+		asp, good := parseASPath(v, 4)
+		if !good {
+			return diag(SeverityWarning, "bgp/attr-value", "AS4_PATH is malformed"), false
+		}
+		for _, s := range asp.Segments {
+			if s.Type == ASConfedSequence || s.Type == ASConfedSet {
+				return diag(SeverityWarning, "bgp/attr-value", "AS4_PATH carries a confederation segment"), false
+			}
+		}
+		p.AS4Path, st.hasAS4Path, st.as4PathOff = asp, true, off
+	case AttrAggregator:
+		switch {
+		case !a.ctx.AS4 && len(v) == 6:
+			st.agg = Aggregator{ASN(v[0])<<8 | ASN(v[1]), netip.AddrFrom4([4]byte(v[2:]))}
+		case a.ctx.AS4 && len(v) == 8:
+			st.agg = Aggregator{ASN(be32(v)), netip.AddrFrom4([4]byte(v[4:]))}
+		case a.ctx.AS4:
+			return badLen("AGGREGATOR is not 8 bytes in a 4-byte AS context")
+		default:
+			return badLen("AGGREGATOR is not 6 bytes in a 2-byte AS context")
+		}
+		st.hasAgg = true
+	case AttrAS4Aggregator:
+		if len(v) != 8 {
+			return badLen("AS4_AGGREGATOR is not 8 bytes")
+		}
+		st.as4Agg = Aggregator{ASN(be32(v)), netip.AddrFrom4([4]byte(v[4:]))}
+		st.hasAS4Agg, st.as4AggOff = true, off
 	case AttrNextHop:
 		if len(v) != 4 {
 			return badLen("NEXT_HOP is not 4 bytes")
@@ -218,8 +260,7 @@ func (a Attrs) decodeAttr(p *Path, at Attribute, off int) (d *Diagnostic, ok boo
 		}
 		p.OnlyToCustomer, p.HasOnlyToCustomer = ASN(be32(v)), true
 	default:
-		// Unknown, and (until decoded) AS_PATH, AS4_PATH, AGGREGATOR,
-		// AS4_AGGREGATOR, MP_REACH_NLRI and MP_UNREACH_NLRI, stay raw.
+		// Unknown, and (until decoded) MP_REACH_NLRI and MP_UNREACH_NLRI, stay raw.
 		return nil, false
 	}
 	return nil, true
