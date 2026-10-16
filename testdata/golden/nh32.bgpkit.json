@@ -1,0 +1,2 @@
+{"kind":"A","peer":"2001:db8::11","peer_as":4200000001,"prefix":"2001:db8:400::/48","as_path":"4200000001 64501","origin":"IGP","next_hop":"2001:db8::11"}
+{"kind":"A","peer":"2001:db8::11","peer_as":4200000001,"prefix":"2001:db8:400::/48","as_path":"4200000001 64501","origin":"IGP","next_hop":"2001:db8::11"}

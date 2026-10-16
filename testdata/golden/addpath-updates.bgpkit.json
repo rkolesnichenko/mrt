@@ -1,0 +1,5 @@
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"203.0.113.0/24","path_id":1,"as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10"}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"203.0.113.0/24","path_id":2,"as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10"}
+{"kind":"A","peer":"2001:db8::11","peer_as":4200000001,"prefix":"2001:db8:200::/48","path_id":7,"as_path":"4200000001 64501","origin":"IGP","next_hop":"2001:db8::11"}
+{"kind":"A","peer":"2001:db8::11","peer_as":4200000001,"prefix":"2001:db8:200::/48","path_id":8,"as_path":"4200000001 64501","origin":"IGP","next_hop":"2001:db8::11"}
+{"kind":"W","peer":"192.0.2.10","peer_as":64500,"prefix":"203.0.113.0/24","path_id":1}

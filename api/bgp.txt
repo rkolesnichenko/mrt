@@ -1,0 +1,139 @@
+package bgp
+const AFIIPv4 AFI = 1
+const AFIIPv6 AFI = 2
+const ASConfedSequence SegmentType = 3
+const ASConfedSet SegmentType = 4
+const ASSequence SegmentType = 2
+const ASSet SegmentType = 1
+const ASTrans ASN = 23456
+const AttrAS4Aggregator AttrCode = 18
+const AttrAS4Path AttrCode = 17
+const AttrASPath AttrCode = 2
+const AttrAggregator AttrCode = 7
+const AttrAtomicAggregate AttrCode = 6
+const AttrClusterList AttrCode = 10
+const AttrCommunities AttrCode = 8
+const AttrExtCommunities AttrCode = 16
+const AttrLargeCommunity AttrCode = 32
+const AttrLocalPref AttrCode = 5
+const AttrMED AttrCode = 4
+const AttrMPReach AttrCode = 14
+const AttrMPUnreach AttrCode = 15
+const AttrNextHop AttrCode = 3
+const AttrOnlyToCustomer AttrCode = 35
+const AttrOrigin AttrCode = 1
+const AttrOriginatorID AttrCode = 9
+const MessageKeepalive MessageType = 4
+const MessageNotification MessageType = 3
+const MessageOpen MessageType = 1
+const MessageRouteRefresh MessageType = 5
+const MessageUpdate MessageType = 2
+const OriginEGP Origin = 1
+const OriginIGP Origin = 0
+const OriginIncomplete Origin = 2
+const SAFIMulticast SAFI = 2
+const SAFIUnicast SAFI = 1
+const SeverityError Severity = 2
+const SeverityInfo Severity = 0
+const SeverityWarning Severity = 1
+var ErrMarker = errors.New(…)
+var ErrShortMessage = errors.New(…)
+func NewAttrs(raw []byte, ctx Context) Attrs
+func ParseMessageHeader(msg []byte) (MessageHeader, error)
+func ParseNLRI(b []byte, fam Family, addPath bool) ([]NLRI, []Diagnostic)
+func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic)
+type AFI uint16
+type ASN uint32
+type ASPath struct
+	Segments []Segment
+func (ASPath) Len() int
+func (ASPath) Origin() (ASN, bool)
+func (ASPath) String() string
+type Aggregator struct
+	AS ASN
+	Addr netip.Addr
+type AttrCode uint8
+type Attribute struct
+	Flags uint8
+	Code AttrCode
+	Value []byte
+type Attrs struct
+func (Attrs) All() iter.Seq2[Attribute, error]
+func (Attrs) Decode() (Path, []Diagnostic)
+func (Attrs) Raw() []byte
+type Community uint32
+func (Community) String() string
+type Context struct
+	AS4 bool
+	AddPath bool
+	RIB bool
+type Diagnostic struct
+	Severity Severity
+	Code string
+	Offset int
+	Attr AttrCode
+	Message string
+type ExtCommunity [8]byte
+type Family struct
+	AFI AFI
+	SAFI SAFI
+func (Family) HasPrefixes() bool
+type LargeCommunity struct
+	Global uint32
+	Local1 uint32
+	Local2 uint32
+func (LargeCommunity) String() string
+type MPReach struct
+	Family Family
+	NextHop netip.Addr
+	LinkLocal netip.Addr
+	NLRI []NLRI
+	RawNLRI []byte
+	Abbreviated bool
+type MPUnreach struct
+	Family Family
+	Withdrawn []NLRI
+	RawNLRI []byte
+type MessageHeader struct
+	Type MessageType
+	Length int
+type MessageType uint8
+type NLRI struct
+	Prefix netip.Prefix
+	PathID uint32
+	HasPathID bool
+type Origin uint8
+type Path struct
+	Origin Origin
+	HasOrigin bool
+	ASPath ASPath
+	ReceivedASPath ASPath
+	AS4Path ASPath
+	NextHop netip.Addr
+	MED uint32
+	HasMED bool
+	LocalPref uint32
+	HasLocalPref bool
+	AtomicAggregate bool
+	Aggregator Aggregator
+	HasAggregator bool
+	Communities []Community
+	ExtCommunities []ExtCommunity
+	LargeCommunities []LargeCommunity
+	OnlyToCustomer ASN
+	HasOnlyToCustomer bool
+	OriginatorID netip.Addr
+	ClusterList []netip.Addr
+	MPReach *MPReach
+	MPUnreach *MPUnreach
+	Unknown []Attribute
+type SAFI uint8
+type Segment struct
+	Type SegmentType
+	ASNs []ASN
+type SegmentType uint8
+type Severity uint8
+type Update struct
+	Withdrawn []NLRI
+	Attrs Attrs
+	Announced []NLRI

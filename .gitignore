@@ -2,3 +2,4 @@
 *.test
 *.prof
 .superpowers/
+.idea/

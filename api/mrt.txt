@@ -1,0 +1,136 @@
+package mrt
+const DefaultMaxRecordLen = 16 << 20
+const KindAnnounce Kind = 2
+const KindRIB Kind = 1
+const KindWithdraw Kind = 3
+const StateActive State = 3
+const StateConnect State = 2
+const StateEstablished State = 6
+const StateIdle State = 1
+const StateOpenConfirm State = 5
+const StateOpenSent State = 4
+const SubAFIIPv4 Subtype = 1
+const SubAFIIPv6 Subtype = 2
+const SubGeoPeerTable Subtype = 7
+const SubMessage Subtype = 1
+const SubMessageAS4 Subtype = 4
+const SubMessageAS4AddPath Subtype = 9
+const SubMessageAS4Local Subtype = 7
+const SubMessageAS4LocalAddPath Subtype = 11
+const SubMessageAddPath Subtype = 8
+const SubMessageLocal Subtype = 6
+const SubMessageLocalAddPath Subtype = 10
+const SubPeerIndexTable Subtype = 1
+const SubRIBGeneric Subtype = 6
+const SubRIBGenericAddPath Subtype = 12
+const SubRIBIPv4Multicast Subtype = 3
+const SubRIBIPv4MulticastAddPath Subtype = 9
+const SubRIBIPv4Unicast Subtype = 2
+const SubRIBIPv4UnicastAddPath Subtype = 8
+const SubRIBIPv6Multicast Subtype = 5
+const SubRIBIPv6MulticastAddPath Subtype = 11
+const SubRIBIPv6Unicast Subtype = 4
+const SubRIBIPv6UnicastAddPath Subtype = 10
+const SubStateChange Subtype = 0
+const SubStateChangeAS4 Subtype = 5
+const TypeBGP4MP Type = 16
+const TypeBGP4MPET Type = 17
+const TypeISIS Type = 32
+const TypeISISET Type = 33
+const TypeOSPFv2 Type = 11
+const TypeOSPFv3 Type = 48
+const TypeOSPFv3ET Type = 49
+const TypeTableDump Type = 12
+const TypeTableDumpV2 Type = 13
+var ErrMalformed = errors.New(…)
+var ErrTooLarge = errors.New(…)
+var ErrTruncated = errors.New(…)
+func Decompress(r io.Reader) (io.Reader, error)
+func Records(r io.Reader) iter.Seq2[Record, error]
+func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error]
+func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error]
+type BGP4MPMessage struct
+	PeerAS bgp.ASN
+	LocalAS bgp.ASN
+	IfIndex uint16
+	PeerAddr netip.Addr
+	LocalAddr netip.Addr
+	AS4 bool
+	Local bool
+	AddPath bool
+	Message []byte
+func (BGP4MPMessage) Context() bgp.Context
+func (BGP4MPMessage) MessageType() (bgp.MessageType, error)
+type BGP4MPStateChange struct
+	PeerAS bgp.ASN
+	LocalAS bgp.ASN
+	IfIndex uint16
+	PeerAddr netip.Addr
+	LocalAddr netip.Addr
+	AS4 bool
+	Old State
+	New State
+type Header struct
+	Time time.Time
+	Type Type
+	Subtype Subtype
+	Length uint32
+type Kind uint8
+func (Kind) String() string
+type Options struct
+	MaxRecordLen uint32
+type Other struct
+type Peer struct
+	BGPID netip.Addr
+	Addr netip.Addr
+	AS bgp.ASN
+type PeerIndexTable struct
+	CollectorID netip.Addr
+	ViewName string
+	Peers []Peer
+type RIB struct
+	Sequence uint32
+	Family bgp.Family
+	Prefix netip.Prefix
+	PathID uint32
+	RawNLRI []byte
+	AddPath bool
+func (RIB) Entries() iter.Seq2[RIBEntry, error]
+func (RIB) EntryCount() uint16
+type RIBEntry struct
+	PeerIndex uint16
+	Originated time.Time
+	PathID uint32
+	Attrs bgp.Attrs
+type Record interface
+	Header() Header
+	Raw() []byte
+	isRecord()
+type RecordError struct
+	Offset int64
+	Header Header
+	Raw []byte
+	Err error
+func (*RecordError) Error() string
+func (*RecordError) Unwrap() error
+type Route struct
+	Time time.Time
+	Kind Kind
+	Peer Peer
+	Family bgp.Family
+	Prefix netip.Prefix
+	PathID uint32
+	HasPathID bool
+	Path *bgp.Path
+	Diagnostics []bgp.Diagnostic
+type State uint16
+type Subtype uint16
+type TableDump struct
+	View uint16
+	Sequence uint16
+	Prefix netip.Prefix
+	Status uint8
+	Originated time.Time
+	Peer Peer
+	Attrs bgp.Attrs
+type Type uint16

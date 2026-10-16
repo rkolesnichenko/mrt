@@ -100,8 +100,11 @@ From the RFC texts and IANA's MRT registry (last updated 2020-01-08):
   add-path). BGP4MP 0–11 assigned (2 ENTRY and 3 SNAPSHOT deprecated).
   Types: 11 OSPFv2, 12 TABLE_DUMP, 13 TABLE_DUMP_V2, 16 BGP4MP, 17 BGP4MP_ET,
   32/33 ISIS(_ET), 48/49 OSPFv3(_ET); 0–10 deprecated.
-- **AS4_PATH merge** (RFC 6793 §4.2.3): if AGGREGATOR's AS is not AS_TRANS,
-  ignore AS4_AGGREGATOR and AS4_PATH. Otherwise count ASes as RFC 4271
+- **AS4_PATH merge** (RFC 6793 §4.2.3): when both AGGREGATOR and
+  AS4_AGGREGATOR are present and AGGREGATOR's AS is not AS_TRANS, ignore
+  AS4_AGGREGATOR and AS4_PATH (bgpdump's `process_asn32_trans` checks both
+  too). Confederation segments in AS4_PATH are discarded and the rest kept
+  (RFC 6793 §6). Otherwise count ASes as RFC 4271
   §9.1.2.2 does (an AS_SET counts as 1; confederation segments count 0). If
   AS_PATH has fewer than AS4_PATH, ignore AS4_PATH. Otherwise take leading
   ASes and segments from AS_PATH and prepend them to AS4_PATH until the count
@@ -308,8 +311,11 @@ type Diagnostic struct {
   noted with an Info diagnostic (bgpdump also merges only for 2-byte input).
 - **MP_REACH_NLRI with `ctx.RIB`:** first byte non-zero → abbreviated (next
   hop only; the family and NLRI come from the record). First byte zero → full
-  RFC 4760 form, with an Info diagnostic `bgp/mpreach-full-in-rib`. Same test
-  as bgpdump. Without `ctx.RIB`, always the full form.
+  RFC 4760 form, with no diagnostic (`Abbreviated` false records the form, and
+  route-views6 writes it on every entry, so it is not a fault); its family and
+  next hops are decoded but its NLRI is kept in `RawNLRI`, not parsed, since
+  the record supplies the prefix (Ruling R20). Same test as bgpdump. Without
+  `ctx.RIB`, always the full form, NLRI parsed.
 - **A malformed attribute never stops decoding.** Its raw bytes go to
   `Unknown`, a diagnostic names it, and decoding continues with the next
   attribute when the length framing allows. When the framing itself is
@@ -403,7 +409,7 @@ type BGP4MPMessage struct {
 }
 
 func (m BGP4MPMessage) Context() bgp.Context
-func (m BGP4MPMessage) Type() (bgp.MessageType, error)
+func (m BGP4MPMessage) MessageType() (bgp.MessageType, error)
 
 type BGP4MPStateChange struct {
 	PeerAS, LocalAS     bgp.ASN
@@ -455,7 +461,7 @@ func Decompress(r io.Reader) (io.Reader, error) // gzip by 1f 8b, bzip2 by "BZh"
   - A broken RIB entry is found only by `RIB.Entries`. The entries before it
     survive.
   - A broken BGP message inside a `BGP4MPMessage` (bad marker, bad length)
-    is found only by `Type()` or `bgp.ParseUpdate`, as diagnostics. A record over `MaxRecordLen` is discarded without
+    is found only by `MessageType()` or `bgp.ParseUpdate`, as diagnostics. A record over `MaxRecordLen` is discarded without
   being buffered, yielding `ErrTooLarge`, and iteration continues.
 - **A stream that ends mid-record**, or a read error, yields one error
   wrapping `ErrTruncated` (or the reader's error) and iteration ends.

@@ -1,0 +1,4 @@
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.0/32","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10"}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.1/32","as_path":"64500 64501","origin":"EGP","next_hop":"192.0.2.10"}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.2/32","origin":"IGP","next_hop":"192.0.2.10"}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.3/32","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10","med":50}
