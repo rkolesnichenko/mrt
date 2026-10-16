@@ -1,1 +1,61 @@
 package mrt
+const DefaultMaxRecordLen = 16 << 20
+const SubAFIIPv4 Subtype = 1
+const SubAFIIPv6 Subtype = 2
+const SubGeoPeerTable Subtype = 7
+const SubMessage Subtype = 1
+const SubMessageAS4 Subtype = 4
+const SubMessageAS4AddPath Subtype = 9
+const SubMessageAS4Local Subtype = 7
+const SubMessageAS4LocalAddPath Subtype = 11
+const SubMessageAddPath Subtype = 8
+const SubMessageLocal Subtype = 6
+const SubMessageLocalAddPath Subtype = 10
+const SubPeerIndexTable Subtype = 1
+const SubRIBGeneric Subtype = 6
+const SubRIBGenericAddPath Subtype = 12
+const SubRIBIPv4Multicast Subtype = 3
+const SubRIBIPv4MulticastAddPath Subtype = 9
+const SubRIBIPv4Unicast Subtype = 2
+const SubRIBIPv4UnicastAddPath Subtype = 8
+const SubRIBIPv6Multicast Subtype = 5
+const SubRIBIPv6MulticastAddPath Subtype = 11
+const SubRIBIPv6Unicast Subtype = 4
+const SubRIBIPv6UnicastAddPath Subtype = 10
+const SubStateChange Subtype = 0
+const SubStateChangeAS4 Subtype = 5
+const TypeBGP4MP Type = 16
+const TypeBGP4MPET Type = 17
+const TypeISIS Type = 32
+const TypeISISET Type = 33
+const TypeOSPFv2 Type = 11
+const TypeOSPFv3 Type = 48
+const TypeOSPFv3ET Type = 49
+const TypeTableDump Type = 12
+const TypeTableDumpV2 Type = 13
+var ErrMalformed = errors.New(…)
+var ErrTooLarge = errors.New(…)
+var ErrTruncated = errors.New(…)
+func Records(r io.Reader) iter.Seq2[Record, error]
+func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error]
+type Header struct
+	Time time.Time
+	Type Type
+	Subtype Subtype
+	Length uint32
+type Options struct
+	MaxRecordLen uint32
+type Other struct
+type Record interface
+	Header() Header
+	Raw() []byte
+	isRecord()
+type RecordError struct
+	Offset int64
+	Header Header
+	Raw []byte
+	Err error
+func (*RecordError) Error() string
+func (*RecordError) Unwrap() error
+type Subtype uint16
+type Type uint16
