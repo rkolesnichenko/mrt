@@ -1,5 +1,11 @@
 package mrt
 const DefaultMaxRecordLen = 16 << 20
+const StateActive State = 3
+const StateConnect State = 2
+const StateEstablished State = 6
+const StateIdle State = 1
+const StateOpenConfirm State = 5
+const StateOpenSent State = 4
 const SubAFIIPv4 Subtype = 1
 const SubAFIIPv6 Subtype = 2
 const SubGeoPeerTable Subtype = 7
@@ -38,6 +44,27 @@ var ErrTooLarge = errors.New(…)
 var ErrTruncated = errors.New(…)
 func Records(r io.Reader) iter.Seq2[Record, error]
 func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error]
+type BGP4MPMessage struct
+	PeerAS bgp.ASN
+	LocalAS bgp.ASN
+	IfIndex uint16
+	PeerAddr netip.Addr
+	LocalAddr netip.Addr
+	AS4 bool
+	Local bool
+	AddPath bool
+	Message []byte
+func (BGP4MPMessage) Context() bgp.Context
+func (BGP4MPMessage) Type() (bgp.MessageType, error)
+type BGP4MPStateChange struct
+	PeerAS bgp.ASN
+	LocalAS bgp.ASN
+	IfIndex uint16
+	PeerAddr netip.Addr
+	LocalAddr netip.Addr
+	AS4 bool
+	Old State
+	New State
 type Header struct
 	Time time.Time
 	Type Type
@@ -79,6 +106,7 @@ type RecordError struct
 	Err error
 func (*RecordError) Error() string
 func (*RecordError) Unwrap() error
+type State uint16
 type Subtype uint16
 type TableDump struct
 	View uint16

@@ -30,6 +30,8 @@ func decodeBody(h Header, raw []byte) (Record, error) {
 		if h.Subtype == SubAFIIPv4 || h.Subtype == SubAFIIPv6 {
 			return decodeTableDump(h, raw)
 		}
+	case TypeBGP4MP, TypeBGP4MPET:
+		return decodeBGP4MP(h, raw)
 	case TypeTableDumpV2:
 		switch s := h.Subtype; {
 		case s == SubPeerIndexTable:

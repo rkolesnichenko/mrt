@@ -38,7 +38,7 @@ func collect(t *testing.T, in []byte, o Options) (recs []Record, errs []error) {
 }
 
 func TestRecordsET(t *testing.T) {
-	a := frame(1700000000, TypeBGP4MPET, SubMessageAS4, 123456, []byte{1, 2, 3})
+	a := frame(1700000000, TypeISISET, SubMessageAS4, 123456, []byte{1, 2, 3})
 	b := frame(1700000001, TypeTableDumpV2, SubGeoPeerTable, 0, []byte{9})
 	recs, errs := collect(t, append(append([]byte{}, a...), b...), Options{})
 	if len(errs) != 0 || len(recs) != 2 {
@@ -48,7 +48,7 @@ func TestRecordsET(t *testing.T) {
 	if want := time.Unix(1700000000, 123456000); !h.Time.Equal(want) || h.Time.Location() != time.UTC {
 		t.Errorf("Time = %v, want %v UTC", h.Time, want)
 	}
-	if h.Type != TypeBGP4MPET || h.Subtype != SubMessageAS4 || h.Length != 7 {
+	if h.Type != TypeISISET || h.Subtype != SubMessageAS4 || h.Length != 7 {
 		t.Errorf("header = %+v", h)
 	}
 	if !bytes.Equal(recs[0].Raw(), a) || len(recs[0].Raw()) != 16+3 {
@@ -65,7 +65,7 @@ func TestRecordsET(t *testing.T) {
 func TestRecordsLossless(t *testing.T) {
 	var in []byte
 	in = append(in, frame(1, TypeOSPFv2, 0, 0, []byte("abc"))...)
-	in = append(in, frame(2, TypeBGP4MPET, 1, 7, nil)...)
+	in = append(in, frame(2, TypeISISET, 1, 7, nil)...)
 	in = append(in, frame(3, Type(999), 5, 0, bytes.Repeat([]byte{7}, 100))...)
 	recs, errs := collect(t, in, Options{})
 	if len(errs) != 0 {
@@ -115,8 +115,8 @@ func TestRecordsTooLargeSkippedWithoutBuffering(t *testing.T) {
 }
 
 func TestRecordsTooLargeET(t *testing.T) {
-	big := frame(1, TypeBGP4MPET, 1, 5, make([]byte, 200))
-	ok := frame(2, TypeBGP4MP, 1, 0, []byte{1})
+	big := frame(1, TypeISISET, 1, 5, make([]byte, 200))
+	ok := frame(2, TypeOSPFv2, 1, 0, []byte{1})
 	recs, errs := collect(t, append(append([]byte{}, big...), ok...), Options{MaxRecordLen: 64})
 	if len(errs) != 1 || !errors.Is(errs[0], ErrTooLarge) || len(recs) != 1 {
 		t.Fatalf("errs=%v recs=%d", errs, len(recs))
@@ -124,7 +124,7 @@ func TestRecordsTooLargeET(t *testing.T) {
 }
 
 func TestRecordsTruncated(t *testing.T) {
-	in := append(frame(1, TypeBGP4MP, 1, 0, []byte{1}), 0, 0, 0, 1, 0, 16, 0, 1, 0, 0, 0, 100)
+	in := append(frame(1, TypeOSPFv2, 1, 0, []byte{1}), 0, 0, 0, 1, 0, 16, 0, 1, 0, 0, 0, 100)
 	in = append(in, make([]byte, 40)...)
 	recs, errs := collect(t, in, Options{})
 	if len(recs) != 1 || len(errs) != 1 || !errors.Is(errs[0], ErrTruncated) {
@@ -145,7 +145,7 @@ func TestRecordsEmptyAndShort(t *testing.T) {
 		t.Errorf("11 bytes: %d recs, %v", len(recs), errs)
 	}
 	// ET header cut inside the microsecond field.
-	et := frame(1, TypeBGP4MPET, 1, 0, nil)[:14]
+	et := frame(1, TypeISISET, 1, 0, nil)[:14]
 	recs, errs = collect(t, et, Options{})
 	if len(recs) != 0 || len(errs) != 1 || !errors.Is(errs[0], ErrTruncated) {
 		t.Errorf("14-byte ET: %d recs, %v", len(recs), errs)
@@ -154,7 +154,7 @@ func TestRecordsEmptyAndShort(t *testing.T) {
 
 func TestRecordsETShortLength(t *testing.T) {
 	bad := []byte{0, 0, 0, 1, 0, 17, 0, 1, 0, 0, 0, 2, 0xAA, 0xBB} // Length 2
-	ok := frame(2, TypeBGP4MP, 1, 0, []byte{1})
+	ok := frame(2, TypeOSPFv2, 1, 0, []byte{1})
 	in := append(append([]byte{}, bad...), ok...)
 	recs, errs := collect(t, in, Options{})
 	if len(errs) != 1 || !errors.Is(errs[0], ErrMalformed) || len(recs) != 1 {
@@ -176,7 +176,7 @@ func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 func TestRecordsReadError(t *testing.T) {
 	boom := errors.New("boom")
 	n := 0
-	for _, err := range Records(io.MultiReader(bytes.NewReader(frame(1, TypeBGP4MP, 1, 0, nil)), errReader{boom})) {
+	for _, err := range Records(io.MultiReader(bytes.NewReader(frame(1, TypeOSPFv2, 1, 0, nil)), errReader{boom})) {
 		n++
 		if n == 2 && (!errors.Is(err, boom) || errors.Is(err, ErrTruncated)) {
 			t.Errorf("err = %v", err)
@@ -188,9 +188,9 @@ func TestRecordsReadError(t *testing.T) {
 }
 
 func TestRecordsStopEarly(t *testing.T) {
-	ok := frame(9, TypeBGP4MP, 1, 0, []byte{1})
+	ok := frame(9, TypeOSPFv2, 1, 0, []byte{1})
 	cases := map[string][]byte{
-		"too large": append(frame(1, TypeBGP4MP, 1, 0, make([]byte, 100)), ok...),
+		"too large": append(frame(1, TypeOSPFv2, 1, 0, make([]byte, 100)), ok...),
 		"ET short":  append([]byte{0, 0, 0, 1, 0, 17, 0, 1, 0, 0, 0, 2, 0xAA, 0xBB}, ok...),
 		"record":    append(append([]byte{}, ok...), ok...),
 	}
@@ -223,7 +223,7 @@ func TestRecordsLyingLengthBounded(t *testing.T) {
 
 func TestRecordsLargeBodyExact(t *testing.T) {
 	body := bytes.Repeat([]byte{5}, 300<<10)
-	in := frame(1, TypeBGP4MP, 1, 0, body)
+	in := frame(1, TypeOSPFv2, 1, 0, body)
 	recs, errs := collect(t, in, Options{})
 	if len(errs) != 0 || len(recs) != 1 || !bytes.Equal(recs[0].Raw(), in) {
 		t.Fatalf("recs=%d errs=%v", len(recs), errs)
@@ -231,7 +231,7 @@ func TestRecordsLargeBodyExact(t *testing.T) {
 }
 
 func TestRecordsOffsetAfterET(t *testing.T) {
-	et := frame(1, TypeBGP4MPET, 1, 5, []byte{1, 2, 3}) // 16 + 3 = 19 bytes
+	et := frame(1, TypeISISET, 1, 5, []byte{1, 2, 3}) // 16 + 3 = 19 bytes
 	bad := []byte{0, 0, 0, 1, 0, 17, 0, 1, 0, 0, 0, 1, 0xAA}
 	_, errs := collect(t, append(append([]byte{}, et...), bad...), Options{})
 	var re *RecordError
