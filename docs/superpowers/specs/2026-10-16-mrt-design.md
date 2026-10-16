@@ -100,8 +100,11 @@ From the RFC texts and IANA's MRT registry (last updated 2020-01-08):
   add-path). BGP4MP 0–11 assigned (2 ENTRY and 3 SNAPSHOT deprecated).
   Types: 11 OSPFv2, 12 TABLE_DUMP, 13 TABLE_DUMP_V2, 16 BGP4MP, 17 BGP4MP_ET,
   32/33 ISIS(_ET), 48/49 OSPFv3(_ET); 0–10 deprecated.
-- **AS4_PATH merge** (RFC 6793 §4.2.3): if AGGREGATOR's AS is not AS_TRANS,
-  ignore AS4_AGGREGATOR and AS4_PATH. Otherwise count ASes as RFC 4271
+- **AS4_PATH merge** (RFC 6793 §4.2.3): when both AGGREGATOR and
+  AS4_AGGREGATOR are present and AGGREGATOR's AS is not AS_TRANS, ignore
+  AS4_AGGREGATOR and AS4_PATH (bgpdump's `process_asn32_trans` checks both
+  too). Confederation segments in AS4_PATH are discarded and the rest kept
+  (RFC 6793 §6). Otherwise count ASes as RFC 4271
   §9.1.2.2 does (an AS_SET counts as 1; confederation segments count 0). If
   AS_PATH has fewer than AS4_PATH, ignore AS4_PATH. Otherwise take leading
   ASes and segments from AS_PATH and prepend them to AS4_PATH until the count
