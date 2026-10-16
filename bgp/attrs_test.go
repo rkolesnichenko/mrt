@@ -172,10 +172,10 @@ func TestDecodeMalformedFirstCopyStillWins(t *testing.T) {
 	}
 }
 
-func TestDecodeDuplicateUnknownAndDeferredCodes(t *testing.T) {
-	// A 1-byte value is malformed for AS_PATH, AS4_PATH, AGGREGATOR and
-	// AS4_AGGREGATOR, so their first copy adds its own diagnostic.
-	malformed := map[byte]string{2: "bgp/aspath-width", 17: "bgp/attr-value", 7: "bgp/attr-length", 18: "bgp/attr-length"}
+func TestDecodeDuplicateUnknown(t *testing.T) {
+	// A 1-byte value is malformed for AS_PATH, AS4_PATH, AGGREGATOR,
+	// AS4_AGGREGATOR, MP_REACH_NLRI and MP_UNREACH_NLRI, so their first copy adds its own diagnostic.
+	malformed := map[byte]string{2: "bgp/aspath-width", 17: "bgp/attr-value", 7: "bgp/attr-length", 18: "bgp/attr-length", 14: "bgp/attr-length", 15: "bgp/attr-length"}
 	for _, code := range []byte{99, 2, 17, 7, 18, 14, 15} {
 		raw := concat(attr(0xC0, code, 1), attr(0xC0, code, 2))
 		p, diags := NewAttrs(raw, Context{}).Decode()

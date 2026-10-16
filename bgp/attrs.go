@@ -126,13 +126,32 @@ func (a Attrs) Decode() (Path, []Diagnostic) {
 			continue
 		}
 		seen[at.Code] = true // the first copy wins even when it is malformed (RFC 7606 §3.g)
-		d, ok := a.decodeAttr(&p, &as4, at, off)
+		var ds []Diagnostic
+		var ok bool
+		switch at.Code {
+		case AttrMPReach:
+			var r MPReach
+			r, ok, ds = decodeMPReach(at.Value, a.ctx, off)
+			if ok {
+				p.MPReach = &r
+			}
+		case AttrMPUnreach:
+			var r MPUnreach
+			r, ok, ds = decodeMPUnreach(at.Value, a.ctx, off)
+			if ok {
+				p.MPUnreach = &r
+			}
+		default:
+			var d *Diagnostic
+			d, ok = a.decodeAttr(&p, &as4, at, off)
+			if d != nil {
+				ds = []Diagnostic{*d}
+			}
+		}
 		if !ok {
 			p.Unknown = append(p.Unknown, at)
 		}
-		if d != nil {
-			diags = append(diags, *d)
-		}
+		diags = append(diags, ds...)
 		off = next
 	}
 	diags = append(diags, applyAS4(&p, &as4, a.ctx)...)
@@ -269,7 +288,7 @@ func (a Attrs) decodeAttr(p *Path, st *as4State, at Attribute, off int) (d *Diag
 		}
 		p.OnlyToCustomer, p.HasOnlyToCustomer = ASN(be32(v)), true
 	default:
-		// Unknown, and (until decoded) MP_REACH_NLRI and MP_UNREACH_NLRI, stay raw.
+		// Unknown attributes stay raw (MP_REACH_NLRI and MP_UNREACH_NLRI are decoded in Decode).
 		return nil, false
 	}
 	return nil, true

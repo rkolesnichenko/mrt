@@ -36,7 +36,12 @@ const SAFIUnicast SAFI = 1
 const SeverityError Severity = 2
 const SeverityInfo Severity = 0
 const SeverityWarning Severity = 1
+var ErrMarker = errors.New(…)
+var ErrShortMessage = errors.New(…)
 func NewAttrs(raw []byte, ctx Context) Attrs
+func ParseMessageHeader(msg []byte) (MessageHeader, error)
+func ParseNLRI(b []byte, fam Family, addPath bool) ([]NLRI, []Diagnostic)
+func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic)
 type AFI uint16
 type ASN uint32
 type ASPath struct
@@ -88,6 +93,9 @@ type MPUnreach struct
 	Family Family
 	Withdrawn []NLRI
 	RawNLRI []byte
+type MessageHeader struct
+	Type MessageType
+	Length int
 type MessageType uint8
 type NLRI struct
 	Prefix netip.Prefix
@@ -124,3 +132,7 @@ type Segment struct
 	ASNs []ASN
 type SegmentType uint8
 type Severity uint8
+type Update struct
+	Withdrawn []NLRI
+	Attrs Attrs
+	Announced []NLRI
