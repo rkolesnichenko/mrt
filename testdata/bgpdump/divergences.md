@@ -379,8 +379,8 @@ bgpkit-parser 0.22.0 gives NEXT_HOP as the next hop of every route in it
 NEXT_HOP is absent). RFC 4760 section 3 carries the next hop of the routes in
 MP_REACH_NLRI in that attribute; NEXT_HOP belongs to the NLRI field. Peer AS
 3130 at route-views6 sends both on IPv6 announcements (in the full file,
-6386 of 88544 records), so its IPv6 routes get the IPv4 address
-206.81.81.212 as next hop. The fixture window was chosen to hold only three.
+6386 of 88544 records carry both, all from AS 3130), so its IPv6 routes get
+the IPv4 address 206.81.81.212 as next hop. The fixture window was chosen to hold only three.
 
 Decides: bgpdump, whose lines for these routes carry `2001:418:1::3` as mrt
 does (the bgpdump golden matches mrtdump).

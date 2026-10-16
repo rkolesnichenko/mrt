@@ -167,7 +167,8 @@ type pair struct {
 //	bgpdump: LINE         (bgpkit: in the bgpkit-parser section)
 //	```
 //
-// under an entry heading "### ID. title"; (none) stands for no line.
+// under an entry heading "### ID. title"; (none) stands for no line. Every
+// entry of those two sections must hold at least one pair.
 func divergences(t *testing.T) (bgpdump, bgpkit []pair) {
 	t.Helper()
 	b, err := os.ReadFile(divergencesFile)
@@ -176,6 +177,8 @@ func divergences(t *testing.T) (bgpdump, bgpkit []pair) {
 	}
 	var section, entry string
 	var cur *pair
+	pairsOf := map[string]int{} // entries of the oracle sections, by "section/entry"
+	oracleSection := func() bool { return section == "bgpdump" || section == "bgpkit-parser" }
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(nil, 1<<20)
 	for n := 1; sc.Scan(); n++ {
@@ -191,6 +194,7 @@ func divergences(t *testing.T) (bgpdump, bgpkit []pair) {
 			} else {
 				bgpkit = append(bgpkit, *cur)
 			}
+			pairsOf[section+"/"+entry]++
 			cur = nil
 		case cur != nil:
 			ours, theirs := "mrtdump: ", "bgpdump: "
@@ -217,8 +221,11 @@ func divergences(t *testing.T) (bgpdump, bgpkit []pair) {
 			section, entry = strings.TrimPrefix(l, "## "), ""
 		case strings.HasPrefix(l, "### "):
 			entry = strings.TrimPrefix(l, "### ")
+			if oracleSection() {
+				pairsOf[section+"/"+entry] += 0
+			}
 		case l == "```pair":
-			if section != "bgpdump" && section != "bgpkit-parser" {
+			if !oracleSection() {
 				bad("a pair outside the bgpdump and bgpkit-parser sections")
 			}
 			if entry == "" {
@@ -229,6 +236,13 @@ func divergences(t *testing.T) (bgpdump, bgpkit []pair) {
 	}
 	if cur != nil {
 		t.Fatalf("%s: unterminated pair", divergencesFile)
+	}
+	// An entry of an oracle section names at least one fixture line; a
+	// difference no fixture shows belongs in another section.
+	for e, n := range pairsOf {
+		if n == 0 {
+			t.Errorf("%s: entry %q has no pair block", divergencesFile, e)
+		}
 	}
 	return bgpdump, bgpkit
 }
