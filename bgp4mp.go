@@ -53,7 +53,9 @@ func (m BGP4MPMessage) Context() bgp.Context {
 }
 
 // Type returns the BGP message type from Message's header. The error wraps
-// bgp.ErrMarker or bgp.ErrShortMessage when the header is broken.
+// bgp.ErrMarker or bgp.ErrShortMessage when the header is broken. A message
+// cut short of its header's length still has a type (bgp.ParseUpdate reads
+// what is there and reports the cut).
 func (m BGP4MPMessage) Type() (bgp.MessageType, error) {
 	h, err := bgp.ParseMessageHeader(m.Message)
 	if err != nil {

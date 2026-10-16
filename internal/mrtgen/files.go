@@ -247,10 +247,12 @@ func stateChanges() []byte {
 	)
 }
 
-// shortMessage holds 2-byte BGP4MP_MESSAGE UPDATEs: a valid one, one whose
-// BGP header claims 3 bytes more than the record holds (the NLRI present ends
-// after a whole prefix), and one cut 1 byte short (inside its last prefix),
-// as Zebra wrote messages longer than its 4096-byte buffer in 2003.
+// shortMessage holds 2-byte BGP4MP_MESSAGE UPDATEs: a valid one, then four
+// whose BGP header claims more bytes than the record holds, as Zebra wrote
+// messages longer than its 4096-byte buffer in 2003: the NLRI present ends
+// after a whole prefix (3 bytes claimed beyond it); cut inside the last
+// prefix; cut inside the third withdrawn prefix; cut inside the last path
+// attribute, after an MP_REACH_NLRI that announces an IPv6 prefix.
 func shortMessage() []byte {
 	attrs := Attrs(Origin(bgp.OriginIGP), ASPath(false, Seq(64500, 64501)), NextHop(peerA.Addr))
 	upd := func(prefixes ...string) []byte {
@@ -265,10 +267,17 @@ func shortMessage() []byte {
 	long[17] += 3 // the header's length, low byte
 	cut := upd("198.51.106.0/24", "198.51.107.0/24", "198.51.108.0/24")
 	cut = cut[:len(cut)-1]
+	withdraw := Update([]bgp.NLRI{nlri("198.51.112.0/24"), nlri("198.51.113.0/24"), nlri("198.51.114.0/24")}, nil, nil, false)
+	withdraw = withdraw[:19+2+4+4+2] // two whole prefixes and 2 bytes of the third
+	mpAttrs := Attrs(Origin(bgp.OriginIGP), ASPath(false, Seq(64500, 64501)),
+		MPReach(v6u, []netip.Addr{netip.MustParseAddr("2001:db8::10")}, []bgp.NLRI{nlri("2001:db8:600::/48")}, false),
+		MED(7))
+	inAttrs := Update(nil, nil, mpAttrs, false)
+	inAttrs = inAttrs[:len(inAttrs)-3] // inside MED's value
 	msg := func(n int, m []byte) []byte {
 		return Header(mrt.TypeBGP4MP, mrt.SubMessage, at(n), BGP4MP(mrt.SubMessage, peerA.AS, 64496, peerA.Addr, local4, m))
 	}
-	return catRecords(msg(0, valid), msg(1, long), msg(2, cut))
+	return catRecords(msg(0, valid), msg(1, long), msg(2, cut), msg(3, withdraw), msg(4, inAttrs))
 }
 
 // as4Confed holds 2-byte BGP4MP_MESSAGE UPDATEs where RFC 6793 and bgpdump

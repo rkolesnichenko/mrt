@@ -20,8 +20,11 @@ type MessageHeader struct {
 }
 
 // ParseMessageHeader reads the 19-byte header of msg. It errors with
-// ErrShortMessage when msg is shorter than a header or than its own length
-// field, and with ErrMarker when the marker is not 16 bytes of 0xFF.
+// ErrShortMessage when msg is shorter than a header or the header's length
+// field is less than 19, and with ErrMarker when the marker is not 16 bytes
+// of 0xFF. A length field beyond the bytes present is not an error: the
+// message was cut short (as old collectors wrote messages longer than their
+// buffer), and ParseUpdate reads what is there.
 func ParseMessageHeader(msg []byte) (MessageHeader, error) {
 	if len(msg) < headerLen {
 		return MessageHeader{}, fmt.Errorf("%w: %d bytes", ErrShortMessage, len(msg))
@@ -32,8 +35,8 @@ func ParseMessageHeader(msg []byte) (MessageHeader, error) {
 		}
 	}
 	n := int(msg[16])<<8 | int(msg[17])
-	if n < headerLen || n > len(msg) {
-		return MessageHeader{}, fmt.Errorf("%w: header length %d, message %d bytes", ErrShortMessage, n, len(msg))
+	if n < headerLen {
+		return MessageHeader{}, fmt.Errorf("%w: header length %d", ErrShortMessage, n)
 	}
 	return MessageHeader{Type: MessageType(msg[18]), Length: n}, nil
 }
@@ -48,7 +51,10 @@ type Update struct {
 // ParseUpdate reads the UPDATE message msg, marker and header included.
 // A bad header or a message of another type gives an empty Update and one
 // diagnostic. Fields that run past the message give an Error diagnostic
-// ("bgp/update-length") and what parsed before them is kept.
+// ("bgp/update-length") and what parsed before them is kept. A message cut
+// short of its header's length is read as far as its bytes go, whole
+// withdrawn prefixes, whole attributes and whole NLRI only, with one Error
+// diagnostic ("bgp/message-truncated") at the cut.
 func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic) {
 	var u Update
 	hdr, err := ParseMessageHeader(msg)
@@ -60,12 +66,17 @@ func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic) {
 			fmt.Sprintf("message type %d is not UPDATE", hdr.Type)}}
 	}
 	var diags []Diagnostic
+	cut := hdr.Length > len(msg)
 	if hdr.Length < len(msg) {
 		diags = append(diags, Diagnostic{SeverityWarning, "bgp/message-header", 16, 0,
 			fmt.Sprintf("%d bytes follow the message's own length of %d", len(msg)-hdr.Length, hdr.Length)})
 		msg = msg[:hdr.Length]
 	}
 	short := func(off int, what string) []Diagnostic {
+		if cut {
+			return append(diags, Diagnostic{SeverityError, "bgp/message-truncated", len(msg), 0,
+				fmt.Sprintf("message cut at %d of its %d bytes; read as far as whole fields go", len(msg), hdr.Length)})
+		}
 		return append(diags, Diagnostic{SeverityError, "bgp/update-length", off, 0, what})
 	}
 	nlri := func(b []byte, base int) []NLRI {
@@ -83,6 +94,10 @@ func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic) {
 	wl := int(msg[off])<<8 | int(msg[off+1])
 	off += 2
 	if len(msg)-off < wl {
+		if cut {
+			b := msg[off:]
+			u.Withdrawn = nlri(b[:wholeNLRI(b, 32, ctx.AddPath)], off)
+		}
 		return u, short(off, "withdrawn routes run past the message")
 	}
 	u.Withdrawn = nlri(msg[off:off+wl], off)
@@ -93,10 +108,66 @@ func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic) {
 	al := int(msg[off])<<8 | int(msg[off+1])
 	off += 2
 	if len(msg)-off < al {
+		if cut {
+			end := off + wholeAttrs(msg[off:])
+			u.Attrs = NewAttrs(msg[off:end:end], ctx)
+		}
 		return u, short(off, "path attributes run past the message")
 	}
 	u.Attrs = NewAttrs(msg[off:off+al:off+al], ctx)
 	off += al
-	u.Announced = nlri(msg[off:], off)
-	return u, diags
+	if !cut {
+		u.Announced = nlri(msg[off:], off)
+		return u, diags
+	}
+	b := msg[off:]
+	u.Announced = nlri(b[:wholeNLRI(b, 32, ctx.AddPath)], off)
+	return u, short(off, "")
+}
+
+// wholeNLRI returns how many leading bytes of b hold whole prefixes: it
+// stops before a prefix the bytes end inside. A prefix length beyond
+// maxBits ends the walk at len(b), so that parseNLRI reports it.
+func wholeNLRI(b []byte, maxBits int, addPath bool) int {
+	off := 0
+	for off < len(b) {
+		n := 1
+		if addPath {
+			n = 5
+		}
+		if len(b)-off < n {
+			return off
+		}
+		plen := int(b[off+n-1])
+		if plen > maxBits {
+			return len(b)
+		}
+		n += (plen + 7) / 8
+		if len(b)-off < n {
+			return off
+		}
+		off += n
+	}
+	return off
+}
+
+// wholeAttrs returns how many leading bytes of b hold whole path attributes.
+func wholeAttrs(b []byte) int {
+	off := 0
+	for {
+		if len(b)-off < 3 {
+			return off
+		}
+		hl, n := 3, int(b[off+2])
+		if b[off]&0x10 != 0 { // extended length
+			if len(b)-off < 4 {
+				return off
+			}
+			hl, n = 4, int(b[off+2])<<8|int(b[off+3])
+		}
+		if len(b)-off-hl < n {
+			return off
+		}
+		off += hl + n
+	}
 }

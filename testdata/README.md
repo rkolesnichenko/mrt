@@ -94,9 +94,12 @@ What no real fixture has, and why:
   rrc00's 2026-10-15 12:00 file: 31 STATE_CHANGE, 16 STATE_CHANGE_AS4) but cannot be
   redistributed (below). `synthetic/state-changes.mrt` covers them.
 - A BGP message shorter than its own header: route-views2's
-  `updates.20030602.1652.bz2` has two (records 8076 and 8077), but bgpdump
-  prints 2040 lines from them, too many to pin in divergences.md (entry B9);
-  `synthetic/short-message.mrt` covers the case.
+  `updates.20030602.1652.bz2` has two (records 8076 and 8077, header 4090 and
+  4093 bytes, 4080 in the record). bgpdump and mrt read 2040 routes from them
+  (Ruling R17a), bgpkit-parser none: pinning that slice would take about 2040
+  pairs in divergences.md (entry K6), so `synthetic/short-message.mrt` covers
+  the case instead (cuts after a whole prefix, inside a prefix, inside the
+  withdrawn routes and inside the path attributes).
 
 ## Open facts settled here (spec §10)
 

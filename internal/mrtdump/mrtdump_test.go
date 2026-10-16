@@ -117,6 +117,42 @@ func TestMrtdumpReadErrors(t *testing.T) {
 	}
 }
 
+// TestMrtdumpTruncatedMessageExit1: messages cut short of their header's
+// length print what their whole fields hold, exactly as bgpdump prints them
+// (lines from bgpdump, TZ=UTC -m -l -u), and each is reported, exit 1
+// (Ruling R17a; bgpdump exits 0).
+func TestMrtdumpTruncatedMessageExit1(t *testing.T) {
+	code, out, errs := run(t, nil, "-m", "-l", "-u", synthetic+"short-message.mrt")
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	a := func(ts, prefix string) string {
+		return "BGP4MP|" + ts + "|A|192.0.2.10|64500|" + prefix + "|64500 64501|IGP|192.0.2.10|0|0|||NAG|||"
+	}
+	want := lines(
+		a("1700000000", "198.51.100.0/24"), a("1700000000", "198.51.101.0/24"), a("1700000000", "198.51.102.0/24"),
+		a("1700000001", "198.51.103.0/24"), a("1700000001", "198.51.104.0/24"), a("1700000001", "198.51.105.0/24"),
+		a("1700000002", "198.51.106.0/24"), a("1700000002", "198.51.107.0/24"),
+		"BGP4MP|1700000003|W|192.0.2.10|64500|198.51.112.0/24",
+		"BGP4MP|1700000003|W|192.0.2.10|64500|198.51.113.0/24",
+		"BGP4MP|1700000004|A|192.0.2.10|64500|2001:db8:600::/48|64500 64501|IGP|2001:db8::10|0|0|||NAG|||",
+	)
+	checkOut(t, "stdout", out, want)
+	for _, s := range []string{
+		"record 2 at offset 83: bgp/message-truncated: message cut at 55 of its 58 bytes",
+		"record 3 at offset 166: bgp/message-truncated: message cut at 54 of its 55 bytes",
+		"record 4 at offset 248: bgp/message-truncated: message cut at 31 of its 35 bytes",
+		"record 5 at offset 307: bgp/message-truncated: message cut at 71 of its 74 bytes",
+	} {
+		if !strings.Contains(errs, s) {
+			t.Errorf("stderr lacks %q:\n%s", s, errs)
+		}
+	}
+	if n := strings.Count(errs, "\n"); n != 4 {
+		t.Errorf("%d stderr lines, want 4:\n%s", n, errs)
+	}
+}
+
 func TestMrtdumpMalformedExit1(t *testing.T) {
 	code, out, errs := run(t, nil, "-m", "-l", "-u", synthetic+"attrs-malformed.mrt")
 	if code != 1 {

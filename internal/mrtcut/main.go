@@ -13,9 +13,10 @@
 // what it needs. A malformed record counts and is kept like any other.
 //
 // -count prints, per file, how many records of each type/subtype it holds
-// (BGP4MP messages also by BGP message type) and stops quietly at the first
-// error that ends the stream, saying where: a download cut short is enough
-// for a survey.
+// (BGP4MP messages also by BGP message type, with "cut" when the message is
+// shorter than its header says, or BADHEADER when its header is broken) and
+// stops quietly at the first error that ends the stream, saying where: a
+// download cut short is enough for a survey.
 //
 // FILE is raw, gzip or bzip2 MRT; - is standard input.
 package main
@@ -243,11 +244,22 @@ func countFile(name string, stdin io.Reader, stdout io.Writer) error {
 	return nil
 }
 
+// messageName is the BGP message type of m, "BADHEADER" when its header is
+// broken, and the type followed by " cut" when the header's length is beyond
+// the bytes the record holds.
 func messageName(m mrt.BGP4MPMessage) string {
-	t, err := m.Type()
+	h, err := bgp.ParseMessageHeader(m.Message)
 	if err != nil {
 		return "BADHEADER"
 	}
+	name := typeName(h.Type)
+	if h.Length > len(m.Message) {
+		name += " cut"
+	}
+	return name
+}
+
+func typeName(t bgp.MessageType) string {
 	switch t {
 	case bgp.MessageOpen:
 		return "OPEN"

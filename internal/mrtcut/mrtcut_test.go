@@ -154,3 +154,21 @@ func TestUsage(t *testing.T) {
 		}
 	}
 }
+
+// TestCountCutMessages: a message whose BGP header claims more bytes than
+// the record holds is counted apart, with "cut" after its type (Ruling R17a:
+// its type is read, its body is short).
+func TestCountCutMessages(t *testing.T) {
+	in := filepath.Join("..", "..", "testdata", "synthetic", "short-message.mrt")
+	var stdout bytes.Buffer
+	if st := run([]string{"-count", in}, nil, &stdout, io.Discard); st != 0 {
+		t.Fatal(st)
+	}
+	want := in + "\n" +
+		"  16/1 UPDATE 1\n" +
+		"  16/1 UPDATE cut 4\n" +
+		"  records 5\n"
+	if got := stdout.String(); got != want {
+		t.Errorf("count:\n%s\nwant:\n%s", got, want)
+	}
+}

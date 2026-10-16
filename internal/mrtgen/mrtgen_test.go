@@ -265,14 +265,10 @@ func TestGeneratedFiles(t *testing.T) {
 				}
 				n++
 			}
-			var diags, routeErrs int
+			var diags int
 			for rt, err := range mrt.Routes(mrt.Records(bytes.NewReader(disk))) {
 				if err != nil {
-					if f.Name != "short-message.mrt" {
-						t.Fatalf("route error: %v", err)
-					}
-					routeErrs++
-					continue
+					t.Fatalf("route error: %v", err)
 				}
 				routes++
 				diags += len(rt.Diagnostics)
@@ -280,12 +276,9 @@ func TestGeneratedFiles(t *testing.T) {
 			if n == 0 || routes == 0 {
 				t.Errorf("%d records, %d routes", n, routes)
 			}
-			if f.Name == "short-message.mrt" && routeErrs != 2 {
-				t.Errorf("%d route errors, want one per short message (2)", routeErrs)
-			}
-			malformed := f.Name == "attrs-malformed.mrt"
+			malformed := f.Name == "attrs-malformed.mrt" || f.Name == "short-message.mrt"
 			if malformed && diags == 0 {
-				t.Error("attrs-malformed.mrt should produce attribute diagnostics")
+				t.Errorf("%s should produce diagnostics", f.Name)
 			}
 			if !malformed && f.Name != "as4-merge.mrt" && f.Name != "as4-confed.mrt" && diags != 0 {
 				t.Errorf("%d unexpected diagnostics", diags)
@@ -339,9 +332,11 @@ func TestStateChanges(t *testing.T) {
 	}
 }
 
-// TestShortMessage pins short-message.mrt: a valid UPDATE, then two whose
-// BGP header claims more bytes than the record holds, one cut after a whole
-// prefix and one inside a prefix.
+// TestShortMessage pins short-message.mrt: a valid UPDATE, then four whose
+// BGP header claims more bytes than the record holds, cut after a whole
+// prefix, inside a prefix, inside the withdrawn routes, and inside the path
+// attributes after an MP_REACH_NLRI. Each is read as far as its bytes go,
+// with one Error bgp/message-truncated (Ruling R17a).
 func TestShortMessage(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dir, "short-message.mrt"))
 	if err != nil {
@@ -353,13 +348,29 @@ func TestShortMessage(t *testing.T) {
 			t.Fatal(err)
 		}
 		m := rec.(mrt.BGP4MPMessage)
-		_, err := m.Type()
-		got = append(got, fmt.Sprintf("%d bytes: %v", len(m.Message), err))
+		h, err := bgp.ParseMessageHeader(m.Message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, diags := bgp.ParseUpdate(m.Message, m.Context())
+		var codes []string
+		for _, d := range diags {
+			codes = append(codes, d.Code)
+		}
+		p, pd := u.Attrs.Decode()
+		mp := 0
+		if p.MPReach != nil {
+			mp = len(p.MPReach.NLRI)
+		}
+		got = append(got, fmt.Sprintf("%d of %d bytes: %v w=%d a=%d mp=%d attr-diags=%d",
+			len(m.Message), h.Length, codes, len(u.Withdrawn), len(u.Announced), mp, len(pd)))
 	}
 	want := []string{
-		"55 bytes: <nil>",
-		"55 bytes: bgp: message shorter than its header: header length 58, message 55 bytes",
-		"54 bytes: bgp: message shorter than its header: header length 55, message 54 bytes",
+		"55 of 55 bytes: [] w=0 a=3 mp=0 attr-diags=0",
+		"55 of 58 bytes: [bgp/message-truncated] w=0 a=3 mp=0 attr-diags=0",
+		"54 of 55 bytes: [bgp/message-truncated] w=0 a=2 mp=0 attr-diags=0",
+		"31 of 35 bytes: [bgp/message-truncated] w=2 a=0 mp=0 attr-diags=0",
+		"71 of 74 bytes: [bgp/message-truncated] w=0 a=0 mp=1 attr-diags=0",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("messages:\n got %q\nwant %q", got, want)

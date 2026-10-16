@@ -182,54 +182,6 @@ mrtdump: BGP4MP|1700000003|A|192.0.2.10|64500|198.51.109.0/24|64500 196608 19660
 bgpdump: BGP4MP|1700000003|A|192.0.2.10|64500|198.51.109.0/24|(65001) 196608 196609|IGP|192.0.2.10|0|0|||NAG|||
 ```
 
-### B9. A BGP message shorter than its own header
-
-Reason: the BGP header of `short-message` records 2 and 3 claims 3 and 1
-bytes more than the MRT record holds (record 3 ends inside its last prefix).
-bgpdump decodes whatever prefixes are whole. mrt refuses a message shorter
-than its header (`bgp.ErrShortMessage`; `Routes` yields a `RecordError`,
-Ruling R12) and mrtdump reports it and exits 1: a message cut short is not
-an UPDATE, and the prefixes in the part that is there are a guess.
-
-Real data has this: route-views2's `updates.20030602.1652.bz2` (records 8076
-and 8077, 4090- and 4093-byte UPDATEs cut to the 4080 bytes the collector
-wrote). Measured on a 12-record slice around them: bgpdump prints 2040
-announcements from the two messages; bgpkit-parser and mrt print none. No
-real slice is a fixture: 2040 lines are too many to pin one by one here.
-
-Decides: neither oracle (bgpkit-parser decodes a message cut after a whole
-prefix and drops one cut inside a prefix, K6); mrt keeps Ruling R12.
-
-```pair
-fixture: short-message
-mrtdump: (none)
-bgpdump: BGP4MP|1700000001|A|192.0.2.10|64500|198.51.103.0/24|64500 64501|IGP|192.0.2.10|0|0|||NAG|||
-```
-
-```pair
-fixture: short-message
-mrtdump: (none)
-bgpdump: BGP4MP|1700000001|A|192.0.2.10|64500|198.51.104.0/24|64500 64501|IGP|192.0.2.10|0|0|||NAG|||
-```
-
-```pair
-fixture: short-message
-mrtdump: (none)
-bgpdump: BGP4MP|1700000001|A|192.0.2.10|64500|198.51.105.0/24|64500 64501|IGP|192.0.2.10|0|0|||NAG|||
-```
-
-```pair
-fixture: short-message
-mrtdump: (none)
-bgpdump: BGP4MP|1700000002|A|192.0.2.10|64500|198.51.106.0/24|64500 64501|IGP|192.0.2.10|0|0|||NAG|||
-```
-
-```pair
-fixture: short-message
-mrtdump: (none)
-bgpdump: BGP4MP|1700000002|A|192.0.2.10|64500|198.51.107.0/24|64500 64501|IGP|192.0.2.10|0|0|||NAG|||
-```
-
 ## bgpkit-parser
 
 `Routes` against `bgpkit-parser --json`, both normalized by
@@ -346,29 +298,49 @@ bgpkit: {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.109.0/2
 
 ### K6. A BGP message shorter than its own header
 
-Reason: as B9. bgpkit-parser decodes `short-message` record 2, whose NLRI ends
-after a whole prefix, and gives nothing for record 3, cut inside a prefix
-(and nothing for the two real messages of route-views2's 2003-06-02 16:52
-file). mrt refuses both (Ruling R12).
+Reason: the BGP header of `short-message` records 2-5 claims more bytes than
+the MRT record holds (route-views2 wrote such messages in 2003, records 8076
+and 8077 of `updates.20030602.1652.bz2`: header 4090 and 4093 bytes, 4080 in
+the record). mrt reads each as far as its bytes go, whole withdrawn prefixes,
+whole attributes and whole NLRI, and reports one Error
+`bgp/message-truncated` (Ruling R17a); bgpdump prints the same lines (its
+golden matches mrtdump). bgpkit-parser decodes only a message whose last
+field ends cleanly (record 2) and gives nothing for one cut inside a prefix
+(record 3), inside the withdrawn routes (record 4) or inside the path
+attributes (record 5). On the real 2003 messages it gives nothing where
+bgpdump and mrt give 2040 routes; that slice is not a fixture, as it would
+need about 2040 pairs here.
 
-Decides: neither oracle; mrt keeps Ruling R12.
+Decides: bgpdump, with Ruling R17 (spec §1: keep going past a bad record).
 
 ```pair
 fixture: short-message
-mrt: (none)
-bgpkit: {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.103.0/24","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10"}
+mrt: {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.106.0/24","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10"}
+bgpkit: (none)
 ```
 
 ```pair
 fixture: short-message
-mrt: (none)
-bgpkit: {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.104.0/24","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10"}
+mrt: {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.107.0/24","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10"}
+bgpkit: (none)
 ```
 
 ```pair
 fixture: short-message
-mrt: (none)
-bgpkit: {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.105.0/24","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10"}
+mrt: {"kind":"W","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.112.0/24"}
+bgpkit: (none)
+```
+
+```pair
+fixture: short-message
+mrt: {"kind":"W","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.113.0/24"}
+bgpkit: (none)
+```
+
+```pair
+fixture: short-message
+mrt: {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"2001:db8:600::/48","as_path":"64500 64501","origin":"IGP","next_hop":"2001:db8::10"}
+bgpkit: (none)
 ```
 
 ### K7. NEXT_HOP is taken as the next hop of routes in MP_REACH_NLRI
@@ -478,3 +450,7 @@ Pinned by `internal/mrtdump` tests (named below).
   stderr, 3 when a file cannot be read (`TestMrtdumpMalformedExit1`,
   `TestMrtdumpMissingFile`, `TestMrtdumpReadErrors`). bgpdump logs to syslog
   unless given `-v`.
+- C5. A BGP message shorter than its own header (`short-message`, K6): both
+  print the same lines from what the bytes hold, but mrtdump reports each
+  message (`bgp/message-truncated`) and exits 1; bgpdump exits 0 silently
+  (`TestMrtdumpTruncatedMessageExit1`).
