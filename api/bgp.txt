@@ -77,6 +77,7 @@ type ExtCommunity [8]byte
 type Family struct
 	AFI AFI
 	SAFI SAFI
+func (Family) HasPrefixes() bool
 type LargeCommunity struct
 	Global uint32
 	Local1 uint32

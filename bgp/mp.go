@@ -22,11 +22,6 @@ type MPUnreach struct {
 	RawNLRI   []byte
 }
 
-// nlriFamily reports whether NLRI of f are decoded (IPv4/IPv6, unicast/multicast).
-func nlriFamily(f Family) bool {
-	return (f.AFI == AFIIPv4 || f.AFI == AFIIPv6) && (f.SAFI == SAFIUnicast || f.SAFI == SAFIMulticast)
-}
-
 // setMPNextHop stores the next hop in v by its length (RFC 4760, RFC 2545,
 // RFC 8950): 4 is IPv4, 16 IPv6, 32 IPv6 plus link-local. It reports whether
 // the length was one of those.
@@ -81,11 +76,11 @@ func decodeMPReach(v []byte, ctx Context, off int) (r MPReach, ok bool, diags []
 		diag(SeverityInfo, "bgp/mpreach-full-in-rib", "full-form MP_REACH_NLRI in a RIB entry")
 	}
 	r.Family = Family{AFI(uint16(v[0])<<8 | uint16(v[1])), SAFI(v[2])}
-	if !setMPNextHop(&r, v[4:4+nh]) && nlriFamily(r.Family) {
+	if !setMPNextHop(&r, v[4:4+nh]) && r.Family.HasPrefixes() {
 		diag(SeverityWarning, "bgp/attr-value", fmt.Sprintf("MP_REACH_NLRI next hop of %d bytes", nh))
 	}
 	rest := v[4+nh+1:] // skip the reserved byte
-	if nlriFamily(r.Family) {
+	if r.Family.HasPrefixes() {
 		var nd []Diagnostic
 		r.NLRI, nd = parseNLRI(rest, r.Family.AFI, ctx.AddPath)
 		for _, d := range nd {
@@ -107,7 +102,7 @@ func decodeMPUnreach(v []byte, ctx Context, off int) (r MPUnreach, ok bool, diag
 	}
 	r.Family = Family{AFI(uint16(v[0])<<8 | uint16(v[1])), SAFI(v[2])}
 	rest := v[3:]
-	if nlriFamily(r.Family) {
+	if r.Family.HasPrefixes() {
 		var nd []Diagnostic
 		r.Withdrawn, nd = parseNLRI(rest, r.Family.AFI, ctx.AddPath)
 		for _, d := range nd {

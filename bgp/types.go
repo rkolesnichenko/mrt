@@ -35,6 +35,12 @@ type Family struct {
 	SAFI SAFI
 }
 
+// HasPrefixes reports whether NLRI of f are plain prefixes this package
+// decodes: AFI 1 or 2 with SAFI 1 (unicast) or 2 (multicast).
+func (f Family) HasPrefixes() bool {
+	return (f.AFI == AFIIPv4 || f.AFI == AFIIPv6) && (f.SAFI == SAFIUnicast || f.SAFI == SAFIMulticast)
+}
+
 // Context says how to read bytes that do not describe themselves.
 type Context struct {
 	AS4     bool // AS_PATH and AGGREGATOR carry 4-byte ASNs

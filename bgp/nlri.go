@@ -10,9 +10,14 @@ import (
 // family's width, or bytes that run out, is an Error diagnostic
 // ("bgp/nlri-length") that stops the parse; the prefixes before it are kept.
 // Bits past a prefix's length are cleared, with an Info diagnostic
-// ("bgp/prefix-bits"). Diagnostic.Offset is the offset in b. Only AFI 1 and 2
-// are understood; any other family is refused with one Error diagnostic.
+// ("bgp/prefix-bits"). Diagnostic.Offset is the offset in b. A family without
+// plain prefixes (Family.HasPrefixes false) is refused, even for empty b, with
+// one Error diagnostic ("bgp/nlri-family") and nil NLRI.
 func ParseNLRI(b []byte, fam Family, addPath bool) ([]NLRI, []Diagnostic) {
+	if !fam.HasPrefixes() {
+		return nil, []Diagnostic{{SeverityError, "bgp/nlri-family", 0, 0,
+			fmt.Sprintf("NLRI of AFI %d SAFI %d are not plain prefixes", fam.AFI, fam.SAFI)}}
+	}
 	return parseNLRI(b, fam.AFI, addPath)
 }
 

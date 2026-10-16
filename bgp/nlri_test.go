@@ -47,8 +47,29 @@ func TestParseNLRI(t *testing.T) {
 	if _, d = ParseNLRI([]byte{129}, Family{AFIIPv6, SAFIUnicast}, false); len(d) != 1 {
 		t.Fatalf("129: %v", d)
 	}
-	// unknown AFI: refused, no panic
-	if _, d = ParseNLRI([]byte{8, 1}, Family{25, 65}, false); len(d) != 1 {
-		t.Fatalf("afi 25: %v", d)
+}
+
+func TestParseNLRIRefusesOtherFamilies(t *testing.T) {
+	for _, c := range []struct {
+		f Family
+		b []byte
+	}{{Family{1, 128}, []byte{8, 10}}, {Family{2, 4}, []byte{8, 10}}, {Family{25, 1}, nil}, {Family{1, 4}, []byte{8, 10}}} {
+		got, d := ParseNLRI(c.b, c.f, false)
+		if got != nil || len(d) != 1 || d[0].Code != "bgp/nlri-family" || d[0].Severity != SeverityError {
+			t.Errorf("%v: %v %v", c.f, got, d)
+		}
+	}
+}
+
+func TestFamilyHasPrefixes(t *testing.T) {
+	for _, f := range []Family{{1, 1}, {1, 2}, {2, 1}, {2, 2}} {
+		if !f.HasPrefixes() {
+			t.Errorf("%v", f)
+		}
+	}
+	for _, f := range []Family{{}, {1, 0}, {1, 4}, {1, 128}, {2, 4}, {25, 65}, {3, 1}} {
+		if f.HasPrefixes() {
+			t.Errorf("%v", f)
+		}
 	}
 }
