@@ -1,0 +1,16 @@
+# Dependabot keeps the actions in .github/workflows up to date, in one grouped
+# pull request a month. Go modules are left out on purpose: the module has no
+# requirements (check.sh enforces it). internal/compare is a nested module that
+# only the maintainer runs by hand.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
