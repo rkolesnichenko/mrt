@@ -1,6 +1,7 @@
 package mrt
 
 import (
+	"errors"
 	"fmt"
 	"iter"
 	"net/netip"
@@ -14,9 +15,9 @@ type Kind uint8
 
 // Route kinds.
 const (
-	KindRIB      Kind = iota // an entry of a RIB dump
-	KindAnnounce             // announced by an UPDATE
-	KindWithdraw             // withdrawn by an UPDATE
+	KindRIB      Kind = 0 // an entry of a RIB dump
+	KindAnnounce Kind = 1 // announced by an UPDATE
+	KindWithdraw Kind = 2 // withdrawn by an UPDATE
 )
 
 // String returns "B", "A" or "W".
@@ -57,6 +58,11 @@ func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error] {
 		var table PeerIndexTable
 		for rec, err := range records {
 			if err != nil {
+				// A broken PEER_INDEX_TABLE must not leave the previous table in force.
+				var re *RecordError
+				if errors.As(err, &re) && re.Header.Type == TypeTableDumpV2 && re.Header.Subtype == SubPeerIndexTable {
+					table = PeerIndexTable{}
+				}
 				if !yield(Route{}, err) {
 					return
 				}

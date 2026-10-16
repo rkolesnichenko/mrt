@@ -1,8 +1,8 @@
 package mrt
 const DefaultMaxRecordLen = 16 << 20
-const KindAnnounce Kind
-const KindRIB Kind = iota
-const KindWithdraw Kind
+const KindAnnounce Kind = 1
+const KindRIB Kind = 0
+const KindWithdraw Kind = 2
 const StateActive State = 3
 const StateConnect State = 2
 const StateEstablished State = 6

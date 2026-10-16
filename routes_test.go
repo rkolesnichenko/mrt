@@ -281,3 +281,16 @@ func TestRoutesStopsWhenYieldFalse(t *testing.T) {
 		}
 	}
 }
+
+func TestRoutesBrokenPeerTableClearsOld(t *testing.T) {
+	broken := frame(ts, TypeTableDumpV2, SubPeerIndexTable, 0, []byte{1, 2})
+	in := cat(peerTable("192.0.2.1"), ribV4(ribEntry(0, origin)), broken, ribV4(ribEntry(0, origin)))
+	rs, errs := routesOf(t, in)
+	if len(rs) != 1 || len(errs) != 2 {
+		t.Fatalf("%d routes, errors %v", len(rs), errs)
+	}
+	var re *RecordError
+	if !errors.As(errs[1], &re) || re.Offset != -1 || !errors.Is(errs[1], ErrMalformed) {
+		t.Errorf("second error %#v, want the R12 error", errs[1])
+	}
+}

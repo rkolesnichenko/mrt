@@ -13,8 +13,11 @@ import (
 // gzip header is returned as the error.
 func Decompress(r io.Reader) (io.Reader, error) {
 	br := bufio.NewReader(r)
-	magic, _ := br.Peek(3)
+	magic, err := br.Peek(3)
 	if len(magic) < 3 { // too short to be compressed
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
 		return br, nil
 	}
 	switch {

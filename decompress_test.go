@@ -3,6 +3,7 @@ package mrt
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -83,5 +84,16 @@ func TestDecompressEmpty(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("records %d", n)
+	}
+}
+
+type failReader struct{ err error }
+
+func (r failReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestDecompressReadError(t *testing.T) {
+	boom := errors.New("boom")
+	if _, err := Decompress(failReader{boom}); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want boom", err)
 	}
 }
