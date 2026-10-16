@@ -57,6 +57,10 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: scripts/check.sh
         run: scripts/check.sh
+        env:
+          # A missing oracle fails TestMatchesBgpdump/TestMatchesBgpkitLive
+          # here instead of skipping them.
+          MRT_ORACLES_REQUIRED: "1"
 
   # Every fuzz target for 30s, beside the check jobs rather than after them.
   fuzz:

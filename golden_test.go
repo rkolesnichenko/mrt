@@ -10,7 +10,7 @@ package mrt_test
 //
 // TestGoldens and TestMatchesBgpkit need no oracle installed.
 // TestMatchesBgpdump and TestMatchesBgpkitLive run the oracles when they are
-// on PATH; MRT_GOLDEN_UPDATE=1 makes them rewrite the goldens instead (review
+// on PATH (and fail without them under MRT_ORACLES_REQUIRED=1, as CI sets); MRT_GOLDEN_UPDATE=1 makes them rewrite the goldens instead (review
 // the diff). Every difference between mrt and an oracle is listed in
 // testdata/bgpdump/divergences.md, which TestDivergencesDocumented holds in
 // both directions.
@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,35 +94,58 @@ func lines(b []byte) []string {
 	return strings.Split(s, "\n")
 }
 
+// dumpResult is what mrtdump gives for one fixture.
+type dumpResult struct {
+	lines  []string
+	status int
+	stderr string
+}
+
+// routesResult is what Routes gives for one fixture.
+type routesResult struct {
+	lines  []string // normalized and sorted
+	errors int
+}
+
 var (
-	cacheMu   sync.Mutex
-	dumpCache = map[string][]string{}
-	mrtCache  = map[string][]string{}
+	cacheMu     sync.Mutex
+	dumpCache   = map[string]dumpResult{}
+	routesCache = map[string]routesResult{}
 )
 
-// mrtdumpLines is `mrtdump -m -l -u` of f, line by line.
-func mrtdumpLines(t *testing.T, f fixture) []string {
+// runMrtdump runs `mrtdump -m -l -u` over f once.
+func runMrtdump(t *testing.T, f fixture) dumpResult {
 	t.Helper()
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	if l, ok := dumpCache[f.path]; ok {
-		return l
+	if r, ok := dumpCache[f.path]; ok {
+		return r
 	}
 	var out, errs bytes.Buffer
-	if st := mrtdump.Run([]string{"-m", "-l", "-u", f.path}, nil, &out, &errs); st > 1 {
+	st := mrtdump.Run([]string{"-m", "-l", "-u", f.path}, nil, &out, &errs)
+	if st > 1 {
 		t.Fatalf("mrtdump %s: status %d: %s", f.path, st, errs.String())
 	}
-	dumpCache[f.path] = lines(out.Bytes())
+	dumpCache[f.path] = dumpResult{lines(out.Bytes()), st, errs.String()}
 	return dumpCache[f.path]
 }
 
-// routeLines is mrt.Routes over f, normalized and sorted. Errors yield no line.
-func routeLines(t *testing.T, f fixture) []string {
+// mrtdumpLines is `mrtdump -m -l -u` of f, line by line.
+func mrtdumpLines(t *testing.T, f fixture) []string { return runMrtdump(t, f).lines }
+
+// mrtdumpStatus is the exit status and standard error of mrtdump over f.
+func mrtdumpStatus(t *testing.T, f fixture) (int, string) {
+	r := runMrtdump(t, f)
+	return r.status, r.stderr
+}
+
+// runRoutes runs mrt.Routes over f once.
+func runRoutes(t *testing.T, f fixture) routesResult {
 	t.Helper()
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	if l, ok := mrtCache[f.path]; ok {
-		return l
+	if r, ok := routesCache[f.path]; ok {
+		return r
 	}
 	file, err := os.Open(f.path)
 	if err != nil {
@@ -132,15 +156,24 @@ func routeLines(t *testing.T, f fixture) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ls []string
+	var res routesResult
 	for rt, err := range mrt.Routes(mrt.Records(r)) {
-		if err == nil {
-			ls = append(ls, oracle.FromRoute(rt))
+		if err != nil {
+			res.errors++
+			continue
 		}
+		res.lines = append(res.lines, oracle.FromRoute(rt))
 	}
-	mrtCache[f.path] = oracle.Sorted(ls)
-	return mrtCache[f.path]
+	res.lines = oracle.Sorted(res.lines)
+	routesCache[f.path] = res
+	return res
 }
+
+// routeLines is mrt.Routes over f, normalized and sorted. Errors yield no line.
+func routeLines(t *testing.T, f fixture) []string { return runRoutes(t, f).lines }
+
+// routeErrors is how many errors mrt.Routes yields over f.
+func routeErrors(t *testing.T, f fixture) int { return runRoutes(t, f).errors }
 
 func readGolden(t *testing.T, path string) []string {
 	t.Helper()
@@ -247,31 +280,57 @@ func divergences(t *testing.T) (bgpdump, bgpkit []pair) {
 	return bgpdump, bgpkit
 }
 
-// documented returns the set of documented lines of fixture on each side.
-func documented(ps []pair, fixture string) (ours, theirs map[string]bool) {
-	ours, theirs = map[string]bool{}, map[string]bool{}
+// documented returns how many times each line of fixture is documented, on
+// each side: every pair stands for one occurrence.
+func documented(ps []pair, fixture string) (ours, theirs map[string]int) {
+	ours, theirs = map[string]int{}, map[string]int{}
 	for _, p := range ps {
 		if p.fixture != fixture {
 			continue
 		}
 		if p.ours != "" {
-			ours[p.ours] = true
+			ours[p.ours]++
 		}
 		if p.theirs != "" {
-			theirs[p.theirs] = true
+			theirs[p.theirs]++
 		}
 	}
 	return ours, theirs
 }
 
-func without(ls []string, drop map[string]bool) []string {
+// without returns ls less the first drop[l] occurrences of each line l.
+func without(ls []string, drop map[string]int) []string {
+	left := maps.Clone(drop)
 	var out []string
 	for _, l := range ls {
-		if !drop[l] {
-			out = append(out, l)
+		if left[l] > 0 {
+			left[l]--
+			continue
 		}
+		out = append(out, l)
 	}
 	return out
+}
+
+// stillDiffers returns, sorted, the documented lines of one side (doc) that
+// the side does not hold as many more times than the other side as they are
+// documented.
+func stillDiffers(side, other []string, doc map[string]int) []string {
+	n := map[string]int{}
+	for _, l := range side {
+		n[l]++
+	}
+	for _, l := range other {
+		n[l]--
+	}
+	var bad []string
+	for l, k := range doc {
+		if n[l] < k {
+			bad = append(bad, l)
+		}
+	}
+	sort.Strings(bad)
+	return bad
 }
 
 // diff returns the lines of a not in b and of b not in a, as multisets, in
@@ -378,27 +437,16 @@ func TestDivergencesDocumented(t *testing.T) {
 			}
 			for _, f := range fixtures(t) {
 				ours, theirs := side.mrt(t, f), side.oracle(t, f)
-				inOurs, inTheirs := map[string]bool{}, map[string]bool{}
-				for _, l := range ours {
-					inOurs[l] = true
+				docOurs, docTheirs := documented(side.pairs, f.name)
+				// Every documented line still differs, as many times as it is
+				// documented.
+				for _, l := range stillDiffers(ours, theirs, docOurs) {
+					t.Errorf("%s: the %s line is documented more often than it differs: %s", f.name, side.ours, l)
 				}
-				for _, l := range theirs {
-					inTheirs[l] = true
-				}
-				// Every documented pair still differs.
-				for _, p := range side.pairs {
-					if p.fixture != f.name {
-						continue
-					}
-					if p.ours != "" && (!inOurs[p.ours] || inTheirs[p.ours]) {
-						t.Errorf("%s: %s: the %s line is no longer a difference: %s", p.entry, f.name, side.ours, p.ours)
-					}
-					if p.theirs != "" && (!inTheirs[p.theirs] || inOurs[p.theirs]) {
-						t.Errorf("%s: %s: the %s line is no longer a difference: %s", p.entry, f.name, side.theirs, p.theirs)
-					}
+				for _, l := range stillDiffers(theirs, ours, docTheirs) {
+					t.Errorf("%s: the %s line is documented more often than it differs: %s", f.name, side.theirs, l)
 				}
 				// Every differing line is documented.
-				docOurs, docTheirs := documented(side.pairs, f.name)
 				onlyOurs, onlyTheirs := diff(ours, theirs)
 				onlyOurs, onlyTheirs = without(onlyOurs, docOurs), without(onlyTheirs, docTheirs)
 				if len(onlyOurs)+len(onlyTheirs) > 0 {
@@ -489,13 +537,10 @@ func TestCommunityFieldsFitBgpdumpBuffer(t *testing.T) {
 	for _, f := range fixtures(t) {
 		check := func(source string, ls []string) {
 			for _, l := range ls {
-				fs := strings.Split(l, "|")
-				if len(fs) < 13 || fs[2] == "STATE" {
-					continue
-				}
-				for _, i := range []int{11, 12} { // communities, large communities (-l)
-					if len(fs[i]) >= maxCommunityField {
-						t.Errorf("%s (%s): a %d-character field %d: %.80s...", f.name, source, len(fs[i]), i+1, fs[i])
+				comm, large := communityFields(l)
+				for _, field := range []string{comm, large} {
+					if len(field) >= maxCommunityField {
+						t.Errorf("%s (%s): a %d-character community field: %.80s...", f.name, source, len(field), field)
 					}
 				}
 			}
@@ -503,6 +548,21 @@ func TestCommunityFieldsFitBgpdumpBuffer(t *testing.T) {
 		check("mrtdump", mrtdumpLines(t, f))
 		check("golden", readGolden(t, f.golden(".bgpdump")))
 	}
+}
+
+// communityFields returns the communities and large communities fields of a
+// `bgpdump -m -l` line, or "" for a line without them (W, STATE). Add-path
+// lines (*_AP) carry the path ID after the prefix, one column more.
+func communityFields(l string) (comm, large string) {
+	fs := strings.Split(l, "|")
+	i := 11
+	if len(fs) > 0 && strings.HasSuffix(fs[0], "_AP") {
+		i++
+	}
+	if len(fs) < i+2 || fs[2] == "STATE" || fs[2] == "W" {
+		return "", ""
+	}
+	return fs[i], fs[i+1]
 }
 
 // TestLossless: the raw bytes of every record, and of every malformed one,
@@ -542,13 +602,14 @@ func TestLossless(t *testing.T) {
 	}
 }
 
-// lookPath finds an oracle on PATH or skips the test.
+// lookPath finds an oracle on PATH or skips the test; with
+// MRT_ORACLES_REQUIRED=1 (CI) or MRT_GOLDEN_UPDATE=1 a missing oracle fails it.
 func lookPath(t *testing.T, name string) string {
 	t.Helper()
 	p, err := exec.LookPath(name)
 	if err != nil {
-		if update() {
-			t.Fatalf("MRT_GOLDEN_UPDATE=1 needs %s on PATH (scripts/build-oracles.sh)", name)
+		if update() || os.Getenv("MRT_ORACLES_REQUIRED") == "1" {
+			t.Fatalf("MRT_GOLDEN_UPDATE=1 and MRT_ORACLES_REQUIRED=1 need %s on PATH (scripts/build-oracles.sh)", name)
 		}
 		t.Skipf("%s is not on PATH (scripts/build-oracles.sh installs it)", name)
 	}
@@ -650,5 +711,54 @@ func TestFixturesListed(t *testing.T) {
 	sort.Strings(orphans)
 	if len(orphans) > 0 {
 		t.Errorf("goldens with no fixture: %v", orphans)
+	}
+}
+
+func TestCommunityFieldsColumns(t *testing.T) {
+	for _, tc := range []struct{ line, comm, large string }{
+		{"BGP4MP|1|A|192.0.2.1|1|192.0.2.0/24|1|IGP|192.0.2.1|0|0|1:2|3:4:5|NAG|||", "1:2", "3:4:5"},
+		// add-path lines carry the path ID after the prefix (Ruling R19)
+		{"TABLE_DUMP2_AP|1|B|192.0.2.1|1|192.0.2.0/24|7|1|IGP|192.0.2.1|0|0|1:2|3:4:5|NAG|||", "1:2", "3:4:5"},
+		{"BGP4MP_ET_AP|1.000001|A|192.0.2.1|1|192.0.2.0/24|7|1|IGP|192.0.2.1|0|0|1:2|3:4:5|NAG|||", "1:2", "3:4:5"},
+		{"BGP4MP|1|W|192.0.2.1|1|192.0.2.0/24", "", ""},
+		{"BGP4MP|1|STATE|192.0.2.1|1|1|2", "", ""},
+	} {
+		comm, large := communityFields(tc.line)
+		if comm != tc.comm || large != tc.large {
+			t.Errorf("%s: %q %q, want %q %q", tc.line, comm, large, tc.comm, tc.large)
+		}
+	}
+}
+
+func TestWithoutCounts(t *testing.T) {
+	ls := []string{"a", "b", "a", "c", "a"}
+	if got := without(ls, map[string]int{"a": 2, "c": 1}); !slices.Equal(got, []string{"b", "a"}) {
+		t.Errorf("without = %q, want [b a]", got)
+	}
+	// "a" differs twice (3 against 1): documenting it twice holds, three times does not.
+	ours, theirs := []string{"a", "a", "a", "b"}, []string{"a", "b"}
+	if bad := stillDiffers(ours, theirs, map[string]int{"a": 2}); len(bad) != 0 {
+		t.Errorf("a documented twice: %q", bad)
+	}
+	if bad := stillDiffers(ours, theirs, map[string]int{"a": 3, "b": 1}); !slices.Equal(bad, []string{"a", "b"}) {
+		t.Errorf("a three times, b once: %q, want [a b]", bad)
+	}
+}
+
+// TestRealFixturesClean (Ruling R19): the real fixtures hold no malformed
+// record, entry or attribute, so mrtdump exits 0 on each and Routes yields
+// no error. A difference from an oracle on them is then never hidden behind
+// a record mrt refused.
+func TestRealFixturesClean(t *testing.T) {
+	for _, f := range fixtures(t) {
+		if !strings.HasPrefix(f.path, "testdata/mrt/") {
+			continue
+		}
+		if st, stderr := mrtdumpStatus(t, f); st != 0 {
+			t.Errorf("%s: mrtdump exits %d:\n%s", f.name, st, stderr)
+		}
+		if n := routeErrors(t, f); n != 0 {
+			t.Errorf("%s: Routes yields %d errors", f.name, n)
+		}
 	}
 }

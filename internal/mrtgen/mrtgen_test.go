@@ -424,13 +424,20 @@ func TestAS4Confed(t *testing.T) {
 		if rt.Path.HasAggregator {
 			agg = fmt.Sprint(rt.Path.Aggregator.AS)
 		}
-		got = append(got, fmt.Sprintf("%v: %s agg %s", rt.Prefix, rt.Path.ASPath, agg))
+		var diags []string
+		for _, d := range rt.Diagnostics {
+			diags = append(diags, fmt.Sprintf("%d/%s/%d", d.Severity, d.Code, d.Attr))
+		}
+		got = append(got, fmt.Sprintf("%v: %s agg %s diags %v", rt.Prefix, rt.Path.ASPath, agg, diags))
 	}
+	// Record 4's confed segment in AS4_PATH is discarded with a Warning on
+	// AS4_PATH (Ruling R6); the others decode cleanly.
+	warnAS4Path := fmt.Sprintf("%d/bgp/attr-value/%d", bgp.SeverityWarning, bgp.AttrAS4Path)
 	want := []string{
-		"198.51.106.0/24: (65001) 64500 196608 196609 agg -",
-		"198.51.107.0/24: (65001 65002) 196608 agg -",
-		"198.51.108.0/24: 64500 196608 agg 196610",
-		"198.51.109.0/24: 64500 196608 196609 agg -",
+		"198.51.106.0/24: (65001) 64500 196608 196609 agg - diags []",
+		"198.51.107.0/24: (65001 65002) 196608 agg - diags []",
+		"198.51.108.0/24: 64500 196608 agg 196610 diags []",
+		"198.51.109.0/24: 64500 196608 196609 agg - diags [" + warnAS4Path + "]",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("as4-confed.mrt:\n got %q\nwant %q", got, want)
