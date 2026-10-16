@@ -2,7 +2,8 @@
 # Builds the two differential oracles and installs them into PREFIX
 # (default $HOME/.local/bin):
 #
-#   bgpdump        RIPE-NCC/bgpdump master at $BGPDUMP_COMMIT, built with
+#   bgpdump        RIPE-NCC/bgpdump master at $BGPDUMP_COMMIT (default caf2cb07;
+#                  the environment may override it), built with
 #                  autotools (./bootstrap.sh && ./configure && make). Needs
 #                  autoconf and automake (macOS: brew install autoconf automake).
 #   bgpkit-parser  the crate at $BGPKIT_VERSION with its "cli" feature, built
@@ -17,16 +18,24 @@
 set -eu
 
 BGPDUMP_REPO=https://github.com/RIPE-NCC/bgpdump
-BGPDUMP_COMMIT=caf2cb07bc3cf06f1720c4cb274811599e9bda6a
+BGPDUMP_COMMIT=${BGPDUMP_COMMIT:-caf2cb07bc3cf06f1720c4cb274811599e9bda6a}
 BGPKIT_VERSION=0.22.0
 
 PREFIX=${1:-$HOME/.local/bin}
 mkdir -p "$PREFIX"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/build-oracles.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT INT TERM
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT TERM
 
-sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+if command -v shasum >/dev/null; then
+	sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+elif command -v sha256sum >/dev/null; then
+	sha256() { sha256sum "$1" | cut -d' ' -f1; }
+else
+	echo "build-oracles: neither shasum nor sha256sum is installed" >&2
+	exit 1
+fi
 
 stamp="$PREFIX/.bgpdump.stamp"
 if [ -x "$PREFIX/bgpdump" ] && [ -f "$stamp" ] &&
@@ -37,17 +46,21 @@ else
 		command -v "$tool" >/dev/null || { echo "bgpdump: $tool is missing" >&2; exit 1; }
 	done
 	echo "bgpdump: building $BGPDUMP_COMMIT"
-	git clone --quiet "$BGPDUMP_REPO" "$tmp/bgpdump"
-	(
-		cd "$tmp/bgpdump"
-		git checkout --quiet "$BGPDUMP_COMMIT"
-		./bootstrap.sh >"$tmp/bgpdump-build.log" 2>&1 &&
-			./configure >>"$tmp/bgpdump-build.log" 2>&1 &&
-			make >>"$tmp/bgpdump-build.log" 2>&1
-	) || { cat "$tmp/bgpdump-build.log" >&2; echo "bgpdump: build failed" >&2; exit 1; }
-	cp "$tmp/bgpdump/bgpdump" "$PREFIX/bgpdump"
+	src="$tmp/bgpdump"
+	log="$tmp/bgpdump-build.log"
+	# Every step is chained with &&: set -e does not apply on the left of ||.
+	git clone --quiet "$BGPDUMP_REPO" "$src" &&
+		git -C "$src" checkout --quiet "$BGPDUMP_COMMIT" &&
+		(cd "$src" && ./bootstrap.sh >"$log" 2>&1 && ./configure >>"$log" 2>&1 && make >>"$log" 2>&1) ||
+		{ if [ -f "$log" ]; then cat "$log" >&2; fi; echo "bgpdump: checkout or build of $BGPDUMP_COMMIT failed" >&2; exit 1; }
+	head=$(git -C "$src" rev-parse HEAD)
+	if [ "$head" != "$BGPDUMP_COMMIT" ]; then
+		echo "bgpdump: built $head, not $BGPDUMP_COMMIT; nothing installed" >&2
+		exit 1
+	fi
+	cp "$src/bgpdump" "$PREFIX/bgpdump"
 	chmod 755 "$PREFIX/bgpdump"
-	echo "$BGPDUMP_COMMIT $(sha256 "$PREFIX/bgpdump")" >"$stamp"
+	echo "$head $(sha256 "$PREFIX/bgpdump")" >"$stamp"
 	echo "bgpdump: installed $PREFIX/bgpdump"
 fi
 
