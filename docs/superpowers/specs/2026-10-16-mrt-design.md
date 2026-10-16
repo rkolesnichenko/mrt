@@ -311,8 +311,11 @@ type Diagnostic struct {
   noted with an Info diagnostic (bgpdump also merges only for 2-byte input).
 - **MP_REACH_NLRI with `ctx.RIB`:** first byte non-zero → abbreviated (next
   hop only; the family and NLRI come from the record). First byte zero → full
-  RFC 4760 form, with an Info diagnostic `bgp/mpreach-full-in-rib`. Same test
-  as bgpdump. Without `ctx.RIB`, always the full form.
+  RFC 4760 form, with no diagnostic (`Abbreviated` false records the form, and
+  route-views6 writes it on every entry, so it is not a fault); its family and
+  next hops are decoded but its NLRI is kept in `RawNLRI`, not parsed, since
+  the record supplies the prefix (Ruling R20). Same test as bgpdump. Without
+  `ctx.RIB`, always the full form, NLRI parsed.
 - **A malformed attribute never stops decoding.** Its raw bytes go to
   `Unknown`, a diagnostic names it, and decoding continues with the next
   attribute when the length framing allows. When the framing itself is

@@ -1,6 +1,7 @@
 package bgp
 
 import (
+	"bytes"
 	"net/netip"
 	"testing"
 )
@@ -37,11 +38,30 @@ func TestMPReachAbbreviatedInRIB(t *testing.T) {
 	if len(d) != 0 || r == nil || !r.Abbreviated || r.NextHop != v6global || r.NLRI != nil || r.Family != (Family{}) {
 		t.Fatalf("%+v %v", r, d)
 	}
-	v := concat([]byte{0, 2, 1, 16}, b16(v6global), []byte{0, 32, 0x20, 1, 0x0d, 0xb8})
+	// The full form in a RIB entry (route-views6 writes it on every entry,
+	// Ruling R20): no diagnostic, family and next hops decoded, the NLRI kept
+	// raw (the record supplies the prefix).
+	nlri := []byte{32, 0x20, 1, 0x0d, 0xb8}
+	v := concat([]byte{0, 2, 1, 32}, b16(v6global), b16(v6ll), []byte{0}, nlri)
 	p, d = decodeMP(t, Context{RIB: true}, 14, v...)
 	r = p.MPReach
-	if r == nil || r.Abbreviated || len(r.NLRI) != 1 || len(d) != 1 || d[0].Code != "bgp/mpreach-full-in-rib" || d[0].Severity != SeverityInfo {
+	if len(d) != 0 || r == nil || r.Abbreviated || r.Family != (Family{2, 1}) || r.NextHop != v6global || r.LinkLocal != v6ll ||
+		r.NLRI != nil || !bytes.Equal(r.RawNLRI, nlri) || len(p.Unknown) != 0 {
 		t.Fatalf("%+v %v", r, d)
+	}
+	// ... also with add-path, and when the NLRI would not parse: it is not read.
+	for _, ctx := range []Context{{RIB: true, AddPath: true}, {RIB: true, AS4: true}} {
+		v = concat([]byte{0, 2, 1, 16}, b16(v6global), []byte{0, 200, 1})
+		p, d = decodeMP(t, ctx, 14, v...)
+		if r = p.MPReach; len(d) != 0 || r == nil || r.NLRI != nil || !bytes.Equal(r.RawNLRI, []byte{200, 1}) {
+			t.Fatalf("%+v: %+v %v", ctx, r, d)
+		}
+	}
+	// Outside a RIB entry the same bytes are parsed as before: a /200 is
+	// reported.
+	p, d = decodeMP(t, Context{}, 14, v...)
+	if r = p.MPReach; r == nil || len(d) == 0 || r.RawNLRI != nil {
+		t.Fatalf("not RIB: %+v %v", r, d)
 	}
 	// without RIB the same non-zero first byte is not abbreviated: AFI 0x1002 here
 	p, d = decodeMP(t, Context{}, 14, append([]byte{16}, b16(v6global)...)...)

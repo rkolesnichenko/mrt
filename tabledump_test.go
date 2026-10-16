@@ -127,9 +127,14 @@ func TestRIBIPv6Unicast(t *testing.T) {
 		if e.PeerIndex != 15 || !e.Originated.Equal(time.Unix(ts, 0)) || e.Originated.Location() != time.UTC {
 			t.Errorf("%+v", e)
 		}
-		path, _ := e.Attrs.Decode()
+		path, diags := e.Attrs.Decode()
 		if path.MPReach == nil || path.MPReach.Family != (bgp.Family{AFI: 2, SAFI: 1}) {
 			t.Fatalf("MPReach %+v", path.MPReach)
+		}
+		// No diagnostic for the full form, and its NLRI stays raw: the record
+		// carries the prefix (Ruling R20).
+		if len(diags) != 0 || path.MPReach.NLRI != nil || len(path.MPReach.RawNLRI) == 0 {
+			t.Errorf("diagnostics %v, NLRI %v, RawNLRI %x", diags, path.MPReach.NLRI, path.MPReach.RawNLRI)
 		}
 		// The RFC's bytes are the full RFC 4760 form (first byte 0), not the abbreviated one.
 		if path.MPReach.Abbreviated || path.MPReach.LinkLocal != netip.MustParseAddr("fe80::212:f2ff:fe9f:1b00") {
