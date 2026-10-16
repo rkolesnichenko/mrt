@@ -169,15 +169,24 @@ func (a Attrs) decodeAttr(p *Path, st *as4State, at Attribute, off int) (d *Diag
 		p.ReceivedASPath = asp // ASPath is set from it after the AS4 rule
 	case AttrAS4Path:
 		asp, good := parseASPath(v, 4)
-		if !good {
+		if !good || len(v) == 0 { // RFC 6793 §6: too short to carry an AS is malformed too
 			return diag(SeverityWarning, "bgp/attr-value", "AS4_PATH is malformed"), false
 		}
+		// RFC 6793 §6: confederation segments must not be in AS4_PATH; they
+		// are discarded and the rest of the attribute is used.
+		kept := asp.Segments[:0]
 		for _, s := range asp.Segments {
-			if s.Type == ASConfedSequence || s.Type == ASConfedSet {
-				return diag(SeverityWarning, "bgp/attr-value", "AS4_PATH carries a confederation segment"), false
+			if s.Type != ASConfedSequence && s.Type != ASConfedSet {
+				kept = append(kept, s)
 			}
 		}
-		p.AS4Path, st.hasAS4Path, st.as4PathOff = asp, true, off
+		if len(kept) == 0 {
+			return diag(SeverityWarning, "bgp/attr-value", "AS4_PATH holds only confederation segments, all discarded"), false
+		}
+		p.AS4Path, st.hasAS4Path, st.as4PathOff = ASPath{kept}, true, off
+		if len(kept) < len(asp.Segments) {
+			return diag(SeverityWarning, "bgp/attr-value", "AS4_PATH confederation segments discarded"), true
+		}
 	case AttrAggregator:
 		switch {
 		case !a.ctx.AS4 && len(v) == 6:

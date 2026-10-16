@@ -87,7 +87,11 @@ func mergeAS4(asPath, as4Path ASPath) (ASPath, bool) {
 }
 
 // applyAS4 runs the RFC 6793 §4.2.3 rule over what Decode gathered, setting
-// p.ASPath and p.Aggregator. It returns an Info diagnostic when it ignored a
+// p.ASPath and p.Aggregator. With ctx.AS4, or when AGGREGATOR and
+// AS4_AGGREGATOR both decoded and AGGREGATOR's AS is not AS_TRANS, AGGREGATOR
+// is the aggregator and the AS4 attributes are ignored. Otherwise the
+// aggregator is AS4_AGGREGATOR when it decoded (else AGGREGATOR) and AS4_PATH
+// is merged into AS_PATH. It returns an Info diagnostic when it ignored a
 // decoded AS4_PATH or AS4_AGGREGATOR, naming AS4_PATH when that was present.
 func applyAS4(p *Path, st *as4State, ctx Context) []Diagnostic {
 	ignored := func(msg string) []Diagnostic {
@@ -98,7 +102,7 @@ func applyAS4(p *Path, st *as4State, ctx Context) []Diagnostic {
 		return []Diagnostic{d}
 	}
 	p.ASPath = p.ReceivedASPath
-	if ctx.AS4 || (st.hasAgg && st.agg.AS != ASTrans) {
+	if ctx.AS4 || (st.hasAgg && st.hasAS4Agg && st.agg.AS != ASTrans) {
 		p.Aggregator, p.HasAggregator = st.agg, st.hasAgg
 		switch {
 		case !st.hasAS4Path && !st.hasAS4Agg:

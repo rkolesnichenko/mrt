@@ -158,7 +158,7 @@ func TestAS4Merge(t *testing.T) {
 		}
 	})
 
-	t.Run("AGGREGATOR not AS_TRANS, only AS4_AGGREGATOR", func(t *testing.T) {
+	t.Run("AGGREGATOR not AS_TRANS, AS4_AGGREGATOR without AS4_PATH", func(t *testing.T) {
 		raw := concat(agg2(100), agg4(18, 70000))
 		p, diags := NewAttrs(raw, ctx).Decode()
 		if p.Aggregator != (Aggregator{100, addr7}) {
@@ -217,10 +217,51 @@ func TestAS4Merge(t *testing.T) {
 		}
 	})
 
-	t.Run("AS4_PATH with confed segment", func(t *testing.T) {
+	t.Run("AGGREGATOR not AS_TRANS, no AS4_AGGREGATOR", func(t *testing.T) {
+		// The AGGREGATOR rule needs both aggregators (RFC 6793 §4.2.3, Ruling R5).
 		raw := concat(
 			asPathAttr(seg(2, ASSequence, 100, 23456)),
-			as4PathAttr(seg(4, ASConfedSequence, 64512), seg(4, ASSequence, 70000)),
+			agg2(100),
+			as4PathAttr(seg(4, ASSequence, 70000)),
+		)
+		p, diags := NewAttrs(raw, ctx).Decode()
+		if len(diags) != 0 {
+			t.Fatalf("diags = %+v", diags)
+		}
+		if want := path(sq(100, 70000)); !reflect.DeepEqual(p.ASPath, want) {
+			t.Errorf("ASPath = %v", p.ASPath)
+		}
+		if !p.HasAggregator || p.Aggregator != (Aggregator{100, addr7}) {
+			t.Errorf("aggregator = %v %+v", p.HasAggregator, p.Aggregator)
+		}
+	})
+
+	t.Run("AS4_PATH confed segments discarded", func(t *testing.T) {
+		asp := asPathAttr(seg(2, ASSequence, 100, 23456))
+		raw := concat(
+			asp,
+			as4PathAttr(seg(4, ASConfedSequence, 64512), seg(4, ASSequence, 70000), seg(4, ASConfedSet, 64513)),
+		)
+		p, diags := NewAttrs(raw, ctx).Decode()
+		if want := path(sq(70000)); !reflect.DeepEqual(p.AS4Path, want) {
+			t.Errorf("AS4Path = %v", p.AS4Path)
+		}
+		if want := path(sq(100, 70000)); !reflect.DeepEqual(p.ASPath, want) {
+			t.Errorf("ASPath = %v", p.ASPath)
+		}
+		if len(diags) != 1 || diags[0].Code != "bgp/attr-value" || diags[0].Attr != AttrAS4Path ||
+			diags[0].Severity != SeverityWarning || diags[0].Offset != len(asp) {
+			t.Errorf("diags = %+v", diags)
+		}
+		if len(p.Unknown) != 0 {
+			t.Errorf("unknown = %v", p.Unknown)
+		}
+	})
+
+	t.Run("AS4_PATH only confed segments", func(t *testing.T) {
+		raw := concat(
+			asPathAttr(seg(2, ASSequence, 100, 23456)),
+			as4PathAttr(seg(4, ASConfedSequence, 64512)),
 		)
 		p, diags := NewAttrs(raw, ctx).Decode()
 		if want := path(sq(100, 23456)); !reflect.DeepEqual(p.ASPath, want) {
@@ -235,6 +276,27 @@ func TestAS4Merge(t *testing.T) {
 		}
 		if len(p.Unknown) != 1 || p.Unknown[0].Code != AttrAS4Path {
 			t.Errorf("unknown = %v", p.Unknown)
+		}
+	})
+
+	t.Run("AS4_PATH zero length", func(t *testing.T) {
+		// RFC 6793 §6: too short to carry one AS, so malformed; AS_PATH keeps
+		// its own rule that an empty value is the empty path.
+		raw := concat(asPathAttr(seg(2, ASSequence, 100, 23456)), attr(0xC0, 17))
+		p, diags := NewAttrs(raw, ctx).Decode()
+		if want := path(sq(100, 23456)); !reflect.DeepEqual(p.ASPath, want) {
+			t.Errorf("ASPath = %v", p.ASPath)
+		}
+		if len(diags) != 1 || diags[0].Code != "bgp/attr-value" || diags[0].Attr != AttrAS4Path ||
+			diags[0].Severity != SeverityWarning {
+			t.Errorf("diags = %+v", diags)
+		}
+		if !reflect.DeepEqual(p.Unknown, []Attribute{{0xC0, 17, []byte{}}}) {
+			t.Errorf("unknown = %v", p.Unknown)
+		}
+		p, diags = NewAttrs(attr(0x40, 2), ctx).Decode()
+		if len(diags) != 0 || len(p.Unknown) != 0 || len(p.ASPath.Segments) != 0 {
+			t.Errorf("empty AS_PATH: p = %+v diags = %+v", p, diags)
 		}
 	})
 
