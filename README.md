@@ -74,6 +74,7 @@ routes with it.
 ```go
 type key struct {
 	peer   netip.Addr
+	as     bgp.ASN // a peer is its address and AS
 	prefix netip.Prefix
 	pathID uint32
 }
@@ -95,7 +96,7 @@ apply := func(name string) {
 		if err != nil {
 			continue // reported and skipped, as with Routes
 		}
-		k := key{route.Peer.Addr, route.Prefix, route.PathID}
+		k := key{route.Peer.Addr, route.Peer.AS, route.Prefix, route.PathID}
 		switch route.Kind {
 		case mrt.KindRIB, mrt.KindAnnounce:
 			table[k] = route.Path // shared and read-only
@@ -104,7 +105,7 @@ apply := func(name string) {
 		case mrt.KindPeerState:
 			if route.OldState == mrt.StateEstablished && route.NewState != mrt.StateEstablished {
 				for k := range table {
-					if k.peer == route.Peer.Addr {
+					if k.peer == route.Peer.Addr && k.as == route.Peer.AS {
 						delete(table, k)
 					}
 				}
@@ -136,11 +137,14 @@ The whole-path index cost 1,510,980,216 live bytes before it was dropped, and
 the interner's maps of shared parts (their keys and tables, not the shared
 arrays) 1,194,734,912 of the 3,886,148,000. The caller's own table is not
 counted: the tool's 16-byte stand-in per route is 1,245,648,832 bytes more.
-The load took 55.9 s, run with `GOMAXPROCS=4 GOMEMLIMIT=16GiB` on the
-command line (the log does not record them; `heldsize` prints its
-environment from now on) with Go 1.27.2 on an Apple M3 Max
-(`.data/machine-v0.2.log`, recorded the same day). A `bgp.Path` is 112 bytes
-(328 in v0.1; log `.data/pathsize-main.log`).
+The load took 55.9 s with Go 1.27.2 on an Apple M3 Max
+(`.data/machine-v0.2.log`, recorded the same day). The run's GOMAXPROCS and
+GOMEMLIMIT were not recorded in its log; the intended command set
+`GOMAXPROCS=4 GOMEMLIMIT=16GiB`, and `heldsize` now prints its environment
+first. A `bgp.Path` is 112 bytes on 64-bit platforms (328 in v0.1; log
+`.data/pathsize-main.log`). With the default `GOGC`, the Go heap can grow to
+about twice the live bytes before a collection, so set `GOMEMLIMIT` to hold a
+table within a fixed memory budget.
 
 `mrt.Records` is the layer below: every record, typed (`PeerIndexTable`, `RIB`,
 `TableDump`, `BGP4MPMessage`, `BGP4MPStateChange`, or `Other`), each with its
@@ -188,6 +192,7 @@ bytes per decompressed byte. A full `Routes` pass from the compressed file took
 1.27.2, Apple M3 Max, `GOMAXPROCS=4`; log `.data/compare-v0.2.log`).
 
 v0.1 figures:
+
 On the 2026-10-16 14:00 route-views6 RIB (25,434,533 bytes compressed,
 470,078,858 decompressed), `internal/compare` measured bytes allocated while
 decoding every entry and attribute: `mrt.Routes` 3,117,745,208, gobgp v4.10.0

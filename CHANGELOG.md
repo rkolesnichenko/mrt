@@ -9,8 +9,9 @@ a minor version may change the API.
 ## [Unreleased]
 
 Routes a reconciliation library can hold. Every figure below comes from a
-command run on 2026-10-20 (Go 1.27.2, Apple M3 Max, `GOMAXPROCS=4`); the log
-is named.
+command run on 2026-10-20 with Go 1.27.2 on an Apple M3 Max
+(`.data/machine-v0.2.log`); the log is named. Each entry says which
+environment settings its log records.
 
 ### Added
 
@@ -35,7 +36,9 @@ is named.
 - Typed extended communities: `ExtCommunity.Type`, `Subtype`, `Transitive`,
   `RouteTarget` and `RouteOrigin` (`ExtCommunityAdmin`), `Color`,
   `Encapsulation`, `LinkBandwidth`, `OriginValidation` (`ValidationState`:
-  `ValidationValid`, `ValidationNotFound`, `ValidationInvalid`), and `String`
+  `ValidationValid`, `ValidationNotFound`, `ValidationInvalid`, with `String`;
+  the values are RFC 8097's wire encoding, so the zero value is
+  `ValidationValid`), and `String`
   (`rt:AS:local`, `ro:a.b.c.d:local`, `color:N`, `encap:N`, `lbw:AS:F`,
   `ov:valid`, or `0x` and the 8 bytes in hex when a label would hide bytes).
 - The diagnostic codes as constants: `bgp.DiagMessageHeader`,
@@ -48,10 +51,11 @@ is named.
 
 ### Changed
 
-- **Breaking: `bgp.Path` is compact**, 112 bytes instead of 328
-  (`.data/heldsize-v0.2.log`, `.data/pathsize-main.log`). The rare attributes
-  moved behind one unexported pointer, nil when a path has none of them, and
-  these fields became methods:
+- **Breaking: `bgp.Path` is compact**, 112 bytes on 64-bit platforms instead
+  of 328 (`.data/heldsize-v0.2.log`, `.data/pathsize-main.log`; 68 bytes on
+  32-bit platforms, pinned by `TestPathSize`). The
+  rare attributes moved behind one unexported pointer, nil when a path has
+  none of them, and these fields became methods:
   - `NextHop` → `NextHop() netip.Addr` (zero when absent);
   - `ReceivedASPath` → `ReceivedASPath() ASPath` (equal to `ASPath` unless
     AS4_PATH was merged);
@@ -66,7 +70,10 @@ is named.
   The fields that stay (`ASPath`, `Communities`, `LargeCommunities`,
   `MPReach`, `MED`, `LocalPref`, `OnlyToCustomer`, `Origin`, `HasOrigin`,
   `HasMED`, `HasLocalPref`, `AtomicAggregate`, `HasOnlyToCustomer`) are in a
-  new order. A `Path` is now produced only by decoding.
+  new order. A `Path` is now produced only by decoding. NEXT_HOP and the rare
+  attributes are unexported fields now, so `encoding/json` (and anything else
+  that reflects over exported fields) no longer marshals them; `Path` has no
+  `MarshalJSON`.
 - **Ruling R20 amended:** in a RIB entry, a full-form (RFC 4760)
   MP_REACH_NLRI keeps its family and next hops but not its NLRI:
   `MPReach.RawNLRI` is nil (it held the NLRI bytes, aliasing the record).
@@ -91,14 +98,16 @@ is named.
   with the arrays they share are 2,691,413,088. The whole-path index cost
   1,510,980,216 more before it was dropped. The caller's table is not
   counted (the tool's 16-byte stand-in per route: 1,245,648,832 bytes). The
-  load took 55.9 s. The log does not record the environment: the run's
-  command line set `GOMAXPROCS=4 GOMEMLIMIT=16GiB` (the maintainer's notes
-  of the run, kept beside `.data/`), and Go
-  1.27.2 on an Apple M3 Max is from `.data/machine-v0.2.log`, recorded the
-  same day. `heldsize` now prints its Go version, GOOS/GOARCH, GOMAXPROCS and
-  memory limit first.
+  load took 55.9 s. The run's GOMAXPROCS and GOMEMLIMIT were not recorded in
+  its log (the plan, `docs/superpowers/plans/2026-10-20-mrt-v0.2.md` Task 9
+  Step 1, runs it as Task 3 Step 3 does, with `GOMAXPROCS=4
+  GOMEMLIMIT=16GiB`, which is what was intended); Go 1.27.2 on an Apple M3
+  Max is from `.data/machine-v0.2.log`, recorded the same day. `heldsize` now
+  prints its Go version, GOOS/GOARCH, GOMAXPROCS and memory limit first, so
+  future runs record their environment.
 - Against gobgp v4.10.0 on the route-views6 RIB (25,709,978 bytes
-  compressed, 471,448,090 decompressed; `.data/compare-v0.2.log`):
+  compressed, 471,448,090 decompressed; `.data/compare-v0.2.log`, which
+  records `GOMAXPROCS 4`):
   `mrt.Routes` with every path decoded allocates 2,055,757,256 bytes in
   24,470,640 allocations and gobgp 3,689,220,904 bytes in 116,626,320 (ratio
   0.557; 0.1.0 reported 0.847 on the 2026-10-16 file), one route per gobgp
