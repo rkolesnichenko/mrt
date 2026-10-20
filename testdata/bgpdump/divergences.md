@@ -27,7 +27,7 @@ in the data. RFC 7606 section 7.4: "The attribute is considered malformed if
 its length is not 4" and "An UPDATE message with a malformed MULTI_EXIT_DISC
 attribute SHALL be handled using the approach of "treat-as-withdraw"". RFC
 7606's actions are out of mrt's scope (spec §11): mrt keeps the route with the
-MED absent, keeps the raw attribute in `Path.Unknown`, and reports the fault
+MED absent, keeps the raw attribute in `Path.Unknown()`, and reports the fault
 as a Warning `bgp/attr-length` on the MED, so a consumer can apply
 treat-as-withdraw itself; mrtdump exits 1.
 

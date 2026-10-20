@@ -61,6 +61,84 @@ runs over a committed fixture (the path differs). A withdrawal has a nil
 `Path`, so check `route.Kind` (`KindRIB`, `KindAnnounce`, `KindWithdraw`) before
 reading it; a RIB dump's routes are `KindRIB`.
 
+## Holding a table
+
+To keep routes in memory, load the RIB dumps through a `bgp.Interner`: RIB
+entries with equal attributes then share one `*bgp.Path`, and paths that differ
+share their equal AS paths and community lists. Once the RIBs are in, drop the
+interner's whole-path index; UPDATE paths are never shared whole, but they keep
+sharing parts. With `PeerStates`, `RoutesWith` also yields a `KindPeerState`
+route for each session state change, so a session that goes down can take its
+routes with it.
+
+```go
+type key struct {
+	peer   netip.Addr
+	prefix netip.Prefix
+	pathID uint32
+}
+table := make(map[key]*bgp.Path)
+in := bgp.NewInterner()
+opts := mrt.RoutesOptions{PeerStates: true, Interner: in}
+
+apply := func(name string) {
+	f, err := os.Open(name)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	r, err := mrt.Decompress(f)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for route, err := range mrt.RoutesWith(mrt.Records(r), opts) {
+		if err != nil {
+			continue // reported and skipped, as with Routes
+		}
+		k := key{route.Peer.Addr, route.Prefix, route.PathID}
+		switch route.Kind {
+		case mrt.KindRIB, mrt.KindAnnounce:
+			table[k] = route.Path // shared and read-only
+		case mrt.KindWithdraw:
+			delete(table, k)
+		case mrt.KindPeerState:
+			if route.OldState == mrt.StateEstablished && route.NewState != mrt.StateEstablished {
+				for k := range table {
+					if k.peer == route.Peer.Addr {
+						delete(table, k)
+					}
+				}
+			}
+		}
+	}
+}
+
+apply("rib.20261020.1400.bz2")
+in.DropPathIndex() // the RIBs are in
+apply("updates.20261020.1400.bz2")
+```
+
+This is `ExampleRoutesWith` in [example_test.go](example_test.go), run by
+`go test` over the committed route-views6 RIB and updates slices, then a
+synthetic session cycle (the RouteViews updates slice has no state change).
+Paths decoded through an interner hold no record bytes, and every route is
+deeply equal to the one `Routes` gives without it. The interner is safe for
+concurrent use, so one can serve several collectors loaded in parallel; it
+grows until it is dropped.
+
+On the 2026-10-20 RIBs of RIS rrc00 (08:00), route-views2 and route-views6
+(14:00), loaded into one interner (`internal/heldsize`, log
+`.data/heldsize-v0.2.log`): 77,853,052 routes, 12,809,618 distinct paths, and
+after `DropPathIndex` 3,886,148,000 live bytes (`HeapAlloc`) retained by `mrt`
+(5,266,546,688 bytes of heap spans in use, `HeapInuse`, the resident cost).
+The whole-path index cost 1,510,980,216 live bytes before it was dropped, and
+the interner's maps of shared parts (their keys and tables, not the shared
+arrays) 1,194,734,912 of the 3,886,148,000. The caller's own table is not
+counted: the tool's 16-byte stand-in per route is 1,245,648,832 bytes more.
+The load took 55.9 s (Go 1.27.2, Apple M3 Max, `GOMAXPROCS=4`,
+`GOMEMLIMIT=16GiB`). A `bgp.Path` is 112 bytes (328 in v0.1; log
+`.data/pathsize-main.log`).
+
 `mrt.Records` is the layer below: every record, typed (`PeerIndexTable`, `RIB`,
 `TableDump`, `BGP4MPMessage`, `BGP4MPStateChange`, or `Other`), each with its
 exact bytes in `Raw()`, so concatenating them reproduces the input. The `bgp`
@@ -91,10 +169,22 @@ route-views2's RIB (17,454,476), route-views6's RIB (4,702,913) and the
 14:00-14:59 updates of rrc00 and route-views2. Every differing line is a
 documented divergence (bgpdump cuts long community fields); none was
 unclassified. Source: `.data/realdata-*-r21.log`, kept by the maintainer and
-not committed.
+not committed. On 2026-10-20 route-views6's 14:00 RIB was compared again
+(4,723,276 lines, 2,097 known divergences S16, 0 unclassified; log
+`.data/realdata-rv6-v0.2.log`).
 
 ## Performance
 
+On the 2026-10-20 14:00 route-views6 RIB (25,709,978 bytes compressed,
+471,448,090 decompressed), `internal/compare` measured `mrt.Routes`, every path
+decoded, at 2,055,757,256 bytes allocated in 24,470,640 allocations, and gobgp
+v4.10.0 at 3,689,220,904 bytes in 116,626,320 (ratio 0.557), with one route per
+gobgp entry (4,723,276) and no errors. `mrt.Records` alone allocates 1.179
+bytes per decompressed byte. A full `Routes` pass from the compressed file took
+8.102 s, of which bzip2 decompression 6.987 s (86.2%), at normal priority (Go
+1.27.2, Apple M3 Max, `GOMAXPROCS=4`; log `.data/compare-v0.2.log`).
+
+v0.1 figures:
 On the 2026-10-16 14:00 route-views6 RIB (25,434,533 bytes compressed,
 470,078,858 decompressed), `internal/compare` measured bytes allocated while
 decoding every entry and attribute: `mrt.Routes` 3,117,745,208, gobgp v4.10.0
@@ -111,7 +201,7 @@ benchmarks over the committed fixtures gave, at normal priority and then under
 `Records` over route-views2's 6,969.71 and 1,374.06 MB/s, bzip2 decompression
 52.63 and 13.70 MB/s (logs `.data/bench-v011-normal.log` and
 `.data/bench-v011-background.log`). `Routes` decodes about eight times faster
-than bzip2 decompresses, at either priority. A full pass at normal priority has not been timed.
+than bzip2 decompresses, at either priority. (The v0.2 full pass above was timed at normal priority.)
 
 ## Data and licence
 

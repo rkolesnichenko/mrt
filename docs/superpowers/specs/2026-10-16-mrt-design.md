@@ -154,6 +154,12 @@ strictly `cmd → mrt → bgp`. No package opens a socket. `Decompress` reads an
 - **C3** Sentinels use `errors.New`. A type is named after the protocol
   element it is.
 - Parsed values (records, paths, routes) are values, not pointers.
+  Exception (user's decision 2026-10-20, v0.2 design §6.4):
+  `(*bgp.Interner).Decode(Attrs) (*Path, []Diagnostic)` returns a pointer,
+  because the path is shared with every caller that decoded an equal block
+  and sharing is the interner's purpose (`Route.Path` is already a
+  `*bgp.Path`). `Attrs.Decode` still returns a value, and there is no
+  `Attrs.DecodeWith`: C1 would require it to return what `Decode` returns.
 - `api/<pkg>.txt` is the golden of every exported signature;
   `MRT_API_UPDATE=1` rewrites it.
 

@@ -40,16 +40,18 @@ func (k Kind) String() string {
 	return "?"
 }
 
-// Route is one (peer, prefix, path ID) from a RIB entry or an UPDATE.
+// Route is one (peer, prefix, path ID) from a RIB entry or an UPDATE, or,
+// with RoutesOptions.PeerStates, a peer's session state change
+// (KindPeerState).
 type Route struct {
-	Time      time.Time // record time; Originated is on the entry for RIB routes
+	Time      time.Time // record time; a RIB route's origination time is Originated
 	Kind      Kind
 	Peer      Peer
 	Family    bgp.Family
 	Prefix    netip.Prefix
 	PathID    uint32
 	HasPathID bool
-	Path      *bgp.Path // nil for Withdraw; shared by every route from one UPDATE or RIB entry
+	Path      *bgp.Path // nil for KindWithdraw and KindPeerState; shared by every route from one UPDATE or RIB entry (and see RoutesOptions.Interner)
 	// Diagnostics are from decoding the UPDATE or the entry's attributes,
 	// shared the same way. For an UPDATE's routes every Offset counts from
 	// the start of the BGP message (attribute diagnostics are rebased onto
@@ -69,10 +71,14 @@ type RoutesOptions struct {
 	// state change record, in stream order among the routes, so a consumer can
 	// drop a peer's routes when its session resets.
 	PeerStates bool
-	// Interner, when set, decodes path attributes through it, so routes with
-	// equal attributes share one Path and its parts, which hold no record
-	// bytes. The routes are deeply equal to those decoded without it. It may
-	// be shared by several Routes iterations and goroutines.
+	// Interner, when set, decodes path attributes through it. RIB entries
+	// (TABLE_DUMP_V2 and TABLE_DUMP) with equal attributes then share one
+	// Path. An UPDATE's path is its own, as is the path of an entry whose
+	// attributes have a Warning or Error diagnostic, but each shares its AS
+	// paths and community lists with equal ones decoded before. Every path
+	// holds no record bytes, and the routes are deeply equal to those decoded
+	// without it. It may be shared by several RoutesWith iterations and
+	// goroutines; see bgp.Interner.
 	Interner *bgp.Interner
 }
 
@@ -107,8 +113,8 @@ func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error] {
 // RoutesWith is Routes with options; see Routes for what it yields. With
 // PeerStates it also yields a KindPeerState Route, with no error, for each
 // BGP4MP state change record, in stream order among the routes. With Interner
-// the paths come from it and are shared across entries and UPDATEs, not only
-// within one.
+// the paths are decoded through it and shared across RIB entries, as
+// RoutesOptions.Interner describes.
 func RoutesWith(records iter.Seq2[Record, error], opts RoutesOptions) iter.Seq2[Route, error] {
 	var table PeerIndexTable
 	return func(yield func(Route, error) bool) {
