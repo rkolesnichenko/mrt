@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -45,14 +47,42 @@ func TestRealData(t *testing.T) {
 	dir = filepath.Join(dir, "realdata")
 	files := readManifest(t, filepath.Join(dir, "MANIFEST"))
 	for _, f := range files {
-		t.Run(f.name, func(t *testing.T) { realDataFile(t, bgpdump, filepath.Join(dir, f.name)) })
+		t.Run(f.name, func(t *testing.T) {
+			path := filepath.Join(dir, f.name)
+			if err := checkPinned(path, f); err != nil {
+				t.Fatalf("%v (rerun scripts/fetch-mrt.sh)", err)
+			}
+			realDataFile(t, bgpdump, path)
+		})
 	}
 }
 
 // manifestFile is one line of MANIFEST: name, URL, size, sha256.
 type manifestFile struct {
-	name, url string
-	size      int64
+	name, url, sha256 string
+	size              int64
+}
+
+// checkPinned errors unless the file at path has the size and sha256 that
+// MANIFEST pins for it, so a replaced file cannot stand in for the pinned set.
+func checkPinned(path string, f manifestFile) error {
+	fh, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer fh.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, fh)
+	if err != nil {
+		return err
+	}
+	if n != f.size {
+		return fmt.Errorf("%s: %d bytes, MANIFEST pins %d", path, n, f.size)
+	}
+	if sum := hex.EncodeToString(h.Sum(nil)); sum != f.sha256 {
+		return fmt.Errorf("%s: sha256 %s, MANIFEST pins %s", path, sum, f.sha256)
+	}
+	return nil
 }
 
 // readManifest reads MANIFEST, smallest file first.
@@ -72,7 +102,7 @@ func readManifest(t *testing.T, path string) []manifestFile {
 		if err != nil {
 			t.Fatalf("%s: bad size in %q", path, l)
 		}
-		fs = append(fs, manifestFile{f[0], f[1], size})
+		fs = append(fs, manifestFile{name: f[0], url: f[1], sha256: f[3], size: size})
 	}
 	slices.SortStableFunc(fs, func(a, b manifestFile) int { return cmp.Compare(a.size, b.size) })
 	return fs
@@ -632,6 +662,31 @@ func TestCompareLinesResyncs(t *testing.T) {
 		}
 		if tc.firstContains != "" && !strings.Contains(strings.Join(s.first, "\n"), tc.firstContains) {
 			t.Errorf("%s: first mismatches %q lack %q", tc.name, s.first, tc.firstContains)
+		}
+	}
+}
+
+func TestCheckPinned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(path, []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const sum = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" // sha256("abc")
+	tests := []struct {
+		f     manifestFile
+		wantE string // "" for no error, else a substring of it
+	}{
+		{manifestFile{name: "f", size: 3, sha256: sum}, ""},
+		{manifestFile{name: "f", size: 4, sha256: sum}, "3 bytes, MANIFEST pins 4"},
+		{manifestFile{name: "f", size: 3, sha256: strings.Repeat("0", 64)}, "sha256 " + sum},
+	}
+	for _, tc := range tests {
+		err := checkPinned(path, tc.f)
+		switch {
+		case tc.wantE == "" && err != nil:
+			t.Errorf("%+v: %v", tc.f, err)
+		case tc.wantE != "" && (err == nil || !strings.Contains(err.Error(), tc.wantE)):
+			t.Errorf("%+v: err = %v, want it to contain %q", tc.f, err, tc.wantE)
 		}
 	}
 }

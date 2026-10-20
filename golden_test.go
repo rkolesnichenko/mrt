@@ -649,6 +649,12 @@ func checkLive(t *testing.T, path string, out []byte, crashed bool) {
 	}
 }
 
+// bgpdumpAborts are the fixtures bgpdump is expected to abort on (B2: a
+// duplicate attribute). Only these may end with bgpdump killed by a signal;
+// on any other fixture that fails the test, so that an oracle that dies at
+// once cannot pass by printing nothing.
+var bgpdumpAborts = map[string]bool{"attrs-malformed": true}
+
 func TestMatchesBgpdump(t *testing.T) {
 	bin := lookPath(t, "bgpdump")
 	for _, f := range fixtures(t) {
@@ -656,6 +662,9 @@ func TestMatchesBgpdump(t *testing.T) {
 			out, status, err := oracle.Bgpdump(bin, f.path)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if status < 0 && !bgpdumpAborts[f.name] {
+				t.Fatalf("bgpdump was killed by a signal, which only %v are expected to cause (divergences.md)", slices.Sorted(maps.Keys(bgpdumpAborts)))
 			}
 			if status != 0 {
 				t.Logf("bgpdump exited with status %d (-1: killed by a signal, as when it asserts); its output must be a prefix of the golden", status)
