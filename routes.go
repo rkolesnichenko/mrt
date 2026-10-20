@@ -19,9 +19,13 @@ const (
 	KindRIB      Kind = 1 // an entry of a RIB dump
 	KindAnnounce Kind = 2 // announced by an UPDATE
 	KindWithdraw Kind = 3 // withdrawn by an UPDATE
+	// KindPeerState is a session state change (BGP4MP STATE_CHANGE), yielded
+	// only with RoutesOptions.PeerStates. Only Time, Peer, OldState and
+	// NewState are set.
+	KindPeerState Kind = 4
 )
 
-// String returns "B", "A" or "W", and "?" for the zero Kind or any other value.
+// String returns "B", "A", "W" or "S", and "?" for the zero Kind or any other value.
 func (k Kind) String() string {
 	switch k {
 	case KindRIB:
@@ -30,6 +34,8 @@ func (k Kind) String() string {
 		return "A"
 	case KindWithdraw:
 		return "W"
+	case KindPeerState:
+		return "S"
 	}
 	return "?"
 }
@@ -49,6 +55,34 @@ type Route struct {
 	// the start of the BGP message (attribute diagnostics are rebased onto
 	// it); for a RIB or TABLE_DUMP entry's, from the entry's attribute block.
 	Diagnostics []bgp.Diagnostic
+	// Originated is when the entry's route was originated, for KindRIB routes
+	// from TABLE_DUMP_V2 and TABLE_DUMP entries; zero for every other kind.
+	Originated time.Time
+	// OldState and NewState are the session states of a KindPeerState event,
+	// zero otherwise.
+	OldState, NewState State
+}
+
+// RoutesOptions are the options of RoutesWith.
+type RoutesOptions struct {
+	// PeerStates makes RoutesWith yield a KindPeerState Route for every BGP4MP
+	// state change record, in stream order among the routes, so a consumer can
+	// drop a peer's routes when its session resets.
+	PeerStates bool
+	// Interner, when set, decodes path attributes through it, so routes with
+	// equal attributes share one Path and its parts, which hold no record
+	// bytes. The routes are deeply equal to those decoded without it. It may
+	// be shared by several Routes iterations and goroutines.
+	Interner *bgp.Interner
+}
+
+// decode decodes an attribute block, through the interner when there is one.
+func (o RoutesOptions) decode(a bgp.Attrs) (*bgp.Path, []bgp.Diagnostic) {
+	if o.Interner != nil {
+		return o.Interner.Decode(a)
+	}
+	p, d := a.Decode()
+	return &p, d
 }
 
 // Routes turns records into routes: RIB entries (TABLE_DUMP_V2 and legacy
@@ -64,8 +98,18 @@ type Route struct {
 // after a break goes on with the next record from records (as Records does)
 // and the same peer index table, even when records starts again from the
 // beginning; the routes left in the record it broke in are not yielded. It
-// must not be ranged over by two goroutines at once.
+// must not be ranged over by two goroutines at once. Routes is
+// RoutesWith(records, RoutesOptions{}).
 func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error] {
+	return RoutesWith(records, RoutesOptions{})
+}
+
+// RoutesWith is Routes with options; see Routes for what it yields. With
+// PeerStates it also yields a KindPeerState Route, with no error, for each
+// BGP4MP state change record, in stream order among the routes. With Interner
+// the paths come from it and are shared across entries and UPDATEs, not only
+// within one.
+func RoutesWith(records iter.Seq2[Record, error], opts RoutesOptions) iter.Seq2[Route, error] {
 	var table PeerIndexTable
 	return func(yield func(Route, error) bool) {
 		for rec, err := range records {
@@ -85,11 +129,19 @@ func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error] {
 			case PeerIndexTable:
 				table = r
 			case RIB:
-				ok = ribRoutes(r, table, yield)
+				ok = ribRoutes(r, table, opts, yield)
 			case TableDump:
-				ok = tableDumpRoute(r, yield)
+				ok = tableDumpRoute(r, opts, yield)
 			case BGP4MPMessage:
-				ok = messageRoutes(r, yield)
+				ok = messageRoutes(r, opts, yield)
+			case BGP4MPStateChange:
+				if opts.PeerStates {
+					ok = yield(Route{
+						Time: r.Header().Time, Kind: KindPeerState,
+						Peer:     Peer{Addr: r.PeerAddr, AS: r.PeerAS},
+						OldState: r.Old, NewState: r.New,
+					}, nil)
+				}
 			}
 			if !ok {
 				return
@@ -98,7 +150,7 @@ func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error] {
 	}
 }
 
-func ribRoutes(r RIB, table PeerIndexTable, yield func(Route, error) bool) bool {
+func ribRoutes(r RIB, table PeerIndexTable, opts RoutesOptions, yield func(Route, error) bool) bool {
 	if !r.Prefix.IsValid() {
 		return true
 	}
@@ -118,12 +170,12 @@ func ribRoutes(r RIB, table PeerIndexTable, yield func(Route, error) bool) bool 
 			}
 			continue
 		}
-		p, d := e.Attrs.Decode()
+		p, d := opts.decode(e.Attrs)
 		rt := Route{
 			Time: h.Time, Kind: KindRIB, Peer: table.Peers[e.PeerIndex],
 			Family: r.Family, Prefix: r.Prefix,
 			PathID: e.PathID, HasPathID: r.AddPath,
-			Path: &p, Diagnostics: d,
+			Path: p, Diagnostics: d, Originated: e.Originated,
 		}
 		if h.Subtype == SubRIBGenericAddPath {
 			rt.PathID = r.PathID
@@ -135,17 +187,17 @@ func ribRoutes(r RIB, table PeerIndexTable, yield func(Route, error) bool) bool 
 	return true
 }
 
-func tableDumpRoute(r TableDump, yield func(Route, error) bool) bool {
+func tableDumpRoute(r TableDump, opts RoutesOptions, yield func(Route, error) bool) bool {
 	h := r.Header()
 	fam := bgp.Family{AFI: 1, SAFI: 1}
 	if h.Subtype == SubAFIIPv6 {
 		fam.AFI = 2
 	}
-	p, d := r.Attrs.Decode()
-	return yield(Route{Time: h.Time, Kind: KindRIB, Peer: r.Peer, Family: fam, Prefix: r.Prefix, Path: &p, Diagnostics: d}, nil)
+	p, d := opts.decode(r.Attrs)
+	return yield(Route{Time: h.Time, Kind: KindRIB, Peer: r.Peer, Family: fam, Prefix: r.Prefix, Path: p, Diagnostics: d, Originated: r.Originated}, nil)
 }
 
-func messageRoutes(m BGP4MPMessage, yield func(Route, error) bool) bool {
+func messageRoutes(m BGP4MPMessage, opts RoutesOptions, yield func(Route, error) bool) bool {
 	if m.Local {
 		return true
 	}
@@ -158,7 +210,7 @@ func messageRoutes(m BGP4MPMessage, yield func(Route, error) bool) bool {
 		return true
 	}
 	u, d1 := bgp.ParseUpdate(m.Message, m.Context())
-	p, d2 := u.Attrs.Decode()
+	p, d2 := opts.decode(u.Attrs)
 	var diags []bgp.Diagnostic
 	if len(d1)+len(d2) > 0 {
 		// Decode's offsets count from the attribute block, which starts after
@@ -181,7 +233,7 @@ func messageRoutes(m BGP4MPMessage, yield func(Route, error) bool) bool {
 			rt.Kind, rt.Family = kind, fam
 			rt.Prefix, rt.PathID, rt.HasPathID = n.Prefix, n.PathID, n.HasPathID
 			if kind != KindWithdraw {
-				rt.Path = &p
+				rt.Path = p
 			}
 			routes++
 			if !yield(rt, nil) {

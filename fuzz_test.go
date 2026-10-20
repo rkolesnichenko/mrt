@@ -7,11 +7,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/rkolesnichenko/mrt"
+	"github.com/rkolesnichenko/mrt/bgp"
 )
 
 // seedCap bounds each seed so fuzzing stays fast.
@@ -129,20 +131,48 @@ func FuzzRoutes(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, in []byte) {
-		for rt, err := range mrt.Routes(mrt.Records(bytes.NewReader(in))) {
-			if err != nil {
-				continue
+		type result struct {
+			r   mrt.Route
+			err string
+		}
+		run := func(opts mrt.RoutesOptions, skipStates bool) (out []result) {
+			for rt, err := range mrt.RoutesWith(mrt.Records(bytes.NewReader(in)), opts) {
+				if err != nil {
+					out = append(out, result{err: err.Error()})
+					continue
+				}
+				if rt.Kind == mrt.KindPeerState {
+					if skipStates {
+						continue
+					}
+					if rt.Prefix.IsValid() || rt.Path != nil {
+						t.Fatalf("peer state event carries route fields: %+v", rt)
+					}
+					out = append(out, result{r: rt})
+					continue
+				}
+				if !rt.Prefix.IsValid() {
+					t.Fatalf("invalid prefix in route %+v", rt)
+				}
+				max := 32
+				if rt.Prefix.Addr().Is6() {
+					max = 128
+				}
+				if rt.Prefix.Bits() < 0 || rt.Prefix.Bits() > max {
+					t.Fatalf("prefix bits out of range: %v", rt.Prefix)
+				}
+				out = append(out, result{r: rt})
 			}
-			if !rt.Prefix.IsValid() {
-				t.Fatalf("invalid prefix in route %+v", rt)
-			}
-			max := 32
-			if rt.Prefix.Addr().Is6() {
-				max = 128
-			}
-			if rt.Prefix.Bits() < 0 || rt.Prefix.Bits() > max {
-				t.Fatalf("prefix bits out of range: %v", rt.Prefix)
-			}
+			return out
+		}
+		plain := run(mrt.RoutesOptions{}, false)
+		interned := run(mrt.RoutesOptions{Interner: bgp.NewInterner()}, false)
+		if !reflect.DeepEqual(plain, interned) {
+			t.Fatalf("interner changes the routes:\n%+v\n%+v", plain, interned)
+		}
+		withStates := run(mrt.RoutesOptions{PeerStates: true}, true)
+		if !reflect.DeepEqual(plain, withStates) {
+			t.Fatalf("PeerStates changes the other routes:\n%+v\n%+v", plain, withStates)
 		}
 	})
 }

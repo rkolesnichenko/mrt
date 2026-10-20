@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rkolesnichenko/mrt/bgp"
 )
@@ -404,4 +405,48 @@ func TestRoutesBrokenRIBEntryIsRecordError(t *testing.T) {
 		t.Fatalf("%v %v", rs, errs)
 	}
 	wantRecordError(t, errs[0], rib, "RIB entry 1 attributes (200 bytes) run past the record")
+}
+
+func TestRoutesOriginated(t *testing.T) {
+	orig := uint32(1699999000)
+	want := time.Unix(int64(orig), 0).UTC()
+	attrs := unhex(t, "40 01 01 00  40 02 06 02 02 fd e8 fd e9  40 03 04 c0 00 02 01")
+
+	// TABLE_DUMP_V2: the entry's originated time, not the record's.
+	entry := cat(be16(0), be32(orig), be16(uint16(len(attrs))), attrs)
+	in := cat(peerTable("192.0.2.1"), ribV4(entry))
+	rs, errs := routesOf(t, in)
+	if len(errs) != 0 || len(rs) != 1 {
+		t.Fatalf("%v %v", rs, errs)
+	}
+	if !rs[0].Originated.Equal(want) || rs[0].Originated.Location() != time.UTC {
+		t.Errorf("RIB Originated %v, want %v", rs[0].Originated, want)
+	}
+
+	// Legacy TABLE_DUMP.
+	body := cat(be16(0), be16(5), []byte{10, 0, 0, 0}, []byte{8, 1}, be32(orig),
+		[]byte{192, 0, 2, 1}, be16(65000), be16(uint16(len(attrs))), attrs)
+	rs, errs = routesOf(t, frame(ts, TypeTableDump, SubAFIIPv4, 0, body))
+	if len(errs) != 0 || len(rs) != 1 {
+		t.Fatalf("%v %v", rs, errs)
+	}
+	if !rs[0].Originated.Equal(want) || rs[0].Originated.Location() != time.UTC {
+		t.Errorf("TABLE_DUMP Originated %v, want %v", rs[0].Originated, want)
+	}
+
+	// An UPDATE route has none.
+	msg := updateMsg(nil, cat(origin, unhex(t, "40 03 04 c0 00 02 01")), []byte{24, 198, 51, 100})
+	rs, errs = routesOf(t, bgp4mp(SubMessageAS4, msg))
+	if len(errs) != 0 || len(rs) != 1 {
+		t.Fatalf("%v %v", rs, errs)
+	}
+	if !rs[0].Originated.IsZero() {
+		t.Errorf("UPDATE Originated %v, want zero", rs[0].Originated)
+	}
+}
+
+func TestKindPeerState(t *testing.T) {
+	if KindPeerState != 4 || KindPeerState.String() != "S" {
+		t.Errorf("KindPeerState %d %q", KindPeerState, KindPeerState.String())
+	}
 }
