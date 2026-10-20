@@ -343,9 +343,8 @@ func FuzzDecompress(f *testing.F) {
 			if !bytes.Equal(got[:n], want[:n]) {
 				t.Errorf("past %d bytes: the first %d bytes differ", limit, n)
 			}
-			// The shorter must be capped too, unless it ended with the bytes
-			// of a Read past the input's end (ruling 9).
-			if wantCapped != gotCapped && !errors.Is(wantErr, io.ErrUnexpectedEOF) && !errors.Is(gotErr, io.ErrUnexpectedEOF) {
+			// The shorter must be capped too.
+			if wantCapped != gotCapped {
 				t.Errorf("Decompress: %d bytes, error %v; DecompressWith: %d bytes, error %v (read up to %d)", len(want), wantErr, len(got), gotErr, limit+1)
 			}
 			if gotCapped {

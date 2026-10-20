@@ -17,6 +17,7 @@ package mrt
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"io"
@@ -48,6 +49,13 @@ const (
 	scanAhead = 16
 	// maxEmptyReads is bufio's limit on reads of r returning nothing.
 	maxEmptyReads = 100
+	// markSlack: pump reads r no further while more than 4 × workers +
+	// markSlack marks lie ahead of the chain. A real file has a block magic
+	// per block and at most an end magic per stream, and pump stops at
+	// 2 × workers outstanding first; marks pile up only where they cannot be
+	// dispatched (end magics in garbage, say). The chain still reads r as it
+	// needs, and decodes serially once the speculation has nothing ahead.
+	markSlack = 64
 )
 
 // bzip2Hooks are test hooks (export_test.go). extra returns bit offsets in
@@ -102,13 +110,16 @@ type parallelBzip2 struct {
 
 	// The scan: scanAt is the next byte it looks at, scanLevel the level of
 	// the stream it is in. marks are the magics it found from the chain's
-	// position on, in order; zombies are dispatched jobs the chain passed, whose
-	// results are still to come. outstanding counts dispatched jobs whose
-	// results the chain has not received: at most 2 × workers.
+	// position on, in order; every mark before bit dispatchAt is dispatched
+	// or not a candidate, and none from there on is dispatched. zombies are
+	// dispatched jobs the chain passed, whose results are still to come.
+	// outstanding counts dispatched jobs whose results the chain has not
+	// received: at most 2 × workers.
 	scanInit    bool
 	scanAt      int64
 	scanLevel   int
 	marks       []mark
+	dispatchAt  uint64
 	found       []mark // scratch for scan
 	zombies     []*bzip2Job
 	outstanding int
@@ -289,15 +300,17 @@ func (z *parallelBzip2) discard(m *mark) {
 }
 
 // pump keeps the workers busy: it scans, dispatches candidates, and reads r
-// while that lets more candidates go, up to 2 × workers outstanding and a lead
-// over the chain of one segment and 1 MiB per outstanding job.
+// while that lets more candidates go, up to 2 × workers outstanding, a lead
+// over the chain of one segment and 1 MiB per outstanding job, and
+// 4 × workers + markSlack marks ahead of the chain.
 func (z *parallelBzip2) pump() {
 	for {
 		z.scan()
 		z.reap()
 		z.dispatch()
 		if z.outstanding >= 2*z.workers || z.srcErr != nil ||
-			z.winEnd()-z.rpos >= maxSegment+int64(2*z.workers)<<20 {
+			z.winEnd()-z.rpos >= maxSegment+int64(2*z.workers)<<20 ||
+			len(z.marks) > 4*z.workers+markSlack {
 			return
 		}
 		z.fill()
@@ -329,14 +342,11 @@ func (z *parallelBzip2) dispatch() {
 		return
 	}
 	end := z.winEnd()
-	for i := range z.marks {
+	for i := z.undispatched(); i < len(z.marks); i = z.undispatched() {
 		if z.outstanding >= 2*z.workers {
 			return
 		}
 		m := &z.marks[i]
-		if m.end || m.job != nil || m.level == 0 {
-			continue
-		}
 		from := int64(m.bit / 8)
 		to := from + maxSegment
 		if i+1 < len(z.marks) {
@@ -360,7 +370,23 @@ func (z *parallelBzip2) dispatch() {
 		}
 		z.jobs <- m.job // never blocks: at most 2 × workers are outstanding
 		z.outstanding++
+		z.dispatchAt = m.bit + 1
 	}
+}
+
+// undispatched returns the index of the first candidate not dispatched, or
+// len(marks). It moves dispatchAt past the marks before it, which are end
+// magics or of unknown level and are never dispatched, so that each mark is
+// looked at once.
+func (z *parallelBzip2) undispatched() int {
+	i, _ := slices.BinarySearchFunc(z.marks, z.dispatchAt, func(m mark, bit uint64) int { return cmp.Compare(m.bit, bit) })
+	for ; i < len(z.marks); i++ {
+		if m := &z.marks[i]; !m.end && m.job == nil && m.level != 0 {
+			break
+		}
+		z.dispatchAt = z.marks[i].bit + 1
+	}
+	return i
 }
 
 // bzip2Worker decodes jobs with one Decoder, which keeps its buffers between
@@ -426,18 +452,16 @@ func (z *parallelBzip2) fill() {
 }
 
 // compact drops the window's bytes that nothing needs: those behind the chain,
-// the scan and the first candidate not dispatched. It scans the window first,
-// so the scan is never behind; candidates behind the chain are discarded (they
-// lie inside the block the chain is decoding).
+// the scan and the first candidate not dispatched (a mark of unknown level is
+// never dispatched). It scans the window first, so the scan is never behind;
+// candidates behind the chain are discarded (they lie inside the block the
+// chain is decoding).
 func (z *parallelBzip2) compact() {
 	z.scan()
 	keep := max(z.rpos-chainSlack, z.winOff)
 	z.passed(uint64(keep) * 8)
-	for i := range z.marks {
-		if m := &z.marks[i]; !m.end && m.job == nil {
-			keep = min(keep, int64(m.bit/8))
-			break
-		}
+	if i := z.undispatched(); i < len(z.marks) {
+		keep = min(keep, int64(z.marks[i].bit/8))
 	}
 	keep = min(keep, z.scanAt)
 	if dead := keep - z.winOff; dead >= compactMin && dead >= int64(len(z.win))/2 {

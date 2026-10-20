@@ -52,22 +52,13 @@ func decompressed(in io.Reader, workers int, oneByte bool) ([]byte, error) {
 	return readOut(r, oneByte)
 }
 
-// checkSame checks spec §6.4 for one read: the bytes and the failure of
-// DecompressWith (got) against those of Decompress (want). Where Decompress
-// fails with io.ErrUnexpectedEOF the bytes it returns with the error are
-// decoded from bits past the input's end and their count depends on the
-// caller's Read sizes (ledger ruling 9): both must fail, and agree on their
-// common prefix. Everywhere else the bytes are equal.
+// checkSame checks spec §6.4 for one read: DecompressWith (got) gives
+// exactly the bytes Decompress (want) gives, and fails where it fails. This
+// holds on a cut input too (io.ErrUnexpectedEOF): the bytes decoded from bits
+// past the input's end depend on the Read sizes, and both are read with the
+// same ones.
 func checkSame(t testing.TB, what string, got []byte, gotErr error, want []byte, wantErr error) {
 	t.Helper()
-	if errors.Is(wantErr, io.ErrUnexpectedEOF) {
-		n := min(len(got), len(want))
-		if gotErr == nil || !bytes.Equal(got[:n], want[:n]) {
-			t.Errorf("%s: %d bytes, error %v; Decompress: %d bytes, error %v (common prefix equal: %v)",
-				what, len(got), gotErr, len(want), wantErr, bytes.Equal(got[:n], want[:n]))
-		}
-		return
-	}
 	if (gotErr == nil) != (wantErr == nil) || !bytes.Equal(got, want) {
 		t.Errorf("%s: %d bytes, error %v; Decompress: %d bytes, error %v (bytes equal: %v)",
 			what, len(got), gotErr, len(want), wantErr, bytes.Equal(got, want))
@@ -538,6 +529,52 @@ func TestDecompressWithFalseCandidates(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDecompressWithEndMagicFlood is final review I1: "BZh9" and then end
+// magics, 17 MiB, past the look-ahead of Workers 4 (one 8 MiB segment and
+// 2 × 4 MiB). Decompress fails at the first end magic, whose stream CRC does
+// not match. DecompressWith used to dispatch nothing (end magics are not
+// candidates), so it read the whole look-ahead, 16 MiB, and rescanned every
+// mark on each read of r: 625 MB allocated in about 0.4 s. Now it fails as
+// Decompress does having read less than one segment, allocates less than the
+// input itself (16 MiB; about 3.8 MB measured, of which Decompress takes
+// 3.6 MB, so nothing grows with the input), and within 2 s even under -race.
+// The error text is compared because both errors are the same structural
+// error of the standard decoder and of its copy. Not parallel: it measures
+// TotalAlloc and time.
+func TestDecompressWithEndMagicFlood(t *testing.T) {
+	const workers = 4
+	end := []byte{0x17, 0x72, 0x45, 0x38, 0x50, 0x90} // the end magic's 48 bits
+	in := append([]byte("BZh9"), bytes.Repeat(end, (8+2*workers+1)<<20/6)...)
+	want, wantErr := decompressed(bytes.NewReader(in), 0, false)
+	if wantErr == nil || !strings.Contains(wantErr.Error(), "file checksum mismatch") {
+		t.Fatalf("Decompress: %d bytes, error %v; want a file checksum mismatch", len(want), wantErr)
+	}
+	cr := &countingReader{r: bytes.NewReader(in)}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	got, gotErr := decompressed(cr, workers, false)
+	took := time.Since(start)
+	runtime.ReadMemStats(&after)
+	alloc, read := after.TotalAlloc-before.TotalAlloc, cr.n.Load()
+	t.Logf("%d bytes, error %v; read %d of %d input bytes, allocated %d bytes, in %v",
+		len(got), gotErr, read, len(in), alloc, took)
+	checkSame(t, "workers 4", got, gotErr, want, wantErr)
+	if gotErr == nil || gotErr.Error() != wantErr.Error() {
+		t.Errorf("error %v; Decompress: %v", gotErr, wantErr)
+	}
+	if read >= 8<<20 {
+		t.Errorf("read %d of %d input bytes, want less than one 8 MiB segment", read, len(in))
+	}
+	if alloc >= 16<<20 {
+		t.Errorf("allocated %d bytes, want less than 16 MiB", alloc)
+	}
+	if took >= 2*time.Second {
+		t.Errorf("took %v, want less than 2 s", took)
 	}
 }
 
