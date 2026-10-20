@@ -49,6 +49,9 @@ const SAFIUnicast SAFI = 1
 const SeverityError Severity = 2
 const SeverityInfo Severity = 0
 const SeverityWarning Severity = 1
+const ValidationInvalid ValidationState = 2
+const ValidationNotFound ValidationState = 1
+const ValidationValid ValidationState = 0
 var ErrMarker = errors.New(…)
 var ErrShortMessage = errors.New(…)
 func NewAttrs(raw []byte, ctx Context) Attrs
@@ -87,6 +90,20 @@ type Diagnostic struct
 	Attr AttrCode
 	Message string
 type ExtCommunity [8]byte
+func (ExtCommunity) Color() (uint32, bool)
+func (ExtCommunity) Encapsulation() (uint16, bool)
+func (ExtCommunity) LinkBandwidth() (ASN, float32, bool)
+func (ExtCommunity) OriginValidation() (ValidationState, bool)
+func (ExtCommunity) RouteOrigin() (ExtCommunityAdmin, bool)
+func (ExtCommunity) RouteTarget() (ExtCommunityAdmin, bool)
+func (ExtCommunity) String() string
+func (ExtCommunity) Subtype() uint8
+func (ExtCommunity) Transitive() bool
+func (ExtCommunity) Type() uint8
+type ExtCommunityAdmin struct
+	AS ASN
+	Addr netip.Addr
+	Local uint32
 type Family struct
 	AFI AFI
 	SAFI SAFI
@@ -150,3 +167,4 @@ type Update struct
 	Withdrawn []NLRI
 	Attrs Attrs
 	Announced []NLRI
+type ValidationState uint8

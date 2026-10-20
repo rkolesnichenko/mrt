@@ -131,6 +131,3 @@ func (l LargeCommunity) String() string {
 		strconv.FormatUint(uint64(l.Local1), 10) + ":" +
 		strconv.FormatUint(uint64(l.Local2), 10)
 }
-
-// ExtCommunity is an extended community (RFC 4360), kept as its 8 raw bytes.
-type ExtCommunity [8]byte
