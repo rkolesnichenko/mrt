@@ -51,33 +51,33 @@ type Update struct {
 // ParseUpdate reads the UPDATE message msg, marker and header included.
 // A bad header or a message of another type gives an empty Update and one
 // diagnostic. Fields that run past the message give an Error diagnostic
-// ("bgp/update-length") and what parsed before them is kept. A message cut
+// (DiagUpdateLength) and what parsed before them is kept. A message cut
 // short of its header's length is read as far as its bytes go, whole
 // withdrawn prefixes, whole attributes and whole NLRI only, with one Error
-// diagnostic ("bgp/message-truncated") at the cut. Update.Attrs aliases msg.
+// diagnostic (DiagMessageTruncated) at the cut. Update.Attrs aliases msg.
 func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic) {
 	var u Update
 	hdr, err := ParseMessageHeader(msg)
 	if err != nil {
-		return u, []Diagnostic{{SeverityError, "bgp/message-header", 0, 0, err.Error()}}
+		return u, []Diagnostic{{SeverityError, DiagMessageHeader, 0, 0, err.Error()}}
 	}
 	if hdr.Type != MessageUpdate {
-		return u, []Diagnostic{{SeverityError, "bgp/not-update", 18, 0,
+		return u, []Diagnostic{{SeverityError, DiagNotUpdate, 18, 0,
 			fmt.Sprintf("message type %d is not UPDATE", hdr.Type)}}
 	}
 	var diags []Diagnostic
 	cut := hdr.Length > len(msg)
 	if hdr.Length < len(msg) {
-		diags = append(diags, Diagnostic{SeverityWarning, "bgp/message-header", 16, 0,
+		diags = append(diags, Diagnostic{SeverityWarning, DiagMessageHeader, 16, 0,
 			fmt.Sprintf("%d bytes follow the message's own length of %d", len(msg)-hdr.Length, hdr.Length)})
 		msg = msg[:hdr.Length]
 	}
 	short := func(off int, what string) []Diagnostic {
 		if cut {
-			return append(diags, Diagnostic{SeverityError, "bgp/message-truncated", len(msg), 0,
+			return append(diags, Diagnostic{SeverityError, DiagMessageTruncated, len(msg), 0,
 				fmt.Sprintf("message cut at %d of its %d bytes; read as far as whole fields go", len(msg), hdr.Length)})
 		}
-		return append(diags, Diagnostic{SeverityError, "bgp/update-length", off, 0, what})
+		return append(diags, Diagnostic{SeverityError, DiagUpdateLength, off, 0, what})
 	}
 	nlri := func(b []byte, base int) []NLRI {
 		out, nd := parseNLRI(b, AFIIPv4, ctx.AddPath)

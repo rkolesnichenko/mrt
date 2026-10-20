@@ -11,7 +11,7 @@ type MPReach struct {
 	NextHop     netip.Addr // global
 	LinkLocal   netip.Addr // second IPv6 next hop, when present
 	NLRI        []NLRI     // decoded for IPv4/IPv6 unicast and multicast only, outside a RIB entry
-	RawNLRI     []byte     // other families, and the full form in a RIB entry: kept raw
+	RawNLRI     []byte     // other families outside a RIB entry: kept raw
 	Abbreviated bool       // RFC 6396 §4.3.4 form
 }
 
@@ -56,40 +56,43 @@ func decodeMPReach(v []byte, ctx Context, off int) (r MPReach, ok bool, diags []
 	if ctx.RIB && len(v) > 0 && v[0] != 0 { // RFC 6396 §4.3.4: next hop only
 		nh := int(v[0])
 		if len(v)-1 != nh {
-			diag(SeverityWarning, "bgp/attr-length", "abbreviated MP_REACH_NLRI length does not match its next hop length")
+			diag(SeverityWarning, DiagAttrLength, "abbreviated MP_REACH_NLRI length does not match its next hop length")
 			return r, false, diags
 		}
 		r.Abbreviated = true
 		if !setMPNextHop(&r, v[1:]) { // a RIB's family is always IP
-			diag(SeverityWarning, "bgp/attr-value", fmt.Sprintf("MP_REACH_NLRI next hop of %d bytes", nh))
+			diag(SeverityWarning, DiagAttrValue, fmt.Sprintf("MP_REACH_NLRI next hop of %d bytes", nh))
 		}
 		return r, true, diags
 	}
 	if len(v) < 5 {
-		diag(SeverityWarning, "bgp/attr-length", "MP_REACH_NLRI is shorter than its fixed fields")
+		diag(SeverityWarning, DiagAttrLength, "MP_REACH_NLRI is shorter than its fixed fields")
 		return r, false, diags
 	}
 	nh := int(v[3])
 	if len(v)-4 < nh+1 {
-		diag(SeverityWarning, "bgp/attr-length", "MP_REACH_NLRI next hop runs past the attribute")
+		diag(SeverityWarning, DiagAttrLength, "MP_REACH_NLRI next hop runs past the attribute")
 		return r, false, diags
 	}
 	r.Family = Family{AFI(uint16(v[0])<<8 | uint16(v[1])), SAFI(v[2])}
 	if !setMPNextHop(&r, v[4:4+nh]) && r.Family.HasPrefixes() {
-		diag(SeverityWarning, "bgp/attr-value", fmt.Sprintf("MP_REACH_NLRI next hop of %d bytes", nh))
+		diag(SeverityWarning, DiagAttrValue, fmt.Sprintf("MP_REACH_NLRI next hop of %d bytes", nh))
 	}
 	rest := v[4+nh+1:] // skip the reserved byte
 	// The full form in a RIB entry (first byte zero, or the test above would
-	// have taken it): the record carries the prefix, so the NLRI is kept raw,
-	// not parsed (Ruling R20). Abbreviated=false records the form.
-	if r.Family.HasPrefixes() && !ctx.RIB {
+	// have taken it): the record carries the prefix, so the NLRI is neither
+	// parsed nor kept (Ruling R20, amended 2026-10-20); the bytes stay in
+	// Attrs.Raw(). Abbreviated=false records the form.
+	switch {
+	case ctx.RIB:
+	case r.Family.HasPrefixes():
 		var nd []Diagnostic
 		r.NLRI, nd = parseNLRI(rest, r.Family.AFI, ctx.AddPath)
 		for _, d := range nd {
 			d.Offset, d.Attr = off, AttrMPReach
 			diags = append(diags, d)
 		}
-	} else {
+	default:
 		r.RawNLRI = rawOrNil(rest)
 	}
 	return r, true, diags
@@ -98,7 +101,7 @@ func decodeMPReach(v []byte, ctx Context, off int) (r MPReach, ok bool, diags []
 // decodeMPUnreach reads an MP_UNREACH_NLRI value, like decodeMPReach.
 func decodeMPUnreach(v []byte, ctx Context, off int) (r MPUnreach, ok bool, diags []Diagnostic) {
 	if len(v) < 3 {
-		diags = append(diags, Diagnostic{SeverityWarning, "bgp/attr-length", off, AttrMPUnreach,
+		diags = append(diags, Diagnostic{SeverityWarning, DiagAttrLength, off, AttrMPUnreach,
 			"MP_UNREACH_NLRI is shorter than its fixed fields"})
 		return r, false, diags
 	}

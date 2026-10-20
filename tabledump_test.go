@@ -133,7 +133,7 @@ func TestRIBIPv6Unicast(t *testing.T) {
 		}
 		// No diagnostic for the full form, and its NLRI stays raw: the record
 		// carries the prefix (Ruling R20).
-		if len(diags) != 0 || path.MPReach.NLRI != nil || len(path.MPReach.RawNLRI) == 0 {
+		if len(diags) != 0 || path.MPReach.NLRI != nil || path.MPReach.RawNLRI != nil {
 			t.Errorf("diagnostics %v, NLRI %v, RawNLRI %x", diags, path.MPReach.NLRI, path.MPReach.RawNLRI)
 		}
 		// The RFC's bytes are the full RFC 4760 form (first byte 0), not the abbreviated one.

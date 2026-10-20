@@ -89,7 +89,7 @@ func TestGenDecodes(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("%d routes", len(got))
 	}
-	if got[0].Peer != peers[0] || got[0].Path.ReceivedASPath.String() != "64500 64501" || got[0].Path.NextHop != a4 || got[0].Path.Origin != bgp.OriginEGP {
+	if got[0].Peer != peers[0] || got[0].Path.ReceivedASPath().String() != "64500 64501" || got[0].Path.NextHop() != a4 || got[0].Path.Origin != bgp.OriginEGP {
 		t.Errorf("route 0 = %+v", got[0])
 	}
 	mp := got[1].Path.MPReach
@@ -197,17 +197,17 @@ func TestGenAttributes(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("diags %v", diags)
 	}
-	if p.Origin != bgp.OriginIncomplete || p.ReceivedASPath.String() != "1 2 {3,4}" || p.NextHop != a4 ||
-		p.MED != 7 || p.LocalPref != 200 || p.Aggregator != (bgp.Aggregator{AS: 4200000001, Addr: agg}) ||
-		len(p.Communities) != 2 || p.Communities[0] != 0xFFFF0001 || len(p.ExtCommunities) != 1 || p.ExtCommunities[0] != rt ||
+	if gotAgg, _ := p.Aggregator(); p.Origin != bgp.OriginIncomplete || p.ReceivedASPath().String() != "1 2 {3,4}" || p.NextHop() != a4 ||
+		p.MED != 7 || p.LocalPref != 200 || gotAgg != (bgp.Aggregator{AS: 4200000001, Addr: agg}) ||
+		len(p.Communities) != 2 || p.Communities[0] != 0xFFFF0001 || len(p.ExtCommunities()) != 1 || p.ExtCommunities()[0] != rt ||
 		len(p.LargeCommunities) != 1 || p.LargeCommunities[0] != lc || p.OnlyToCustomer != 64501 {
 		t.Errorf("path = %+v", p)
 	}
 	if mp := p.MPReach; mp == nil || mp.NextHop != a6 || mp.LinkLocal != ll || len(mp.NLRI) != 1 || mp.NLRI[0].Prefix != v6[0].Prefix {
 		t.Errorf("mpreach = %+v", p.MPReach)
 	}
-	if mu := p.MPUnreach; mu == nil || len(mu.Withdrawn) != 1 || mu.Withdrawn[0].Prefix != v6[0].Prefix {
-		t.Errorf("mpunreach = %+v", p.MPUnreach)
+	if mu := p.MPUnreach(); mu == nil || len(mu.Withdrawn) != 1 || mu.Withdrawn[0].Prefix != v6[0].Prefix {
+		t.Errorf("mpunreach = %+v", mu)
 	}
 
 	// 2-byte path with AS4_PATH and AS4_AGGREGATOR: the merge applies.
@@ -217,8 +217,8 @@ func TestGenAttributes(t *testing.T) {
 		mrtgen.AS4PathAttr(mrtgen.Seq(196608, 196609)),
 		mrtgen.AS4AggregatorAttr(196610, agg))
 	p, diags = bgp.NewAttrs(b2, bgp.Context{}).Decode()
-	if p.ASPath.String() != "64500 196608 196609" || p.Aggregator.AS != 196610 {
-		t.Errorf("merged = %v agg %v diags %v", p.ASPath, p.Aggregator, diags)
+	if gotAgg, _ := p.Aggregator(); p.ASPath.String() != "64500 196608 196609" || gotAgg.AS != 196610 {
+		t.Errorf("merged = %v agg %v diags %v", p.ASPath, gotAgg, diags)
 	}
 
 	// Raw with a long value gets the extended length flag; RawLen lies.
@@ -421,8 +421,8 @@ func TestAS4Confed(t *testing.T) {
 			t.Fatal(err)
 		}
 		agg := "-"
-		if rt.Path.HasAggregator {
-			agg = fmt.Sprint(rt.Path.Aggregator.AS)
+		if a, ok := rt.Path.Aggregator(); ok {
+			agg = fmt.Sprint(a.AS)
 		}
 		var diags []string
 		for _, d := range rt.Diagnostics {

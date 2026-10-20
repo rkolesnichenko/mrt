@@ -1,6 +1,7 @@
 package mrt
 const DefaultMaxRecordLen = 16 << 20
 const KindAnnounce Kind = 2
+const KindPeerState Kind = 4
 const KindRIB Kind = 1
 const KindWithdraw Kind = 3
 const StateActive State = 3
@@ -49,6 +50,7 @@ func Decompress(r io.Reader) (io.Reader, error)
 func Records(r io.Reader) iter.Seq2[Record, error]
 func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error]
 func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error]
+func RoutesWith(records iter.Seq2[Record, error], opts RoutesOptions) iter.Seq2[Route, error]
 type BGP4MPMessage struct
 	PeerAS bgp.ASN
 	LocalAS bgp.ASN
@@ -123,6 +125,12 @@ type Route struct
 	HasPathID bool
 	Path *bgp.Path
 	Diagnostics []bgp.Diagnostic
+	Originated time.Time
+	OldState State
+	NewState State
+type RoutesOptions struct
+	PeerStates bool
+	Interner *bgp.Interner
 type State uint16
 type Subtype uint16
 type TableDump struct

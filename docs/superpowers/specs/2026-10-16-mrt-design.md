@@ -154,6 +154,12 @@ strictly `cmd → mrt → bgp`. No package opens a socket. `Decompress` reads an
 - **C3** Sentinels use `errors.New`. A type is named after the protocol
   element it is.
 - Parsed values (records, paths, routes) are values, not pointers.
+  Exception (user's decision 2026-10-20, v0.2 design §6.4):
+  `(*bgp.Interner).Decode(Attrs) (*Path, []Diagnostic)` returns a pointer,
+  because the path is shared with every caller that decoded an equal block
+  and sharing is the interner's purpose (`Route.Path` is already a
+  `*bgp.Path`). `Attrs.Decode` still returns a value, and there is no
+  `Attrs.DecodeWith`: C1 would require it to return what `Decode` returns.
 - `api/<pkg>.txt` is the golden of every exported signature;
   `MRT_API_UPDATE=1` rewrites it.
 
@@ -313,8 +319,8 @@ type Diagnostic struct {
   hop only; the family and NLRI come from the record). First byte zero → full
   RFC 4760 form, with no diagnostic (`Abbreviated` false records the form, and
   route-views6 writes it on every entry, so it is not a fault); its family and
-  next hops are decoded but its NLRI is kept in `RawNLRI`, not parsed, since
-  the record supplies the prefix (Ruling R20). Same test as bgpdump. Without
+  next hops are decoded and its NLRI is not kept (the record supplies the
+  prefix; the bytes stay in `Attrs.Raw()`), amended 2026-10-20 by the user (Ruling R20). Same test as bgpdump. Without
   `ctx.RIB`, always the full form, NLRI parsed.
 - **A malformed attribute never stops decoding.** Its raw bytes go to
   `Unknown`, a diagnostic names it, and decoding continues with the next

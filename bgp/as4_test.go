@@ -61,14 +61,14 @@ func TestAS4Merge(t *testing.T) {
 		if want := path(sq(100, 196608, 196609, 300)); !reflect.DeepEqual(p.ASPath, want) {
 			t.Errorf("ASPath = %v", p.ASPath)
 		}
-		if want := path(sq(100, 23456, 23456, 300)); !reflect.DeepEqual(p.ReceivedASPath, want) {
-			t.Errorf("ReceivedASPath = %v (aliased by the merge?)", p.ReceivedASPath)
+		if want := path(sq(100, 23456, 23456, 300)); !reflect.DeepEqual(p.ReceivedASPath(), want) {
+			t.Errorf("ReceivedASPath = %v (aliased by the merge?)", p.ReceivedASPath())
 		}
-		if want := path(sq(196608, 196609, 300)); !reflect.DeepEqual(p.AS4Path, want) {
-			t.Errorf("AS4Path = %v", p.AS4Path)
+		if want := path(sq(196608, 196609, 300)); !reflect.DeepEqual(p.AS4Path(), want) {
+			t.Errorf("AS4Path = %v", p.AS4Path())
 		}
-		if len(p.Unknown) != 0 {
-			t.Errorf("unknown = %v", p.Unknown)
+		if len(p.Unknown()) != 0 {
+			t.Errorf("unknown = %v", p.Unknown())
 		}
 	})
 
@@ -82,8 +82,8 @@ func TestAS4Merge(t *testing.T) {
 		if want := path(sq(100, 23456)); !reflect.DeepEqual(p.ASPath, want) {
 			t.Errorf("ASPath = %v", p.ASPath)
 		}
-		if want := path(sq(196608, 196609, 300)); !reflect.DeepEqual(p.AS4Path, want) {
-			t.Errorf("AS4Path = %v", p.AS4Path)
+		if want := path(sq(196608, 196609, 300)); !reflect.DeepEqual(p.AS4Path(), want) {
+			t.Errorf("AS4Path = %v", p.AS4Path())
 		}
 		if len(diags) != 1 || diags[0].Code != "bgp/as4path-ignored" || diags[0].Severity != SeverityInfo ||
 			diags[0].Offset != as4Off || diags[0].Attr != AttrAS4Path {
@@ -143,14 +143,14 @@ func TestAS4Merge(t *testing.T) {
 		)
 		as4Off := len(asPathAttr(seg(2, ASSequence, 100, 23456))) + len(agg2(100))
 		p, diags := NewAttrs(raw, ctx).Decode()
-		if !p.HasAggregator || p.Aggregator != (Aggregator{100, addr7}) {
-			t.Errorf("aggregator = %v %+v", p.HasAggregator, p.Aggregator)
+		if aggOf(p) != (aggResult{Aggregator{100, addr7}, true}) {
+			t.Errorf("aggregator = %+v", aggOf(p))
 		}
 		if want := path(sq(100, 23456)); !reflect.DeepEqual(p.ASPath, want) {
 			t.Errorf("ASPath = %v", p.ASPath)
 		}
-		if want := path(sq(70000)); !reflect.DeepEqual(p.AS4Path, want) {
-			t.Errorf("AS4Path = %v", p.AS4Path)
+		if want := path(sq(70000)); !reflect.DeepEqual(p.AS4Path(), want) {
+			t.Errorf("AS4Path = %v", p.AS4Path())
 		}
 		if len(diags) != 1 || diags[0].Code != "bgp/as4path-ignored" || diags[0].Severity != SeverityInfo ||
 			diags[0].Offset != as4Off || diags[0].Attr != AttrAS4Path {
@@ -161,8 +161,8 @@ func TestAS4Merge(t *testing.T) {
 	t.Run("AGGREGATOR not AS_TRANS, AS4_AGGREGATOR without AS4_PATH", func(t *testing.T) {
 		raw := concat(agg2(100), agg4(18, 70000))
 		p, diags := NewAttrs(raw, ctx).Decode()
-		if p.Aggregator != (Aggregator{100, addr7}) {
-			t.Errorf("aggregator = %+v", p.Aggregator)
+		if aggOf(p).Agg != (Aggregator{100, addr7}) {
+			t.Errorf("aggregator = %+v", aggOf(p))
 		}
 		if len(diags) != 1 || diags[0].Code != "bgp/as4path-ignored" ||
 			diags[0].Offset != len(agg2(100)) || diags[0].Attr != AttrAS4Aggregator {
@@ -181,8 +181,8 @@ func TestAS4Merge(t *testing.T) {
 		if len(diags) != 0 {
 			t.Fatalf("diags = %+v", diags)
 		}
-		if !p.HasAggregator || p.Aggregator != (Aggregator{70000, addr8}) {
-			t.Errorf("aggregator = %v %+v", p.HasAggregator, p.Aggregator)
+		if aggOf(p) != (aggResult{Aggregator{70000, addr8}, true}) {
+			t.Errorf("aggregator = %+v", aggOf(p))
 		}
 		if want := path(sq(100, 70000)); !reflect.DeepEqual(p.ASPath, want) {
 			t.Errorf("ASPath = %v", p.ASPath)
@@ -191,7 +191,7 @@ func TestAS4Merge(t *testing.T) {
 
 	t.Run("AS4_AGGREGATOR alone", func(t *testing.T) {
 		p, diags := NewAttrs(agg4(18, 70000), ctx).Decode()
-		if len(diags) != 0 || !p.HasAggregator || p.Aggregator != (Aggregator{70000, addr8}) {
+		if len(diags) != 0 || aggOf(p) != (aggResult{Aggregator{70000, addr8}, true}) {
 			t.Errorf("p = %+v diags = %+v", p, diags)
 		}
 	})
@@ -199,11 +199,11 @@ func TestAS4Merge(t *testing.T) {
 	t.Run("malformed AGGREGATOR, AS4_AGGREGATOR used", func(t *testing.T) {
 		raw := concat(attr(0xC0, 7, 0, 100, 1), agg4(18, 70000))
 		p, diags := NewAttrs(raw, ctx).Decode()
-		if !p.HasAggregator || p.Aggregator != (Aggregator{70000, addr8}) {
-			t.Errorf("aggregator = %v %+v", p.HasAggregator, p.Aggregator)
+		if aggOf(p) != (aggResult{Aggregator{70000, addr8}, true}) {
+			t.Errorf("aggregator = %+v", aggOf(p))
 		}
-		if !reflect.DeepEqual(codes(diags), []string{"bgp/attr-length"}) || len(p.Unknown) != 1 {
-			t.Errorf("diags = %+v unknown = %v", diags, p.Unknown)
+		if !reflect.DeepEqual(codes(diags), []string{"bgp/attr-length"}) || len(p.Unknown()) != 1 {
+			t.Errorf("diags = %+v unknown = %v", diags, p.Unknown())
 		}
 	})
 
@@ -231,8 +231,8 @@ func TestAS4Merge(t *testing.T) {
 		if want := path(sq(100, 70000)); !reflect.DeepEqual(p.ASPath, want) {
 			t.Errorf("ASPath = %v", p.ASPath)
 		}
-		if !p.HasAggregator || p.Aggregator != (Aggregator{100, addr7}) {
-			t.Errorf("aggregator = %v %+v", p.HasAggregator, p.Aggregator)
+		if aggOf(p) != (aggResult{Aggregator{100, addr7}, true}) {
+			t.Errorf("aggregator = %+v", aggOf(p))
 		}
 	})
 
@@ -243,8 +243,8 @@ func TestAS4Merge(t *testing.T) {
 			as4PathAttr(seg(4, ASConfedSequence, 64512), seg(4, ASSequence, 70000), seg(4, ASConfedSet, 64513)),
 		)
 		p, diags := NewAttrs(raw, ctx).Decode()
-		if want := path(sq(70000)); !reflect.DeepEqual(p.AS4Path, want) {
-			t.Errorf("AS4Path = %v", p.AS4Path)
+		if want := path(sq(70000)); !reflect.DeepEqual(p.AS4Path(), want) {
+			t.Errorf("AS4Path = %v", p.AS4Path())
 		}
 		if want := path(sq(100, 70000)); !reflect.DeepEqual(p.ASPath, want) {
 			t.Errorf("ASPath = %v", p.ASPath)
@@ -253,8 +253,8 @@ func TestAS4Merge(t *testing.T) {
 			diags[0].Severity != SeverityWarning || diags[0].Offset != len(asp) {
 			t.Errorf("diags = %+v", diags)
 		}
-		if len(p.Unknown) != 0 {
-			t.Errorf("unknown = %v", p.Unknown)
+		if len(p.Unknown()) != 0 {
+			t.Errorf("unknown = %v", p.Unknown())
 		}
 	})
 
@@ -267,15 +267,15 @@ func TestAS4Merge(t *testing.T) {
 		if want := path(sq(100, 23456)); !reflect.DeepEqual(p.ASPath, want) {
 			t.Errorf("ASPath = %v", p.ASPath)
 		}
-		if len(p.AS4Path.Segments) != 0 {
-			t.Errorf("AS4Path = %v", p.AS4Path)
+		if len(p.AS4Path().Segments) != 0 {
+			t.Errorf("AS4Path = %v", p.AS4Path())
 		}
 		if len(diags) != 1 || diags[0].Code != "bgp/attr-value" || diags[0].Attr != AttrAS4Path ||
 			diags[0].Severity != SeverityWarning {
 			t.Errorf("diags = %+v", diags)
 		}
-		if len(p.Unknown) != 1 || p.Unknown[0].Code != AttrAS4Path {
-			t.Errorf("unknown = %v", p.Unknown)
+		if len(p.Unknown()) != 1 || p.Unknown()[0].Code != AttrAS4Path {
+			t.Errorf("unknown = %v", p.Unknown())
 		}
 	})
 
@@ -291,11 +291,11 @@ func TestAS4Merge(t *testing.T) {
 			diags[0].Severity != SeverityWarning {
 			t.Errorf("diags = %+v", diags)
 		}
-		if !reflect.DeepEqual(p.Unknown, []Attribute{{0xC0, 17, []byte{}}}) {
-			t.Errorf("unknown = %v", p.Unknown)
+		if !reflect.DeepEqual(p.Unknown(), []Attribute{{0xC0, 17, []byte{}}}) {
+			t.Errorf("unknown = %v", p.Unknown())
 		}
 		p, diags = NewAttrs(attr(0x40, 2), ctx).Decode()
-		if len(diags) != 0 || len(p.Unknown) != 0 || len(p.ASPath.Segments) != 0 {
+		if len(diags) != 0 || len(p.Unknown()) != 0 || len(p.ASPath.Segments) != 0 {
 			t.Errorf("empty AS_PATH: p = %+v diags = %+v", p, diags)
 		}
 	})
@@ -309,8 +309,8 @@ func TestAS4Merge(t *testing.T) {
 		if want := path(sq(100, 23456)); !reflect.DeepEqual(p.ASPath, want) {
 			t.Errorf("ASPath = %v", p.ASPath)
 		}
-		if !reflect.DeepEqual(codes(diags), []string{"bgp/attr-value"}) || len(p.Unknown) != 1 {
-			t.Errorf("diags = %+v unknown = %v", diags, p.Unknown)
+		if !reflect.DeepEqual(codes(diags), []string{"bgp/attr-value"}) || len(p.Unknown()) != 1 {
+			t.Errorf("diags = %+v unknown = %v", diags, p.Unknown())
 		}
 	})
 }
@@ -378,14 +378,14 @@ func TestAS4PathIgnoredWith4ByteContext(t *testing.T) {
 	asp := asPathAttr(seg(4, ASSequence, 100, 70000))
 	raw := concat(asp, as4PathAttr(seg(4, ASSequence, 80000)), agg4(7, 100), agg4(18, 70000))
 	p, diags := NewAttrs(raw, Context{AS4: true}).Decode()
-	if want := path(sq(100, 70000)); !reflect.DeepEqual(p.ASPath, want) || !reflect.DeepEqual(p.ReceivedASPath, want) {
-		t.Errorf("ASPath = %v, received %v", p.ASPath, p.ReceivedASPath)
+	if want := path(sq(100, 70000)); !reflect.DeepEqual(p.ASPath, want) || !reflect.DeepEqual(p.ReceivedASPath(), want) {
+		t.Errorf("ASPath = %v, received %v", p.ASPath, p.ReceivedASPath())
 	}
-	if want := path(sq(80000)); !reflect.DeepEqual(p.AS4Path, want) {
-		t.Errorf("AS4Path = %v", p.AS4Path)
+	if want := path(sq(80000)); !reflect.DeepEqual(p.AS4Path(), want) {
+		t.Errorf("AS4Path = %v", p.AS4Path())
 	}
-	if !p.HasAggregator || p.Aggregator.AS != 100 {
-		t.Errorf("aggregator = %+v", p.Aggregator)
+	if !aggOf(p).OK || aggOf(p).Agg.AS != 100 {
+		t.Errorf("aggregator = %+v", aggOf(p))
 	}
 	if len(diags) != 1 || diags[0].Code != "bgp/as4path-ignored" || diags[0].Severity != SeverityInfo ||
 		diags[0].Offset != len(asp) || diags[0].Attr != AttrAS4Path {
@@ -394,7 +394,7 @@ func TestAS4PathIgnoredWith4ByteContext(t *testing.T) {
 
 	// AS4_AGGREGATOR alone is ignored too.
 	p, diags = NewAttrs(concat(agg4(7, 100), agg4(18, 70000)), Context{AS4: true}).Decode()
-	if p.Aggregator.AS != 100 || len(diags) != 1 || diags[0].Attr != AttrAS4Aggregator ||
+	if aggOf(p).Agg.AS != 100 || len(diags) != 1 || diags[0].Attr != AttrAS4Aggregator ||
 		diags[0].Code != "bgp/as4path-ignored" || diags[0].Offset != 11 {
 		t.Errorf("p = %+v diags = %+v", p, diags)
 	}
@@ -405,15 +405,15 @@ func TestASPathWidthNeverSniffed(t *testing.T) {
 	// is not a segment.
 	raw := concat(attr(0x40, 1, 0), attr(0x40, 2, 2, 1, 0x00, 0x01, 0x11, 0x70))
 	p, diags := NewAttrs(raw, Context{AS4: false}).Decode()
-	if len(p.ASPath.Segments) != 0 || len(p.ReceivedASPath.Segments) != 0 {
-		t.Errorf("ASPath = %v, received %v", p.ASPath, p.ReceivedASPath)
+	if len(p.ASPath.Segments) != 0 || len(p.ReceivedASPath().Segments) != 0 {
+		t.Errorf("ASPath = %v, received %v", p.ASPath, p.ReceivedASPath())
 	}
 	if len(diags) != 1 || diags[0].Code != "bgp/aspath-width" || diags[0].Severity != SeverityWarning ||
 		diags[0].Offset != 4 || diags[0].Attr != AttrASPath {
 		t.Errorf("diags = %+v", diags)
 	}
-	if !reflect.DeepEqual(p.Unknown, []Attribute{{0x40, 2, []byte{2, 1, 0x00, 0x01, 0x11, 0x70}}}) {
-		t.Errorf("unknown = %v", p.Unknown)
+	if !reflect.DeepEqual(p.Unknown(), []Attribute{{0x40, 2, []byte{2, 1, 0x00, 0x01, 0x11, 0x70}}}) {
+		t.Errorf("unknown = %v", p.Unknown())
 	}
 	if !p.HasOrigin {
 		t.Error("ORIGIN lost")
@@ -449,11 +449,11 @@ func TestASPathParse(t *testing.T) {
 func TestAggregatorWidths(t *testing.T) {
 	want := Aggregator{70000, netip.MustParseAddr("192.0.2.8")}
 	p, diags := NewAttrs(agg2(100), Context{AS4: false}).Decode()
-	if len(diags) != 0 || !p.HasAggregator || p.Aggregator != (Aggregator{100, netip.MustParseAddr("192.0.2.7")}) {
+	if len(diags) != 0 || aggOf(p) != (aggResult{Aggregator{100, netip.MustParseAddr("192.0.2.7")}, true}) {
 		t.Errorf("2-byte: p = %+v diags = %+v", p, diags)
 	}
 	p, diags = NewAttrs(agg4(7, 70000), Context{AS4: true}).Decode()
-	if len(diags) != 0 || !p.HasAggregator || p.Aggregator != want {
+	if len(diags) != 0 || aggOf(p) != (aggResult{want, true}) {
 		t.Errorf("4-byte: p = %+v diags = %+v", p, diags)
 	}
 	for _, tc := range []struct {
@@ -466,9 +466,17 @@ func TestAggregatorWidths(t *testing.T) {
 		{"AS4_AGGREGATOR 6 bytes", attr(0xC0, 18, 0, 100, 192, 0, 2, 7), Context{AS4: false}},
 	} {
 		p, diags := NewAttrs(tc.raw, tc.ctx).Decode()
-		if p.HasAggregator || len(p.Unknown) != 1 || len(diags) != 1 || diags[0].Code != "bgp/attr-length" ||
+		if aggOf(p).OK || len(p.Unknown()) != 1 || len(diags) != 1 || diags[0].Code != "bgp/attr-length" ||
 			diags[0].Attr != AttrCode(tc.raw[1]) || diags[0].Severity != SeverityWarning {
 			t.Errorf("%s: p = %+v diags = %+v", tc.name, p, diags)
 		}
 	}
 }
+
+// aggResult is Path.Aggregator's two results as one comparable value.
+type aggResult struct {
+	Agg Aggregator
+	OK  bool
+}
+
+func aggOf(p Path) aggResult { a, ok := p.Aggregator(); return aggResult{a, ok} }

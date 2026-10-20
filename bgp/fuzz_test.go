@@ -236,17 +236,17 @@ func FuzzASPathMerge(f *testing.F) {
 		p, _ := bgp.NewAttrs(block, bgp.Context{AS4: false}).Decode()
 		// Decided from the decoded inputs, not from diagnostics: AS4_PATH merges
 		// when it is present and counts no more ASes than AS_PATH.
-		used := len(p.AS4Path.Segments) > 0 && p.AS4Path.Len() <= p.ReceivedASPath.Len()
+		used := len(p.AS4Path().Segments) > 0 && p.AS4Path().Len() <= p.ReceivedASPath().Len()
 		if !used {
-			if !reflect.DeepEqual(p.ASPath, p.ReceivedASPath) {
-				t.Fatalf("AS4_PATH not used but ASPath %v != received %v", p.ASPath, p.ReceivedASPath)
+			if !reflect.DeepEqual(p.ASPath, p.ReceivedASPath()) {
+				t.Fatalf("AS4_PATH not used but ASPath %v != received %v", p.ASPath, p.ReceivedASPath())
 			}
 			return
 		}
-		if p.ASPath.Len() != p.ReceivedASPath.Len() {
-			t.Fatalf("merged Len %d != received Len %d", p.ASPath.Len(), p.ReceivedASPath.Len())
+		if p.ASPath.Len() != p.ReceivedASPath().Len() {
+			t.Fatalf("merged Len %d != received Len %d", p.ASPath.Len(), p.ReceivedASPath().Len())
 		}
-		merged, as4 := flatten(p.ASPath), flatten(p.AS4Path)
+		merged, as4 := flatten(p.ASPath), flatten(p.AS4Path())
 		if len(merged) < len(as4) || !reflect.DeepEqual(merged[len(merged)-len(as4):], as4) {
 			t.Fatalf("AS4_PATH %v is not the tail of the merged path %v", as4, merged)
 		}

@@ -8,14 +8,14 @@ import (
 // ParseNLRI reads a run of prefixes of family fam from b. With addPath every
 // prefix is preceded by a 4-byte path identifier. A prefix length above the
 // family's width, or bytes that run out, is an Error diagnostic
-// ("bgp/nlri-length") that stops the parse; the prefixes before it are kept.
+// (DiagNLRILength) that stops the parse; the prefixes before it are kept.
 // Bits past a prefix's length are cleared, with an Info diagnostic
-// ("bgp/prefix-bits"). Diagnostic.Offset is the offset in b. A family without
+// (DiagPrefixBits). Diagnostic.Offset is the offset in b. A family without
 // plain prefixes (Family.HasPrefixes false) is refused, even for empty b, with
-// one Error diagnostic ("bgp/nlri-family") and nil NLRI.
+// one Error diagnostic (DiagNLRIFamily) and nil NLRI.
 func ParseNLRI(b []byte, fam Family, addPath bool) ([]NLRI, []Diagnostic) {
 	if !fam.HasPrefixes() {
-		return nil, []Diagnostic{{SeverityError, "bgp/nlri-family", 0, 0,
+		return nil, []Diagnostic{{SeverityError, DiagNLRIFamily, 0, 0,
 			fmt.Sprintf("NLRI of AFI %d SAFI %d are not plain prefixes", fam.AFI, fam.SAFI)}}
 	}
 	return parseNLRI(b, fam.AFI, addPath)
@@ -32,7 +32,7 @@ func parseNLRI(b []byte, afi AFI, addPath bool) ([]NLRI, []Diagnostic) {
 		if len(b) == 0 {
 			return nil, nil
 		}
-		return nil, []Diagnostic{{SeverityError, "bgp/nlri-length", 0, 0,
+		return nil, []Diagnostic{{SeverityError, DiagNLRILength, 0, 0,
 			fmt.Sprintf("NLRI of AFI %d cannot be parsed", afi)}}
 	}
 	var (
@@ -40,7 +40,7 @@ func parseNLRI(b []byte, afi AFI, addPath bool) ([]NLRI, []Diagnostic) {
 		diags []Diagnostic
 	)
 	fail := func(off int, msg string) {
-		diags = append(diags, Diagnostic{SeverityError, "bgp/nlri-length", off, 0, msg})
+		diags = append(diags, Diagnostic{SeverityError, DiagNLRILength, off, 0, msg})
 	}
 	for off := 0; off < len(b); {
 		start := off
@@ -75,7 +75,7 @@ func parseNLRI(b []byte, afi AFI, addPath bool) ([]NLRI, []Diagnostic) {
 		}
 		pfx := netip.PrefixFrom(addr, plen)
 		if m := pfx.Masked(); m != pfx {
-			diags = append(diags, Diagnostic{SeverityInfo, "bgp/prefix-bits", start, 0,
+			diags = append(diags, Diagnostic{SeverityInfo, DiagPrefixBits, start, 0,
 				"prefix bits past the length were set and are cleared"})
 			pfx = m
 		}

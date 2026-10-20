@@ -23,6 +23,19 @@ const AttrNextHop AttrCode = 3
 const AttrOnlyToCustomer AttrCode = 35
 const AttrOrigin AttrCode = 1
 const AttrOriginatorID AttrCode = 9
+const DiagAS4PathIgnored = "bgp/as4path-ignored"
+const DiagASPathWidth = "bgp/aspath-width"
+const DiagAttrDuplicate = "bgp/attr-duplicate"
+const DiagAttrLength = "bgp/attr-length"
+const DiagAttrTruncated = "bgp/attr-truncated"
+const DiagAttrValue = "bgp/attr-value"
+const DiagMessageHeader = "bgp/message-header"
+const DiagMessageTruncated = "bgp/message-truncated"
+const DiagNLRIFamily = "bgp/nlri-family"
+const DiagNLRILength = "bgp/nlri-length"
+const DiagNotUpdate = "bgp/not-update"
+const DiagPrefixBits = "bgp/prefix-bits"
+const DiagUpdateLength = "bgp/update-length"
 const MessageKeepalive MessageType = 4
 const MessageNotification MessageType = 3
 const MessageOpen MessageType = 1
@@ -36,9 +49,13 @@ const SAFIUnicast SAFI = 1
 const SeverityError Severity = 2
 const SeverityInfo Severity = 0
 const SeverityWarning Severity = 1
+const ValidationInvalid ValidationState = 2
+const ValidationNotFound ValidationState = 1
+const ValidationValid ValidationState = 0
 var ErrMarker = errors.New(…)
 var ErrShortMessage = errors.New(…)
 func NewAttrs(raw []byte, ctx Context) Attrs
+func NewInterner() *Interner
 func ParseMessageHeader(msg []byte) (MessageHeader, error)
 func ParseNLRI(b []byte, fam Family, addPath bool) ([]NLRI, []Diagnostic)
 func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic)
@@ -74,10 +91,28 @@ type Diagnostic struct
 	Attr AttrCode
 	Message string
 type ExtCommunity [8]byte
+func (ExtCommunity) Color() (uint32, bool)
+func (ExtCommunity) Encapsulation() (uint16, bool)
+func (ExtCommunity) LinkBandwidth() (ASN, float32, bool)
+func (ExtCommunity) OriginValidation() (ValidationState, bool)
+func (ExtCommunity) RouteOrigin() (ExtCommunityAdmin, bool)
+func (ExtCommunity) RouteTarget() (ExtCommunityAdmin, bool)
+func (ExtCommunity) String() string
+func (ExtCommunity) Subtype() uint8
+func (ExtCommunity) Transitive() bool
+func (ExtCommunity) Type() uint8
+type ExtCommunityAdmin struct
+	AS ASN
+	Addr netip.Addr
+	Local uint32
 type Family struct
 	AFI AFI
 	SAFI SAFI
 func (Family) HasPrefixes() bool
+type Interner struct
+func (*Interner) Decode(a Attrs) (*Path, []Diagnostic)
+func (*Interner) DropPathIndex()
+func (*Interner) Len() int
 type LargeCommunity struct
 	Global uint32
 	Local1 uint32
@@ -104,29 +139,29 @@ type NLRI struct
 	HasPathID bool
 type Origin uint8
 type Path struct
+	ASPath ASPath
+	Communities []Community
+	LargeCommunities []LargeCommunity
+	MPReach *MPReach
+	MED uint32
+	LocalPref uint32
+	OnlyToCustomer ASN
 	Origin Origin
 	HasOrigin bool
-	ASPath ASPath
-	ReceivedASPath ASPath
-	AS4Path ASPath
-	NextHop netip.Addr
-	MED uint32
 	HasMED bool
-	LocalPref uint32
 	HasLocalPref bool
 	AtomicAggregate bool
-	Aggregator Aggregator
-	HasAggregator bool
-	Communities []Community
-	ExtCommunities []ExtCommunity
-	LargeCommunities []LargeCommunity
-	OnlyToCustomer ASN
 	HasOnlyToCustomer bool
-	OriginatorID netip.Addr
-	ClusterList []netip.Addr
-	MPReach *MPReach
-	MPUnreach *MPUnreach
-	Unknown []Attribute
+func (Path) AS4Path() ASPath
+func (Path) Aggregator() (Aggregator, bool)
+func (Path) Clone() Path
+func (Path) ClusterList() []netip.Addr
+func (Path) ExtCommunities() []ExtCommunity
+func (Path) MPUnreach() *MPUnreach
+func (Path) NextHop() netip.Addr
+func (Path) OriginatorID() netip.Addr
+func (Path) ReceivedASPath() ASPath
+func (Path) Unknown() []Attribute
 type SAFI uint8
 type Segment struct
 	Type SegmentType
@@ -137,3 +172,5 @@ type Update struct
 	Withdrawn []NLRI
 	Attrs Attrs
 	Announced []NLRI
+type ValidationState uint8
+func (ValidationState) String() string

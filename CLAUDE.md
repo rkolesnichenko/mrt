@@ -16,7 +16,7 @@ the differential test.
    `RecordError.Raw` of every `ErrMalformed`) reproduces the input unless an `ErrTooLarge` or
    `ErrTruncated` was yielded. `TestLossless` and the fuzz property enforce it; never weaken them.
 2. **Errors are values; never panic.** A bad record is a `*RecordError` and the stream goes on; a bad
-   attribute goes raw to `Path.Unknown` with a `Diagnostic`. No count read from input sizes an
+   attribute goes raw to `Path.Unknown()` with a `Diagnostic`. No count read from input sizes an
    allocation before it is checked against the bytes present (R10: bodies over 64 KiB are read
    through a growing buffer).
 3. **No `net`, no dependencies.** `go list -deps ./... | grep -x net` prints nothing; root `go.mod`
@@ -30,7 +30,11 @@ the differential test.
 7. **Conventions C1-C3** (spec §3), held by `go run ./internal/apisurface -check`: `X(in)` /
    `XWith(in, XOptions)`; whole-value parsers return `(T, []Diagnostic)`, single values `(T, error)`;
    sentinels use `errors.New`; parsed values are values. `api/*.txt` is the golden of every exported
-   signature.
+   signature. The one exception (user's decision 2026-10-20, v0.1 design §3):
+   `(*bgp.Interner).Decode` returns a `*Path`, because the path is shared.
+8. **Interning changes nothing.** With and without a `bgp.Interner`, routes, paths and diagnostics
+   are deeply equal. `TestInternerMatchesDecode`, `TestRoutesInternerSameRoutes` and FuzzRoutes hold
+   it; never weaken them.
 
 ## Decoding rules settled by rulings — get these right
 
@@ -56,13 +60,18 @@ the differential test.
 - **Truncated messages (R17, R17a).** `ParseMessageHeader` errors only for len < 19, a bad marker or
   header length < 19; a length beyond the bytes present is not a header error. `ParseUpdate` parses
   as far as the bytes go (whole prefixes and attributes) and adds one Error `bgp/message-truncated`.
-- **MP_REACH in a RIB entry (R20).** First byte non-zero is the abbreviated RFC 6396 §4.3.4 form; zero
-  is the full RFC 4760 form. The full form gets no diagnostic (route-views6 writes it on every
-  entry); its family and next hops are decoded but its NLRI stays in `RawNLRI`, because the record
-  supplies the prefix. Outside a RIB the NLRI is parsed. Next hops of length 16/32 are IPv6 for any
-  AFI (R8); `Path.NextHop` is the NEXT_HOP attribute only.
-- **Duplicates and malformed attributes.** First duplicate wins (RFC 7606 §3 g), later ones to `Unknown`
-  with a Warning. RFC 7606 actions are out of scope: diagnostics carry the fault.
+- **MP_REACH in a RIB entry (R20, amended 2026-10-20 by the user).** First byte non-zero is the
+  abbreviated RFC 6396 §4.3.4 form; zero is the full RFC 4760 form. The full form gets no
+  diagnostic (route-views6 writes it on every entry); its family and next hops are decoded and its
+  NLRI is not kept (`RawNLRI` nil: the record supplies the prefix; the bytes stay in
+  `Attrs.Raw()`). Outside a RIB the NLRI is parsed. Next hops of length 16/32 are IPv6 for any AFI
+  (R8); `Path.NextHop()` is the NEXT_HOP attribute only.
+- **Compact `Path` (v0.2 design §6.4a).** `Path` keeps as fields only what most paths carry.
+  NEXT_HOP and the rare attributes are behind methods, the rare ones in one unexported part that is
+  nil when a path has none. `Path` is 112 bytes on 64-bit platforms (68 on 32-bit), pinned by
+  `TestPathSize`.
+- **Duplicates and malformed attributes.** First duplicate wins (RFC 7606 §3 g), later ones to
+  `Unknown()` with a Warning. RFC 7606 actions are out of scope: diagnostics carry the fault.
 
 ## Oracles and goldens
 
@@ -130,6 +139,12 @@ or TIMEOUT_S, and ends with SUCCESS, FAILURE, MEMLIMIT, PRESSURE, SWAP, LOWMEM, 
 NOT STARTED. Without it, run the same command with a memory cap of your own (e.g. `GOMEMLIMIT`
 and a watchdog). Every figure in a doc or the
 CHANGELOG comes from a command run in this work, with its log named; otherwise it is unknown.
+
+`internal/heldsize` is the heaviest: it holds about 6.7 GB `HeapAlloc` at its first reading
+(`.data/heldsize-v0.2.log`, reading 0: 6,655,422,952), so it runs alone with a memory limit above
+that: `env GOMAXPROCS=4 GOMEMLIMIT=16GiB go run ./internal/heldsize
+.data/realdata/rrc00-bview.*.gz .data/realdata/rv2-rib.*.bz2 .data/realdata/rv6-rib.*.bz2`. The
+`memguard.sh 8 ...` limit used above would kill it; under memguard give it a limit of at least 12.
 
 ## Process
 

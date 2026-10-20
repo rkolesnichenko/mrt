@@ -72,8 +72,10 @@ URLs and prints these lines; on 2026-10-16 a second run gave the same bytes.
   sha256 103cc2d7241f07447f5092ae14c0bda0c1bb4a5f6d0def7732c11580646f223a.
   PEER_INDEX_TABLE and 2999 RIB_IPV6_UNICAST records (24870 entries).
   route-views6 writes the full RFC 4760 MP_REACH_NLRI in RIB entries, not RFC
-  6396's abbreviated form (decoded with `Abbreviated` false and the NLRI
-  left in `RawNLRI`, Ruling R20); the abbreviated form is covered by
+  6396's abbreviated form. Ruling R20 as amended on 2026-10-20: its family
+  and next hops are decoded, with `Abbreviated` false, and its NLRI is not
+  kept (`RawNLRI` nil; the record supplies the prefix, and the bytes stay in
+  `Attrs.Raw()`); the abbreviated form is covered by
   `synthetic/nh32.mrt` and `synthetic/addpath-rib-v4v6.mrt`.
 - `rv2-tabledump.20070601.0025.gz`: route-views2,
   https://archive.routeviews.org/bgpdata/2007.06/RIBS/rib.20070601.0025.bz2,
