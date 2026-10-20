@@ -16,8 +16,12 @@ import (
 	"github.com/rkolesnichenko/mrt/bgp"
 )
 
-// seedCap bounds each seed so fuzzing stays fast.
-const seedCap = 64 << 10
+// seedCap bounds each seed so fuzzing stays fast. Every new input the fuzzer
+// keeps is minimized, at a cost that grows with its length: with 64 KiB seeds
+// FuzzRecords spent whole runs minimizing (47 executions in 25 s), with 4 KiB
+// seeds it ran a million. 4 KiB still holds whole records of every kind the
+// fixtures have, peer tables and RIB records included.
+const seedCap = 4 << 10
 
 // seedFiles returns every decompressed fixture and synthetic file, each cut at
 // a record boundary to at most seedCap bytes (at least the first record).
