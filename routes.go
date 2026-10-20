@@ -60,10 +60,14 @@ type Route struct {
 // whose framing is broken or whose peer index is not in the latest
 // PEER_INDEX_TABLE, a BGP4MP message whose header is broken, and an UPDATE
 // that yields no route but has a Warning or Error diagnostic (the first one
-// is named). Routes stops when yield returns false.
+// is named). Routes stops when yield returns false. Ranging over it again
+// after a break goes on with the next record from records (as Records does)
+// and the same peer index table, even when records starts again from the
+// beginning; the routes left in the record it broke in are not yielded. It
+// must not be ranged over by two goroutines at once.
 func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error] {
+	var table PeerIndexTable
 	return func(yield func(Route, error) bool) {
-		var table PeerIndexTable
 		for rec, err := range records {
 			if err != nil {
 				// A broken PEER_INDEX_TABLE must not leave the previous table in force.

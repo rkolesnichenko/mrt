@@ -98,6 +98,30 @@ func TestRoutesUsesLatestPeerTable(t *testing.T) { // Review Focus 1
 	}
 }
 
+// Ranging over Routes again after a break goes on with the next record, still
+// resolving RIB entries against the peer table read before the break. The
+// rest of the record it broke in is not yielded.
+func TestRoutesResume(t *testing.T) {
+	in := cat(peerTable("192.0.2.1", "2001:db8::2"), ribV4(ribEntry(0, origin), ribEntry(1, origin)), ribV4(ribEntry(1, origin)))
+	seq := Routes(Records(bytes.NewReader(in)))
+	for r, err := range seq {
+		if err != nil || r.Peer.Addr != netip.MustParseAddr("192.0.2.1") {
+			t.Fatalf("first range: %+v %v", r, err)
+		}
+		break
+	}
+	var rs []Route
+	for r, err := range seq {
+		if err != nil {
+			t.Fatalf("second range: %v", err)
+		}
+		rs = append(rs, r)
+	}
+	if len(rs) != 1 || rs[0].Peer.Addr != netip.MustParseAddr("2001:db8::2") {
+		t.Errorf("second range: %+v, want the second RIB record's one route", rs)
+	}
+}
+
 func TestRoutesRIBBeforePeerTable(t *testing.T) {
 	in := cat(ribV4(ribEntry(0, origin), ribEntry(1, origin)), peerTable("192.0.2.1"),
 		ribV4(ribEntry(0, origin), ribEntry(5, origin)))

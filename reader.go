@@ -56,17 +56,34 @@ func Records(r io.Reader) iter.Seq2[Record, error] {
 // RecordsWith reads MRT records from r. Each record owns its bytes. A
 // malformed or oversize record yields a *RecordError and reading continues; a
 // truncated stream or a read error yields one error and ends the iteration.
+//
+// The sequence reads r as it goes: ranging over it again after a break goes on
+// with the next record, and once the stream has ended it yields nothing. It
+// must not be ranged over by two goroutines at once.
 func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
 	limit := opts.MaxRecordLen
 	if limit == 0 {
 		limit = DefaultMaxRecordLen
 	}
+	br, ok := r.(*bufio.Reader)
+	if !ok {
+		br = bufio.NewReader(r)
+	}
+	var (
+		off  int64 // of the next record in the stream
+		done bool  // the stream ended, at its end or with an error
+	)
 	return func(yield func(Record, error) bool) {
-		br, ok := r.(*bufio.Reader)
-		if !ok {
-			br = bufio.NewReader(r)
+		if done {
+			return
 		}
-		var off int64
+		// end yields the error that ends the stream, if any.
+		end := func(err error) {
+			done = true
+			if err != nil {
+				yield(nil, err)
+			}
+		}
 		for {
 			start := off
 			var hb [16]byte
@@ -74,9 +91,10 @@ func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
 			off += int64(n)
 			if err != nil {
 				if n == 0 && err == io.EOF {
+					end(nil)
 					return
 				}
-				yield(nil, endErr(start, Header{}, err))
+				end(endErr(start, Header{}, err))
 				return
 			}
 			typ := Type(binary.BigEndian.Uint16(hb[4:]))
@@ -97,7 +115,7 @@ func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
 					off += int64(n)
 					h.Time = time.Unix(sec, 0).UTC()
 					if err != nil {
-						yield(nil, endErr(start, h, err))
+						end(endErr(start, h, err))
 						return
 					}
 					if !yield(nil, &RecordError{Offset: start, Header: h, Raw: body,
@@ -109,7 +127,7 @@ func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
 				n, err := io.ReadFull(br, hb[12:16])
 				off += int64(n)
 				if err != nil {
-					yield(nil, endErr(start, Header{}, err))
+					end(endErr(start, Header{}, err))
 					return
 				}
 				usec = int64(binary.BigEndian.Uint32(hb[12:]))
@@ -124,7 +142,7 @@ func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
 				n, err := io.CopyN(io.Discard, br, bodyLen)
 				off += n
 				if err != nil {
-					yield(nil, endErr(start, h, err))
+					end(endErr(start, h, err))
 					return
 				}
 				if !yield(nil, &RecordError{Offset: start, Header: h, Err: ErrTooLarge}) {
@@ -135,7 +153,7 @@ func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
 			raw, got, err := readRecord(br, hb[:hlen], bodyLen)
 			off += got
 			if err != nil {
-				yield(nil, endErr(start, h, err))
+				end(endErr(start, h, err))
 				return
 			}
 			rec, derr := decodeBody(h, raw)
@@ -168,8 +186,9 @@ func endErr(off int64, h Header, err error) error {
 const smallBody = 64 << 10
 
 // readRecord reads bodyLen bytes after hdr into one slice holding both. A body
-// up to smallBody is allocated exactly; a larger one grows as bytes arrive, so
-// a header that lies about its length costs about twice the bytes present.
+// up to smallBody is allocated exactly; a larger one doubles as bytes arrive,
+// so a header that lies about its length allocates, in total, about four
+// times the bytes present, and under five.
 // It returns the number of body bytes consumed.
 func readRecord(br *bufio.Reader, hdr []byte, bodyLen int64) ([]byte, int64, error) {
 	if bodyLen <= smallBody {
