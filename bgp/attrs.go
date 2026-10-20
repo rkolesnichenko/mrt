@@ -94,6 +94,61 @@ type Path struct {
 	Unknown           []Attribute // every attribute not decoded above, in order, raw
 }
 
+// Clone returns a deep copy of p that shares no memory with p or with the
+// attribute block p was decoded from: every slice, MPReach, MPUnreach and each
+// Unknown[i].Value is copied. A nil slice stays nil and an empty one stays
+// empty. ASPath no longer shares slices with ReceivedASPath in the copy.
+func (p Path) Clone() Path {
+	c := p
+	c.ASPath = p.ASPath.clone()
+	c.ReceivedASPath = p.ReceivedASPath.clone()
+	c.AS4Path = p.AS4Path.clone()
+	c.Communities = cloneSlice(p.Communities)
+	c.ExtCommunities = cloneSlice(p.ExtCommunities)
+	c.LargeCommunities = cloneSlice(p.LargeCommunities)
+	c.ClusterList = cloneSlice(p.ClusterList)
+	if p.MPReach != nil {
+		r := *p.MPReach
+		r.NLRI = cloneSlice(r.NLRI)
+		r.RawNLRI = cloneSlice(r.RawNLRI)
+		c.MPReach = &r
+	}
+	if p.MPUnreach != nil {
+		u := *p.MPUnreach
+		u.Withdrawn = cloneSlice(u.Withdrawn)
+		u.RawNLRI = cloneSlice(u.RawNLRI)
+		c.MPUnreach = &u
+	}
+	if p.Unknown != nil {
+		c.Unknown = make([]Attribute, len(p.Unknown))
+		for i, a := range p.Unknown {
+			a.Value = cloneSlice(a.Value)
+			c.Unknown[i] = a
+		}
+	}
+	return c
+}
+
+// cloneSlice copies s, keeping nil as nil and empty as empty non-nil.
+func cloneSlice[T any](s []T) []T {
+	if s == nil {
+		return nil
+	}
+	return append(make([]T, 0, len(s)), s...)
+}
+
+func (p ASPath) clone() ASPath {
+	if p.Segments == nil {
+		return p
+	}
+	segs := make([]Segment, len(p.Segments))
+	for i, s := range p.Segments {
+		s.ASNs = cloneSlice(s.ASNs)
+		segs[i] = s
+	}
+	return ASPath{Segments: segs}
+}
+
 // Decode reads the block into a Path. A malformed attribute goes raw to
 // Unknown with a diagnostic and decoding continues. Broken framing puts the
 // rest of the block, header included, in one Unknown entry (Flags and Code

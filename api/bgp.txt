@@ -127,6 +127,7 @@ type Path struct
 	MPReach *MPReach
 	MPUnreach *MPUnreach
 	Unknown []Attribute
+func (Path) Clone() Path
 type SAFI uint8
 type Segment struct
 	Type SegmentType

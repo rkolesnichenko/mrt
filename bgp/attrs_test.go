@@ -3,6 +3,7 @@ package bgp
 import (
 	"net/netip"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -195,6 +196,116 @@ func TestDecodeDuplicateUnknown(t *testing.T) {
 		}
 		if last := diags[want-1]; last.Code != "bgp/attr-duplicate" || last.Attr != AttrCode(code) || last.Offset != 4 {
 			t.Errorf("code %d: diags = %+v", code, diags)
+		}
+	}
+}
+
+// cloneBlocks returns blocks that between them set every field Clone copies.
+func cloneBlocks() [][]byte {
+	nhv4 := []byte{192, 0, 2, 1}
+	return [][]byte{
+		concat(
+			attr(0x40, 1, 0),
+			asPathAttr(seg(2, ASSequence, 64500, 64501), seg(2, ASSet, 1, 2)),
+			as4PathAttr(seg(4, ASSequence, 4200000000, 64501)),
+			attr(0x40, 3, 192, 0, 2, 1),
+			attr(0xC0, 8, 0xFD, 0xE8, 0, 1, 0xFD, 0xE8, 0, 2),
+			attr(0xC0, 16, 0, 2, 0xFD, 0xE8, 0, 0, 0, 1),
+			attr(0xC0, 32, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3),
+			attr(0x80, 10, 10, 0, 0, 2, 10, 0, 0, 3),
+			attr(0x80, 14, concat([]byte{0, 2, 1, 32}, b16(v6global), b16(v6ll), []byte{0, 48, 0x20, 1, 0x0d, 0xb8, 0, 1})...),
+			attr(0x80, 15, 0, 1, 1, 24, 198, 51, 100),
+			attr(0xC0, 99, 0xAA, 0xBB),
+		),
+		concat(
+			attr(0x80, 14, concat([]byte{0, 25, 65, 4}, nhv4, []byte{0, 0xDE, 0xAD})...),
+		),
+		concat(
+			attr(0x80, 15, 0, 25, 65, 0xBE, 0xEF),
+		),
+	}
+}
+
+func TestPathClone(t *testing.T) {
+	for i, orig := range cloneBlocks() {
+		saved := slices.Clone(orig)
+		block := slices.Clone(orig)
+		p, _ := NewAttrs(block, Context{}).Decode()
+		c := p.Clone()
+		if !reflect.DeepEqual(c, p) {
+			t.Fatalf("block %d: clone differs:\n%+v\n%+v", i, c, p)
+		}
+		want, _ := NewAttrs(saved, Context{}).Decode()
+
+		for j := range block {
+			block[j] = 0xEE
+		}
+		scribble(reflect.ValueOf(&p).Elem())
+		if !reflect.DeepEqual(c, want) {
+			t.Errorf("block %d: clone changed after the source was overwritten:\n%+v\n%+v", i, c, want)
+		}
+	}
+	// the three blocks together must have exercised every pointer and slice
+	p, _ := NewAttrs(cloneBlocks()[0], Context{}).Decode()
+	if p.MPReach == nil || len(p.MPReach.NLRI) == 0 || p.MPUnreach == nil || len(p.MPUnreach.Withdrawn) == 0 ||
+		len(p.Unknown) == 0 || len(p.ASPath.Segments) == 0 || len(p.AS4Path.Segments) == 0 || len(p.ClusterList) == 0 {
+		t.Fatalf("block 0 left a field unset: %+v", p)
+	}
+	q, _ := NewAttrs(cloneBlocks()[1], Context{}).Decode()
+	u, _ := NewAttrs(cloneBlocks()[2], Context{}).Decode()
+	if q.MPReach == nil || len(q.MPReach.RawNLRI) == 0 || u.MPUnreach == nil || len(u.MPUnreach.RawNLRI) == 0 {
+		t.Fatalf("raw NLRI blocks left a field unset: %+v %+v", q.MPReach, u.MPUnreach)
+	}
+}
+
+func TestPathCloneNilAndEmpty(t *testing.T) {
+	var z Path
+	if c := z.Clone(); !reflect.DeepEqual(c, z) || c.Communities != nil || c.MPReach != nil || c.Unknown != nil {
+		t.Errorf("zero path: %+v", c)
+	}
+	e := Path{
+		Communities: []Community{}, ClusterList: []netip.Addr{}, Unknown: []Attribute{{Value: []byte{}}, {}},
+		ASPath:  ASPath{Segments: []Segment{{ASSequence, []ASN{}}, {ASSet, nil}}},
+		MPReach: &MPReach{NLRI: []NLRI{}, RawNLRI: []byte{}}, MPUnreach: &MPUnreach{},
+	}
+	c := e.Clone()
+	if !reflect.DeepEqual(c, e) {
+		t.Errorf("empty slices not preserved: %#v", c)
+	}
+}
+
+// scribble overwrites every slice element reachable from v, through pointers,
+// structs and slices, with garbage.
+func scribble(v reflect.Value) {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if !v.IsNil() {
+			scribble(v.Elem())
+		}
+	case reflect.Struct:
+		if v.Type() == reflect.TypeOf(netip.Addr{}) || v.Type() == reflect.TypeOf(netip.Prefix{}) {
+			return // opaque values, replaced by the slice case
+		}
+		for i := 0; i < v.NumField(); i++ {
+			scribble(v.Field(i))
+		}
+	case reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			e := v.Index(i)
+			switch {
+			case e.Type() == reflect.TypeOf(netip.Addr{}):
+				e.Set(reflect.ValueOf(netip.AddrFrom4([4]byte{0xEE, 0xEE, 0xEE, 0xEE})))
+			case e.Type() == reflect.TypeOf(netip.Prefix{}):
+				e.Set(reflect.ValueOf(netip.MustParsePrefix("238.238.238.238/32")))
+			case e.Kind() == reflect.Uint8 || e.Kind() == reflect.Uint16 || e.Kind() == reflect.Uint32:
+				e.SetUint(0xEEEEEEEE & (1<<uint(e.Type().Bits()) - 1))
+			case e.Kind() == reflect.Array:
+				for k := 0; k < e.Len(); k++ {
+					e.Index(k).SetUint(0xEE)
+				}
+			default:
+				scribble(e)
+			}
 		}
 	}
 }
