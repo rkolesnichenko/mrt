@@ -112,10 +112,14 @@ func TestInternerContextsApart(t *testing.T) {
 	as2, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{AS4: false, RIB: true}))
 	as4, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{AS4: true, RIB: true}))
 	upd, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{RIB: false}))
-	if as2 == as4 || as2 == upd || as4 == upd {
-		t.Errorf("contexts share a path: AS4 false %p, AS4 true %p, RIB false %p", as2, as4, upd)
+	ap, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{AS4: false, RIB: true, AddPath: true}))
+	if as2 == as4 || as2 == upd || as4 == upd || as2 == ap {
+		t.Errorf("contexts share a path: AS4 false %p, AS4 true %p, RIB false %p, AddPath %p", as2, as4, upd, ap)
 	}
-	if !reflect.DeepEqual(*as2, *as4) || !reflect.DeepEqual(*as2, *upd) {
+	if again, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{AS4: false, RIB: true, AddPath: true})); again != ap {
+		t.Error("AddPath true, RIB: not interned")
+	}
+	if !reflect.DeepEqual(*as2, *as4) || !reflect.DeepEqual(*as2, *upd) || !reflect.DeepEqual(*as2, *ap) {
 		t.Fatal("the block should decode the same in every context")
 	}
 	if again, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{AS4: false, RIB: true})); again != as2 {
@@ -127,8 +131,8 @@ func TestInternerContextsApart(t *testing.T) {
 	if again, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{RIB: false})); again == upd {
 		t.Error("an UPDATE block was interned whole")
 	}
-	if n := in.Len(); n != 2 {
-		t.Errorf("Len() = %d, want 2", n)
+	if n := in.Len(); n != 3 {
+		t.Errorf("Len() = %d, want 3", n)
 	}
 }
 

@@ -26,6 +26,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"runtime"
 	"runtime/debug"
 	"time"
@@ -157,10 +158,17 @@ func class(n uint64) uint64 {
 	return (n + 8191) &^ 8191
 }
 
-// rareSize is unsafe.Sizeof of bgp's unexported pathRare (144 bytes on 64-bit
-// platforms), which this package cannot name. It only feeds the computed
-// lines; the readings are measured.
-const rareSize = 144
+// rareSize is the size of bgp's unexported pathRare, which this package cannot
+// name: it is read from the type of Path's rare field by reflection (bgp's
+// TestPathRareSize pins it: 144 bytes on 64-bit platforms, 80 on 32-bit). It
+// only feeds the computed lines; the readings are measured.
+var rareSize = func() uint64 {
+	f, ok := reflect.TypeOf(bgp.Path{}).FieldByName("rare")
+	if !ok || f.Type.Kind() != reflect.Pointer {
+		panic("heldsize: bgp.Path has no rare pointer field; update heldsize")
+	}
+	return uint64(f.Type.Elem().Size())
+}()
 
 // hasRare reports whether p has a rare part: any of the method-read attributes
 // but NextHop is set.
@@ -253,7 +261,7 @@ func (s *state) distinct() []*bgp.Path {
 	fmt.Printf("distinct paths held (by pointer): %d\n", len(keep))
 	fmt.Printf("distinct ASPath arrays (by identity): %d; distinct community arrays: %d\n", len(asArrays), len(commArrays))
 	fmt.Printf("paths with a rare part: %d; with MPReach: %d\n", nRare, nMP)
-	fmt.Printf("computed: Path structs %d, rare parts (%d-byte part assumed) %d, MPReach structs %d\n",
+	fmt.Printf("computed: Path structs %d, rare parts (%d-byte part) %d, MPReach structs %d\n",
 		uint64(len(keep))*class(uint64(unsafe.Sizeof(bgp.Path{}))), rareSize, nRare*class(rareSize),
 		nMP*class(uint64(unsafe.Sizeof(bgp.MPReach{}))))
 	return keep
