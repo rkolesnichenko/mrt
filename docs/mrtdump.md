@@ -40,12 +40,14 @@ W:            TYPE|time|W|peer|peerAS|prefix[|pathID]
 STATE:        TYPE|time|STATE|peer|peerAS|old|new
 ```
 
-`TYPE` is `TABLE_DUMP`, `TABLE_DUMP2`, `BGP4MP` or `BGP4MP_ET`, with `_AP`
-appended for add-path records; `BGP4MP_ET` times carry `.%06d` microseconds.
+`TYPE` is `TABLE_DUMP`, `TABLE_DUMP2`, `BGP4MP` or `BGP4MP_ET`, with `_LOCAL`
+appended for `*_LOCAL` messages (the collector's own outbound) and then `_AP`
+for add-path records; `BGP4MP_ET` times carry `.%06d` microseconds.
 With `-M`, `time` is `MM/DD/YY HH:MM:SS` in UTC on every line. Large
 communities appear only with `-m -l`, unknown attributes only with `-m -u`.
 Records that are not routes or state changes (OSPF, IS-IS, GEO_PEER_TABLE,
-non-UPDATE BGP messages, `*_LOCAL` messages, other families) print no line.
+non-UPDATE BGP messages, other families) print no line. Unlike mrtdump,
+`mrt.Routes` skips `*_LOCAL` messages.
 
 ## Exit status
 
@@ -54,7 +56,7 @@ non-UPDATE BGP messages, `*_LOCAL` messages, other families) print no line.
 | 0 | done |
 | 1 | some records or attributes were malformed; each is reported on stderr and output continues |
 | 2 | bad command line |
-| 3 | a file could not be opened or read |
+| 3 | a file could not be opened or read, or the output could not be written (mrtdump stops at the first failed write) |
 
 bgpdump exits 0 on malformed input (or dies with SIGABRT where it asserts), so
 status 1 is a difference by design (divergence C4).

@@ -57,10 +57,13 @@ func (d *dumper) start(typ string, rec mrt.Record, kind string) []byte {
 	return append(b, '|')
 }
 
-// end writes the line b and keeps its buffer.
+// end writes the line b and keeps its buffer. A write error is kept in
+// d.werr, and file stops at the next record.
 func (d *dumper) end(b []byte) {
 	b = append(b, '\n')
-	d.out.Write(b)
+	if _, err := d.out.Write(b); err != nil && d.werr == nil {
+		d.werr = err
+	}
 	d.line = b
 }
 

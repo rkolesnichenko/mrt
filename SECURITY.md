@@ -35,8 +35,9 @@ them as a security-relevant bug.
 - **Record size is bounded.** A record longer than `Options.MaxRecordLen`
   (default 16 MiB) is skipped without being buffered and reported as
   `ErrTooLarge`. A body over 64 KiB is read through a buffer that grows only as
-  bytes arrive, so a header that lies about its length costs at most about
-  twice the bytes actually present.
+  bytes arrive, so a header that lies about its length allocates, in total,
+  about four times the bytes actually present, and under five
+  (`TestRecordsLyingLengthAllocation`).
 - **Errors are values; the stream goes on.** A malformed record becomes a
   `*RecordError` and reading continues with the next one; a malformed attribute
   becomes a diagnostic. Truncation and read errors end the stream with an

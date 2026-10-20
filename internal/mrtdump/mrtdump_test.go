@@ -3,6 +3,8 @@ package mrtdump
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
+	"io"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -456,4 +458,39 @@ func mustAddr16(t *testing.T, s string) netip.Addr {
 		t.Fatal(err)
 	}
 	return netip.AddrFrom16(a.As16())
+}
+
+// failWriter fails every write.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+// countReader counts the bytes read through it.
+type countReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+// A failed write stops mrtdump at once, with exit status 3, instead of
+// decoding the rest of the input first.
+func TestMrtdumpWriteErrorStops(t *testing.T) {
+	in, err := os.ReadFile("../../testdata/mrt/rv2-updates-et.20261015.1200.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr := &countReader{r: bytes.NewReader(in)}
+	var errb bytes.Buffer
+	code := Run([]string{"-m", "-", "-"}, cr, failWriter{}, &errb)
+	if code != exitRead || strings.Count(errb.String(), "writing output: disk full") != 1 {
+		t.Errorf("exit %d, stderr %q; want %d and one write error", code, errb.String(), exitRead)
+	}
+	if cr.n > len(in)/2 {
+		t.Errorf("read %d of %d input bytes after the first failed write", cr.n, len(in))
+	}
 }

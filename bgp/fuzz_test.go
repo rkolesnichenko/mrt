@@ -272,7 +272,8 @@ func flatten(p bgp.ASPath) []bgp.ASN {
 // largest claim is what the bytes present can frame; a believed claim of 255
 // ASNs costs 1 KiB per segment. Communities have no count (length/4), and the
 // length field's 65,535 is checked against the bytes present. Not parallel: it
-// reads the process-wide TotalAlloc.
+// reads the process-wide TotalAlloc, averaged over many decodes so that what
+// the runtime allocates meanwhile (a few KiB on Windows) does not count.
 func TestHugeCountsAllocateLittle(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -296,12 +297,16 @@ func TestHugeCountsAllocateLittle(t *testing.T) {
 			t.Fatalf("%s is %d bytes", c.name, len(c.blk))
 		}
 		for _, ctx := range []bgp.Context{{}, {AS4: true}} {
+			const runs = 100
 			runtime.GC()
 			var before, after runtime.MemStats
+			var diags []bgp.Diagnostic
 			runtime.ReadMemStats(&before)
-			_, diags := bgp.NewAttrs(c.blk, ctx).Decode()
+			for range runs {
+				_, diags = bgp.NewAttrs(c.blk, ctx).Decode()
+			}
 			runtime.ReadMemStats(&after)
-			if d := after.TotalAlloc - before.TotalAlloc; d > c.bound {
+			if d := (after.TotalAlloc - before.TotalAlloc) / runs; d > c.bound {
 				t.Errorf("%s %+v: allocated %d bytes (bound %d) for %d input bytes", c.name, ctx, d, c.bound, len(c.blk))
 			}
 			found := c.diag == "" && len(diags) > 0

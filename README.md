@@ -11,8 +11,8 @@ the standard library, never panics on hostile input, keeps going past a
 malformed record or attribute, and is checked byte for byte against bgpdump and
 field by field against bgpkit-parser.
 
-Status: pre-v1 (0.x). The API may still change between minor versions. Nothing
-is released yet; see [CHANGELOG.md](CHANGELOG.md).
+Status: pre-v1 (0.x), released; see [CHANGELOG.md](CHANGELOG.md) for the
+versions. The API may still change between minor versions.
 
 ## Install
 
@@ -102,7 +102,16 @@ decoding every entry and attribute: `mrt.Routes` 3,117,745,208, gobgp v4.10.0
 errors. `mrt.Records` alone allocates 1.179 bytes per decompressed byte. Go
 1.27.2, Apple M3 Max, `GOMAXPROCS=4` (log `.data/compare-rv6-r21.log`). The
 standard library's bzip2 dominates the wall time of a full pass: 24.269 s of
-30.748 s.
+30.748 s, measured under the maintainer's memory watchdog, which runs the
+command at macOS background priority (`taskpolicy -b`).
+
+Background priority slows these runs about fourfold. On 2026-10-20 the same
+benchmarks over the committed fixtures gave, at normal priority and then under
+`taskpolicy -b`: `Routes` over route-views6's RIB slice 441.55 and 101.91 MB/s,
+`Records` over route-views2's 6,969.71 and 1,374.06 MB/s, bzip2 decompression
+52.63 and 13.70 MB/s (logs `.data/bench-v011-normal.log` and
+`.data/bench-v011-background.log`). `Routes` decodes about eight times faster
+than bzip2 decompresses, at either priority. A full pass at normal priority has not been timed.
 
 ## Data and licence
 

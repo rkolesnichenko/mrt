@@ -62,6 +62,51 @@ jobs:
           # here instead of skipping them.
           MRT_ORACLES_REQUIRED: "1"
 
+  # The release ships darwin and windows binaries, and the code converts
+  # uint32 lengths to int: the tests also run on macOS, Windows and 32-bit x86.
+  # The oracles are not installed here, so the *Live tests skip.
+  portability:
+    name: test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos, os: macos-latest, goarch: "" }
+          - { name: windows, os: windows-latest, goarch: "" }
+          - { name: linux 386, os: ubuntu-latest, goarch: "386" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+          cache-dependency-path: "**/go.mod"
+      - name: go test ./...
+        shell: bash
+        run: go test -count=1 ./...
+        env:
+          GOARCH: ${{ matrix.goarch }}
+
+  # internal/compare is its own module (it requires gobgp), outside ./... above.
+  compare:
+    name: build internal/compare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+          cache-dependency-path: internal/compare/go.sum
+      - name: go vet and go test in internal/compare
+        working-directory: internal/compare
+        run: go vet ./... && go test -count=1 ./...
+
   # Every fuzz target for 30s, beside the check jobs rather than after them.
   fuzz:
     name: fuzz (shard ${{ matrix.shard }}/2)
@@ -88,13 +133,22 @@ jobs:
         env:
           FUZZTIME: 30s
           FUZZ_SHARD: ${{ matrix.shard }}/2
+      # go test writes a failing input under testdata/fuzz and does not print
+      # it; without this the crash cannot be reproduced.
+      - name: Upload failing fuzz inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failures-${{ matrix.shard }}
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
 
   # The one context branch protection requires: it fails unless every job
   # above succeeded. always() runs it when a needed job failed, which a plain
   # needs: would skip (a skipped required check counts as passed).
   ci-ok:
     name: ci ok
-    needs: [check, fuzz]
+    needs: [check, portability, compare, fuzz]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

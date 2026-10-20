@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 )
@@ -207,6 +208,42 @@ func TestRecordsStopEarly(t *testing.T) {
 	}
 }
 
+// A second range over the same sequence goes on from where the first stopped,
+// with offsets counted from the start of the stream; once the stream has
+// ended, ranging again yields nothing.
+func TestRecordsResume(t *testing.T) {
+	a := frame(1, TypeOSPFv2, 1, 0, []byte{1})
+	b := frame(2, TypeOSPFv2, 1, 0, []byte{2, 2})
+	bad := []byte{0, 0, 0, 3, 0, 17, 0, 1, 0, 0, 0, 1, 0xAA} // ET, Length 1: malformed
+	c := frame(4, TypeOSPFv2, 1, 0, []byte{4})
+	in := bytes.Join([][]byte{a, b, bad, c}, nil)
+	seq := Records(bytes.NewReader(in))
+	for rec, err := range seq {
+		if err != nil || !bytes.Equal(rec.Raw(), a) {
+			t.Fatalf("first range: %v %v", rec, err)
+		}
+		break
+	}
+	var got [][]byte
+	for rec, err := range seq {
+		if err != nil {
+			var re *RecordError
+			if !errors.As(err, &re) || re.Offset != int64(len(a)+len(b)) || !errors.Is(err, ErrMalformed) {
+				t.Errorf("second range: err = %v, want malformed at offset %d", err, len(a)+len(b))
+			}
+			got = append(got, re.Raw)
+			continue
+		}
+		got = append(got, rec.Raw())
+	}
+	if want := [][]byte{b, bad, c}; !slices.EqualFunc(got, want, bytes.Equal) {
+		t.Errorf("second range yielded %x, want %x", got, want)
+	}
+	for rec, err := range seq {
+		t.Errorf("third range yielded %v, %v after the stream ended", rec, err)
+	}
+}
+
 func TestRecordsLyingLengthBounded(t *testing.T) {
 	in := append([]byte{0, 0, 0, 1, 0, 16, 0, 1}, 0x01, 0, 0, 0) // Length 16 MiB
 	in = append(in, make([]byte, 100)...)
@@ -219,6 +256,31 @@ func TestRecordsLyingLengthBounded(t *testing.T) {
 	}
 	if d := after.TotalAlloc - before.TotalAlloc; d >= 1<<20 {
 		t.Errorf("allocated %d bytes for 100 present", d)
+	}
+}
+
+// A header that claims 16 MiB over fewer bytes allocates, in total, about four
+// times the bytes present (4.14 at 960 KiB) and under five: the buffer doubles
+// as bytes arrive.
+func TestRecordsLyingLengthAllocation(t *testing.T) {
+	if raceEnabled {
+		t.Skip("the race detector inflates TotalAlloc")
+	}
+	for _, present := range []int{100 << 10, 960 << 10, 1 << 20, 2 << 20, 3 << 20, 5 << 20} {
+		in := append([]byte{0, 0, 0, 1, 0, 16, 0, 1}, 0x01, 0, 0, 0) // Length 16 MiB
+		in = append(in, make([]byte, present)...)
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		recs, errs := collect(t, in, Options{})
+		runtime.ReadMemStats(&after)
+		if len(recs) != 0 || len(errs) != 1 || !errors.Is(errs[0], ErrTruncated) {
+			t.Fatalf("%d bytes present: recs=%d errs=%v", present, len(recs), errs)
+		}
+		d := after.TotalAlloc - before.TotalAlloc
+		t.Logf("%d bytes present: allocated %d (%.2fx)", present, d, float64(d)/float64(present))
+		if d >= 5*uint64(present) {
+			t.Errorf("%d bytes present: allocated %d, five times or more", present, d)
+		}
 	}
 }
 
