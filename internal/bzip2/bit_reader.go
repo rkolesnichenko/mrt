@@ -20,6 +20,7 @@ type bitReader struct {
 	n    uint64
 	bits uint
 	err  error
+	read uint64 // bytes taken from r, for Offset (added to the copy)
 }
 
 // newBitReader returns a new bitReader reading from r. If r is not
@@ -45,6 +46,7 @@ func (br *bitReader) ReadBits64(bits uint) (n uint64) {
 			br.err = err
 			return 0
 		}
+		br.read++
 		br.n <<= 8
 		br.n |= uint64(b)
 		br.bits += 8

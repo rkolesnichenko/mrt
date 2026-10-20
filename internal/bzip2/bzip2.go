@@ -5,7 +5,9 @@
 // Copied from Go 1.27.2, src/compress/bzip2/bzip2.go.
 
 // Package bzip2 implements bzip2 decompression. It is a copy of the standard
-// library's compress/bzip2 (Go 1.27.2; LICENSE is Go's licence).
+// library's compress/bzip2 (Go 1.27.2; LICENSE is Go's licence) that can also
+// decode one block from a bit offset and say where the block ended
+// (Decoder.Block, in block.go). NewReader is built on Decoder.Block.
 package bzip2
 
 import "io"
@@ -29,8 +31,6 @@ type reader struct {
 	fileCRC      uint32
 	blockCRC     uint32
 	wantBlockCRC uint32
-	setupDone    bool // true if we have parsed the bzip2 header.
-	eof          bool
 	blockSize    int       // blockSize in bytes, i.e. 900 * 1000.
 	c            [256]uint // the ``C'' array for the inverse BWT.
 	tt           []uint32  // mirrors the ``tt'' array in the bzip2 source and contains the P array in the upper 24 bits.
@@ -47,14 +47,12 @@ type reader struct {
 // If r does not also implement [io.ByteReader],
 // the decompressor may read more data than necessary from r.
 func NewReader(r io.Reader) io.Reader {
-	bz2 := new(reader)
-	bz2.br = newBitReader(r)
-	return bz2
+	z := new(streamReader)
+	z.d.r.br = newBitReader(r)
+	return z
 }
 
 const bzip2FileMagic = 0x425a // "BZ"
-const bzip2BlockMagic = 0x314159265359
-const bzip2FinalMagic = 0x177245385090
 
 // setup parses the bzip2 header.
 func (bz2 *reader) setup(needMagic bool) error {
@@ -83,31 +81,6 @@ func (bz2 *reader) setup(needMagic bool) error {
 		bz2.tt = make([]uint32, bz2.blockSize)
 	}
 	return nil
-}
-
-func (bz2 *reader) Read(buf []byte) (n int, err error) {
-	if bz2.eof {
-		return 0, io.EOF
-	}
-
-	if !bz2.setupDone {
-		err = bz2.setup(true)
-		brErr := bz2.br.Err()
-		if brErr != nil {
-			err = brErr
-		}
-		if err != nil {
-			return 0, err
-		}
-		bz2.setupDone = true
-	}
-
-	n, err = bz2.read(buf)
-	brErr := bz2.br.Err()
-	if brErr != nil {
-		err = brErr
-	}
-	return
 }
 
 func (bz2 *reader) readFromBlock(buf []byte) int {
@@ -161,78 +134,6 @@ func (bz2 *reader) readFromBlock(buf []byte) int {
 	}
 
 	return n
-}
-
-func (bz2 *reader) read(buf []byte) (int, error) {
-	for {
-		n := bz2.readFromBlock(buf)
-		if n > 0 || len(buf) == 0 {
-			bz2.blockCRC = updateCRC(bz2.blockCRC, buf[:n])
-			return n, nil
-		}
-
-		// End of block. Check CRC.
-		if bz2.blockCRC != bz2.wantBlockCRC {
-			bz2.br.err = StructuralError("block checksum mismatch")
-			return 0, bz2.br.err
-		}
-
-		// Find next block.
-		br := &bz2.br
-		switch br.ReadBits64(48) {
-		default:
-			return 0, StructuralError("bad magic value found")
-
-		case bzip2BlockMagic:
-			// Start of block.
-			err := bz2.readBlock()
-			if err != nil {
-				return 0, err
-			}
-
-		case bzip2FinalMagic:
-			// Check end-of-file CRC.
-			wantFileCRC := uint32(br.ReadBits64(32))
-			if br.err != nil {
-				return 0, br.err
-			}
-			if bz2.fileCRC != wantFileCRC {
-				br.err = StructuralError("file checksum mismatch")
-				return 0, br.err
-			}
-
-			// Skip ahead to byte boundary.
-			// Is there a file concatenated to this one?
-			// It would start with BZ.
-			if br.bits%8 != 0 {
-				br.ReadBits(br.bits % 8)
-			}
-			b, err := br.r.ReadByte()
-			if err == io.EOF {
-				br.err = io.EOF
-				bz2.eof = true
-				return 0, io.EOF
-			}
-			if err != nil {
-				br.err = err
-				return 0, err
-			}
-			z, err := br.r.ReadByte()
-			if err != nil {
-				if err == io.EOF {
-					err = io.ErrUnexpectedEOF
-				}
-				br.err = err
-				return 0, err
-			}
-			if b != 'B' || z != 'Z' {
-				return 0, StructuralError("bad magic value in continuation file")
-			}
-			if err := bz2.setup(false); err != nil {
-				return 0, err
-			}
-		}
-	}
 }
 
 // readBlock reads a bzip2 block. The magic number should already have been consumed.
