@@ -12,6 +12,7 @@ import (
 
 	"github.com/rkolesnichenko/mrt"
 	"github.com/rkolesnichenko/mrt/bgp"
+	"github.com/rkolesnichenko/mrt/internal/mrtgen"
 )
 
 // Every JSON shape bgpkit-parser 0.22.0 writes for an elem: plain and
@@ -57,24 +58,30 @@ func TestNormalizeBgpkitRefusesGarbage(t *testing.T) {
 
 func TestFromRoute(t *testing.T) {
 	a := netip.MustParseAddr
-	peer := mrt.Peer{Addr: a("2001:db8::11"), AS: 4200000001}
-	path := &bgp.Path{
-		Origin: bgp.OriginIncomplete, HasOrigin: true,
-		ASPath: bgp.ASPath{Segments: []bgp.Segment{
-			{Type: bgp.ASSequence, ASNs: []bgp.ASN{64500}},
-			{Type: bgp.ASSet, ASNs: []bgp.ASN{64502, 64503}},
-			{Type: bgp.ASSequence, ASNs: []bgp.ASN{64501}},
-		}},
-		NextHop: a("192.0.2.99"), // not this route's: it came in MP_REACH_NLRI
-		MED:     5, HasMED: true, LocalPref: 100, HasLocalPref: true,
-		AtomicAggregate: true,
-		Aggregator:      bgp.Aggregator{AS: 4200000001, Addr: a("192.0.2.77")}, HasAggregator: true,
-		Communities:      []bgp.Community{65000<<16 | 1, 0xFFFFFF01, 0xFFFFFF02, 0xFFFFFF03},
-		ExtCommunities:   []bgp.ExtCommunity{{0, 2, 0xfb, 0xf4, 0, 0, 0, 100}},
-		LargeCommunities: []bgp.LargeCommunity{{Global: 64500, Local1: 1, Local2: 2}},
-		OnlyToCustomer:   64500, HasOnlyToCustomer: true,
-		MPReach: &bgp.MPReach{Family: bgp.Family{AFI: bgp.AFIIPv6, SAFI: bgp.SAFIUnicast}, NextHop: a("2001:db8::1")},
+	// A Path is produced by decoding, so each one here is decoded from a block.
+	decode := func(ctx bgp.Context, attrs ...[]byte) *bgp.Path {
+		t.Helper()
+		p, diags := bgp.NewAttrs(mrtgen.Attrs(attrs...), ctx).Decode()
+		if len(diags) != 0 {
+			t.Fatalf("diags %v", diags)
+		}
+		return &p
 	}
+	v6 := bgp.Family{AFI: bgp.AFIIPv6, SAFI: bgp.SAFIUnicast}
+	peer := mrt.Peer{Addr: a("2001:db8::11"), AS: 4200000001}
+	path := decode(bgp.Context{AS4: true},
+		mrtgen.Origin(bgp.OriginIncomplete),
+		mrtgen.ASPath(true, mrtgen.Seq(64500), mrtgen.Set(64502, 64503), mrtgen.Seq(64501)),
+		mrtgen.NextHop(a("192.0.2.99")), // not this route's: it came in MP_REACH_NLRI
+		mrtgen.MED(5), mrtgen.LocalPref(100),
+		mrtgen.Raw(mrtgen.FlagTransitive, 6, nil), // ATOMIC_AGGREGATE
+		mrtgen.AggregatorAttr(true, 4200000001, a("192.0.2.77")),
+		mrtgen.Communities(65000<<16|1, 0xFFFFFF01, 0xFFFFFF02, 0xFFFFFF03),
+		mrtgen.ExtCommunities(bgp.ExtCommunity{0, 2, 0xfb, 0xf4, 0, 0, 0, 100}),
+		mrtgen.Large(bgp.LargeCommunity{Global: 64500, Local1: 1, Local2: 2}),
+		mrtgen.OTC(64500),
+		mrtgen.MPReach(v6, []netip.Addr{a("2001:db8::1")}, nil, false),
+	)
 	r := mrt.Route{Kind: mrt.KindAnnounce, Peer: peer, Family: path.MPReach.Family,
 		Prefix: netip.MustParsePrefix("2001:db8:200::/48"), PathID: 7, HasPathID: true, Path: path}
 	if got := FromRoute(r); got != sampleLines[2] {
@@ -93,14 +100,14 @@ func TestFromRoute(t *testing.T) {
 	v4 := bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIUnicast}
 	rib := mrt.Route{Kind: mrt.KindRIB, Peer: mrt.Peer{Addr: a("192.0.2.10"), AS: 64500}, Family: v4,
 		Prefix: netip.MustParsePrefix("198.51.100.0/24"),
-		Path:   &bgp.Path{NextHop: a("192.0.2.10"), MPReach: &bgp.MPReach{NextHop: a("2001:db8::1"), Abbreviated: true}}}
+		Path:   decode(bgp.Context{AS4: true, RIB: true}, mrtgen.NextHop(a("192.0.2.10")), mrtgen.MPReachAbbrev(a("2001:db8::1")))}
 	want := `{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.0/24","next_hop":"2001:db8::1"}`
 	if got := FromRoute(rib); got != want {
 		t.Errorf("rib:\n got %s\nwant %s", got, want)
 	}
 	// An IPv4 announcement with an MP_REACH_NLRI of another family keeps NEXT_HOP.
 	ann := mrt.Route{Kind: mrt.KindAnnounce, Peer: rib.Peer, Family: v4, Prefix: rib.Prefix,
-		Path: &bgp.Path{NextHop: a("192.0.2.10"), MPReach: &bgp.MPReach{Family: path.MPReach.Family, NextHop: a("2001:db8::1")}}}
+		Path: decode(bgp.Context{AS4: true}, mrtgen.NextHop(a("192.0.2.10")), mrtgen.MPReach(v6, []netip.Addr{a("2001:db8::1")}, nil, false))}
 	want = `{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.0/24","next_hop":"192.0.2.10"}`
 	if got := FromRoute(ann); got != want {
 		t.Errorf("v4 announce:\n got %s\nwant %s", got, want)

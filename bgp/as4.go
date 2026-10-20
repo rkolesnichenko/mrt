@@ -87,7 +87,8 @@ func mergeAS4(asPath, as4Path ASPath) (ASPath, bool) {
 }
 
 // applyAS4 runs the RFC 6793 §4.2.3 rule over what Decode gathered, setting
-// p.ASPath and p.Aggregator. With ctx.AS4, or when AGGREGATOR and
+// the aggregator and, when it merges AS4_PATH, p.ASPath (keeping the received
+// AS_PATH in the rare part). With ctx.AS4, or when AGGREGATOR and
 // AS4_AGGREGATOR both decoded and AGGREGATOR's AS is not AS_TRANS, AGGREGATOR
 // is the aggregator and the AS4 attributes are ignored. Otherwise the
 // aggregator is AS4_AGGREGATOR when it decoded (else AGGREGATOR) and AS4_PATH
@@ -101,9 +102,10 @@ func applyAS4(p *Path, st *as4State, ctx Context) []Diagnostic {
 		}
 		return []Diagnostic{d}
 	}
-	p.ASPath = p.ReceivedASPath
 	if ctx.AS4 || (st.hasAgg && st.hasAS4Agg && st.agg.AS != ASTrans) {
-		p.Aggregator, p.HasAggregator = st.agg, st.hasAgg
+		if st.hasAgg {
+			p.setAggregator(st.agg)
+		}
 		switch {
 		case !st.hasAS4Path && !st.hasAS4Agg:
 			return nil
@@ -115,17 +117,25 @@ func applyAS4(p *Path, st *as4State, ctx Context) []Diagnostic {
 	}
 	switch {
 	case st.hasAS4Agg:
-		p.Aggregator, p.HasAggregator = st.as4Agg, true
+		p.setAggregator(st.as4Agg)
 	case st.hasAgg:
-		p.Aggregator, p.HasAggregator = st.agg, true
+		p.setAggregator(st.agg)
 	}
 	if !st.hasAS4Path {
 		return nil
 	}
-	merged, ok := mergeAS4(p.ReceivedASPath, p.AS4Path)
+	r := p.rare // non-nil: AS4_PATH decoded into it
+	merged, ok := mergeAS4(p.ASPath, r.as4Path)
 	if !ok {
 		return ignored("AS4_PATH ignored: it counts more ASes than AS_PATH")
 	}
+	r.receivedASPath, r.merged = p.ASPath, true
 	p.ASPath = merged
 	return nil
+}
+
+// setAggregator stores a, whose address is IPv4 (it was decoded from 4 bytes).
+func (p *Path) setAggregator(a Aggregator) {
+	r := p.rarePart()
+	r.aggregatorAS, r.aggregatorAddr, r.hasAggregator = a.AS, a.Addr.As4(), true
 }

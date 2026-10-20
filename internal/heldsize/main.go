@@ -7,8 +7,10 @@
 // Every RIB entry of every file (TABLE_DUMP_V2 and TABLE_DUMP) is keyed by its
 // context flags and attribute block, with the NLRI of a full-form MP_REACH
 // removed (R20: the record supplies the prefix) and its length normalised.
-// One bgp.Path clone is kept per key; AS paths and community lists are
-// canonicalised so equal ones share a slice. A 16-byte stand-in per route
+// One bgp.Path clone is kept per key; AS paths (the ASPath field) and community
+// and large-community lists are canonicalised so equal ones share a slice. What
+// sits in Path's rare part (AS4_PATH, the received AS_PATH, extended
+// communities, ...) cannot be written from outside package bgp and is not shared. A 16-byte stand-in per route
 // (path pointer, peer index, prefix id) plays the table keeper.
 package main
 
@@ -35,7 +37,6 @@ type state struct {
 	paths   map[string]*bgp.Path // nil value: a block that gets no entry
 	asPaths map[string][]bgp.Segment
 	comms   map[string][]bgp.Community
-	exts    map[string][]bgp.ExtCommunity
 	larges  map[string][]bgp.LargeCommunity
 
 	table  [][]standIn
@@ -61,7 +62,6 @@ func main() {
 		paths:   make(map[string]*bgp.Path),
 		asPaths: make(map[string][]bgp.Segment),
 		comms:   make(map[string][]bgp.Community),
-		exts:    make(map[string][]bgp.ExtCommunity),
 		larges:  make(map[string][]bgp.LargeCommunity),
 	}
 	for _, name := range os.Args[1:] {
@@ -144,8 +144,6 @@ func (s *state) decode(a bgp.Attrs) *bgp.Path {
 	}
 	c := path.Clone()
 	s.share(&c.ASPath.Segments)
-	s.share(&c.ReceivedASPath.Segments)
-	s.share(&c.AS4Path.Segments)
 	if len(c.Communities) > 0 {
 		s.tmp = s.tmp[:0]
 		for _, v := range c.Communities {
@@ -155,17 +153,6 @@ func (s *state) decode(a bgp.Attrs) *bgp.Path {
 			c.Communities = q
 		} else {
 			s.comms[string(s.tmp)] = c.Communities
-		}
-	}
-	if len(c.ExtCommunities) > 0 {
-		s.tmp = s.tmp[:0]
-		for _, v := range c.ExtCommunities {
-			s.tmp = append(s.tmp, v[:]...)
-		}
-		if q, ok := s.exts[string(s.tmp)]; ok {
-			c.ExtCommunities = q
-		} else {
-			s.exts[string(s.tmp)] = c.ExtCommunities
 		}
 	}
 	if len(c.LargeCommunities) > 0 {
@@ -291,6 +278,28 @@ func measuredClass[T any]() float64 {
 	return n
 }
 
+// rareSize is unsafe.Sizeof of bgp's unexported pathRare (144 bytes on 64-bit
+// platforms), which this package cannot name. It only feeds the computed
+// breakdown; the HeapAlloc readings are measured.
+const rareSize = 144
+
+// hasRare reports whether p has a rare part: any of the method-read attributes
+// but NextHop is set.
+func hasRare(p *bgp.Path) bool {
+	_, agg := p.Aggregator()
+	return agg || len(p.AS4Path().Segments) > 0 || p.ExtCommunities() != nil || p.OriginatorID().IsValid() ||
+		p.ClusterList() != nil || p.MPUnreach() != nil || p.Unknown() != nil || receivedIfMerged(p).Segments != nil
+}
+
+// receivedIfMerged is the received AS_PATH when it is held apart from ASPath.
+func receivedIfMerged(p *bgp.Path) bgp.ASPath {
+	r := p.ReceivedASPath()
+	if len(r.Segments) > 0 && len(p.ASPath.Segments) > 0 && &r.Segments[0] == &p.ASPath.Segments[0] {
+		return bgp.ASPath{}
+	}
+	return r
+}
+
 func sliceBytes[T any](s []T) uint64 {
 	var z T
 	return class(uint64(cap(s)) * uint64(unsafe.Sizeof(z)))
@@ -308,8 +317,8 @@ func (s *state) report() {
 	fmt.Printf("routes: %d\n", s.routes)
 	fmt.Printf("routes skipped (block with Warning/Error): %d, distinct such blocks: %d\n", s.skipped, s.skippedKey)
 	fmt.Printf("distinct paths: %d (map entries incl. skipped: %d)\n", distinct, len(s.paths))
-	fmt.Printf("distinct AS paths, union of the ASPath/ReceivedASPath/AS4Path roles (canonical map size): %d\n", len(s.asPaths))
-	fmt.Printf("distinct community lists: %d, extended: %d, large: %d\n", len(s.comms), len(s.exts), len(s.larges))
+	fmt.Printf("distinct AS paths, ASPath role only (canonical map size): %d\n", len(s.asPaths))
+	fmt.Printf("distinct community lists: %d, large: %d (extended: in the rare part, not shared)\n", len(s.comms), len(s.larges))
 	fmt.Printf("Info-only blocks (distinct): %d\n", s.infoOnly)
 	fmt.Printf("summed key bytes (raw lengths): %d\n", s.keyBytes)
 	fmt.Printf("sizeof bgp.Path: %d, MPReach: %d, MPUnreach: %d, stand-in: %d\n", unsafe.Sizeof(bgp.Path{}), unsafe.Sizeof(bgp.MPReach{}), unsafe.Sizeof(bgp.MPUnreach{}), unsafe.Sizeof(standIn{}))
@@ -343,7 +352,7 @@ func (s *state) report() {
 
 	runtime.KeepAlive(keep)
 	keep = nil
-	s.asPaths, s.comms, s.exts, s.larges = nil, nil, nil, nil
+	s.asPaths, s.comms, s.larges = nil, nil, nil
 	h4, a4 := readMem()
 	fmt.Printf("reading 4, all dropped (baseline): HeapInuse %d, HeapAlloc %d\n", h4, a4)
 }
@@ -351,7 +360,7 @@ func (s *state) report() {
 // breakdown prints the computed live bytes of each component of the retained
 // structure (everything but the stand-in table), and their sum.
 func (s *state) breakdown(distinct uint64) {
-	var nMP, nMPU, other uint64
+	var nMP, nMPU, nRare, other uint64
 	roles := map[*bgp.Segment]struct{}{}
 	for _, p := range s.paths {
 		if p == nil {
@@ -364,13 +373,24 @@ func (s *state) breakdown(distinct uint64) {
 			nMP++
 			other += sliceBytes(p.MPReach.NLRI) + sliceBytes(p.MPReach.RawNLRI)
 		}
-		if p.MPUnreach != nil {
-			nMPU++
-			other += sliceBytes(p.MPUnreach.Withdrawn) + sliceBytes(p.MPUnreach.RawNLRI)
+		if hasRare(p) {
+			nRare++
 		}
-		other += sliceBytes(p.ClusterList) + sliceBytes(p.Unknown)
-		for _, a := range p.Unknown {
+		if mu := p.MPUnreach(); mu != nil {
+			nMPU++
+			other += sliceBytes(mu.Withdrawn) + sliceBytes(mu.RawNLRI)
+		}
+		other += sliceBytes(p.ClusterList()) + sliceBytes(p.Unknown()) + sliceBytes(p.ExtCommunities())
+		for _, a := range p.Unknown() {
 			other += sliceBytes(a.Value)
+		}
+		// Unshared AS paths in the rare part (a received AS_PATH exists only
+		// when AS4_PATH was merged, which never happens in a 4-byte RIB).
+		for _, asp := range [...]bgp.ASPath{p.AS4Path(), receivedIfMerged(p)} {
+			other += sliceBytes(asp.Segments)
+			for _, g := range asp.Segments {
+				other += sliceBytes(g.ASNs)
+			}
 		}
 	}
 	fmt.Printf("distinct merged ASPath values (by canonical slice identity): %d\n", len(roles))
@@ -378,6 +398,7 @@ func (s *state) breakdown(distinct uint64) {
 
 	pathStructs := distinct * class(uint64(unsafe.Sizeof(bgp.Path{})))
 	mpStructs := nMP*class(uint64(unsafe.Sizeof(bgp.MPReach{}))) + nMPU*class(uint64(unsafe.Sizeof(bgp.MPUnreach{})))
+	rareStructs := nRare * class(rareSize)
 	var segArrays, asnArrays uint64
 	for k, v := range s.asPaths {
 		_ = k
@@ -388,9 +409,6 @@ func (s *state) breakdown(distinct uint64) {
 	}
 	var commArrays uint64
 	for _, v := range s.comms {
-		commArrays += sliceBytes(v)
-	}
-	for _, v := range s.exts {
 		commArrays += sliceBytes(v)
 	}
 	for _, v := range s.larges {
@@ -407,9 +425,6 @@ func (s *state) breakdown(distinct uint64) {
 	for k := range s.comms {
 		canonKeys += class(uint64(len(k)))
 	}
-	for k := range s.exts {
-		canonKeys += class(uint64(len(k)))
-	}
 	for k := range s.larges {
 		canonKeys += class(uint64(len(k)))
 	}
@@ -421,13 +436,14 @@ func (s *state) breakdown(distinct uint64) {
 	slot := func(n, val uint64) uint64 { return uint64(float64(n*(16+val+1)) / 0.66) }
 	mapOverhead := slot(uint64(len(s.paths)), 8) +
 		slot(uint64(len(s.asPaths)), 24) + slot(uint64(len(s.comms)), 24) +
-		slot(uint64(len(s.exts)), 24) + slot(uint64(len(s.larges)), 24)
+		slot(uint64(len(s.larges)), 24)
 
-	total := pathStructs + mpStructs + other + segArrays + asnArrays + commArrays + pathKeys + canonKeys + mapOverhead
+	total := pathStructs + rareStructs + mpStructs + other + segArrays + asnArrays + commArrays + pathKeys + canonKeys + mapOverhead
 	fmt.Printf("breakdown (computed live bytes, allocator size classes):\n")
 	fmt.Printf("  Path structs:                        %d\n", pathStructs)
+	fmt.Printf("  rare parts (%d paths, %d-byte part assumed): %d\n", nRare, rareSize, rareStructs)
 	fmt.Printf("  MPReach/MPUnreach structs (%d/%d):   %d\n", nMP, nMPU, mpStructs)
-	fmt.Printf("  other per-path arrays (NLRI, Unknown, ClusterList): %d\n", other)
+	fmt.Printf("  other per-path arrays (NLRI, Unknown, ClusterList, ext communities, rare AS paths): %d\n", other)
 	fmt.Printf("  canonical []Segment arrays:          %d\n", segArrays)
 	fmt.Printf("  canonical ASN arrays:                %d\n", asnArrays)
 	fmt.Printf("  canonical community/ext/large arrays: %d\n", commArrays)

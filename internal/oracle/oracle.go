@@ -178,7 +178,7 @@ func FromRoute(r mrt.Route) string {
 	if p.HasOrigin {
 		l.Origin = origins[p.Origin]
 	}
-	nh := p.NextHop
+	nh := p.NextHop()
 	if mp := p.MPReach; mp != nil && mp.NextHop.IsValid() &&
 		(r.Kind == mrt.KindRIB || mp.Family == r.Family) {
 		nh = mp.NextHop
@@ -202,8 +202,8 @@ func FromRoute(r mrt.Route) string {
 		otc := uint32(p.OnlyToCustomer)
 		l.OTC = &otc
 	}
-	if p.HasAggregator {
-		l.Aggregator = fmt.Sprintf("%d %s", p.Aggregator.AS, p.Aggregator.Addr)
+	if agg, ok := p.Aggregator(); ok {
+		l.Aggregator = fmt.Sprintf("%d %s", agg.AS, agg.Addr)
 	}
 	l.Atomic = p.AtomicAggregate
 	return l.String()

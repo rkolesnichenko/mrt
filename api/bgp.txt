@@ -104,30 +104,29 @@ type NLRI struct
 	HasPathID bool
 type Origin uint8
 type Path struct
+	ASPath ASPath
+	Communities []Community
+	LargeCommunities []LargeCommunity
+	MPReach *MPReach
+	MED uint32
+	LocalPref uint32
+	OnlyToCustomer ASN
 	Origin Origin
 	HasOrigin bool
-	ASPath ASPath
-	ReceivedASPath ASPath
-	AS4Path ASPath
-	NextHop netip.Addr
-	MED uint32
 	HasMED bool
-	LocalPref uint32
 	HasLocalPref bool
 	AtomicAggregate bool
-	Aggregator Aggregator
-	HasAggregator bool
-	Communities []Community
-	ExtCommunities []ExtCommunity
-	LargeCommunities []LargeCommunity
-	OnlyToCustomer ASN
 	HasOnlyToCustomer bool
-	OriginatorID netip.Addr
-	ClusterList []netip.Addr
-	MPReach *MPReach
-	MPUnreach *MPUnreach
-	Unknown []Attribute
+func (Path) AS4Path() ASPath
+func (Path) Aggregator() (Aggregator, bool)
 func (Path) Clone() Path
+func (Path) ClusterList() []netip.Addr
+func (Path) ExtCommunities() []ExtCommunity
+func (Path) MPUnreach() *MPUnreach
+func (Path) NextHop() netip.Addr
+func (Path) OriginatorID() netip.Addr
+func (Path) ReceivedASPath() ASPath
+func (Path) Unknown() []Attribute
 type SAFI uint8
 type Segment struct
 	Type SegmentType

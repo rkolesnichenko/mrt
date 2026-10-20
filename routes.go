@@ -194,7 +194,7 @@ func messageRoutes(m BGP4MPMessage, yield func(Route, error) bool) bool {
 	if !emit(KindWithdraw, v4, u.Withdrawn) {
 		return false
 	}
-	if mp := p.MPUnreach; mp != nil && mp.Family.HasPrefixes() && !emit(KindWithdraw, mp.Family, mp.Withdrawn) {
+	if mp := p.MPUnreach(); mp != nil && mp.Family.HasPrefixes() && !emit(KindWithdraw, mp.Family, mp.Withdrawn) {
 		return false
 	}
 	if !emit(KindAnnounce, v4, u.Announced) {

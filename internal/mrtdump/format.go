@@ -173,8 +173,8 @@ func (d *dumper) fields(attrs bgp.Attrs, p *bgp.Path) attrFields {
 	} else if p.HasOrigin && p.Origin == bgp.OriginEGP {
 		f.origin = "EGP"
 	}
-	if p.NextHop.IsValid() {
-		f.nextHop = p.NextHop.String()
+	if nh := p.NextHop(); nh.IsValid() {
+		f.nextHop = nh.String()
 	}
 	var b []byte
 	for i, c := range p.Communities {
@@ -203,8 +203,8 @@ func (d *dumper) fields(attrs bgp.Attrs, p *bgp.Path) attrFields {
 		}
 		f.large = string(b)
 	}
-	if p.HasAggregator {
-		f.aggregator = strconv.FormatUint(uint64(p.Aggregator.AS), 10) + " " + p.Aggregator.Addr.String()
+	if agg, ok := p.Aggregator(); ok {
+		f.aggregator = strconv.FormatUint(uint64(agg.AS), 10) + " " + agg.Addr.String()
 	}
 	// The raw walk: AS_PATH present but unparseable prints as bgpdump's
 	// "! Error !", ATOMIC_AGGREGATE is AG whatever its length, and -u lists
@@ -218,7 +218,7 @@ func (d *dumper) fields(attrs bgp.Attrs, p *bgp.Path) attrFields {
 		switch {
 		case a.Code == bgp.AttrASPath && !asPathSeen:
 			asPathSeen = true
-			if len(a.Value) > 0 && len(p.ReceivedASPath.Segments) == 0 {
+			if len(a.Value) > 0 && len(p.ReceivedASPath().Segments) == 0 {
 				f.path = "! Error !"
 			}
 		case a.Code == bgp.AttrAtomicAggregate:
@@ -373,7 +373,7 @@ func (d *dumper) message(m mrt.BGP4MPMessage) {
 		}
 	}
 	withdraw(u.Withdrawn)
-	if mp := p.MPUnreach; mp != nil && mp.Family.HasPrefixes() {
+	if mp := p.MPUnreach(); mp != nil && mp.Family.HasPrefixes() {
 		withdraw(mp.Withdrawn)
 	}
 	mp := p.MPReach

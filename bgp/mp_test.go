@@ -24,10 +24,10 @@ func TestMPReachFull(t *testing.T) {
 	r := p.MPReach
 	if len(d) != 0 || r == nil || r.Abbreviated || r.Family != (Family{2, 1}) ||
 		r.NextHop != v6global || r.LinkLocal != v6ll ||
-		len(r.NLRI) != 1 || r.NLRI[0].Prefix != netip.MustParsePrefix("2001:db8:1::/48") || len(p.Unknown) != 0 {
+		len(r.NLRI) != 1 || r.NLRI[0].Prefix != netip.MustParsePrefix("2001:db8:1::/48") || len(p.Unknown()) != 0 {
 		t.Fatalf("%+v %v", r, d)
 	}
-	if p.NextHop.IsValid() {
+	if p.NextHop().IsValid() {
 		t.Fatal("Path.NextHop must stay the NEXT_HOP attribute only")
 	}
 }
@@ -46,7 +46,7 @@ func TestMPReachAbbreviatedInRIB(t *testing.T) {
 	p, d = decodeMP(t, Context{RIB: true}, 14, v...)
 	r = p.MPReach
 	if len(d) != 0 || r == nil || r.Abbreviated || r.Family != (Family{2, 1}) || r.NextHop != v6global || r.LinkLocal != v6ll ||
-		r.NLRI != nil || r.RawNLRI != nil || len(p.Unknown) != 0 {
+		r.NLRI != nil || r.RawNLRI != nil || len(p.Unknown()) != 0 {
 		t.Fatalf("%+v %v", r, d)
 	}
 	// ... also with add-path, and when the NLRI would not parse: it is not read.
@@ -65,12 +65,12 @@ func TestMPReachAbbreviatedInRIB(t *testing.T) {
 	}
 	// without RIB the same non-zero first byte is not abbreviated: AFI 0x1002 here
 	p, d = decodeMP(t, Context{}, 14, append([]byte{16}, b16(v6global)...)...)
-	if p.MPReach != nil || len(p.Unknown) != 1 || len(d) != 1 || d[0].Code != "bgp/attr-length" {
+	if p.MPReach != nil || len(p.Unknown()) != 1 || len(d) != 1 || d[0].Code != "bgp/attr-length" {
 		t.Fatalf("%+v %v", p, d)
 	}
 	// abbreviated with trailing bytes: wrong length
 	p, d = decodeMP(t, Context{RIB: true}, 14, append(append([]byte{16}, b16(v6global)...), 0)...)
-	if p.MPReach != nil || len(p.Unknown) != 1 || d[0].Code != "bgp/attr-length" {
+	if p.MPReach != nil || len(p.Unknown()) != 1 || d[0].Code != "bgp/attr-length" {
 		t.Fatalf("%+v %v", p, d)
 	}
 }
@@ -113,7 +113,7 @@ func TestMPReachAbbreviatedNextHopLength(t *testing.T) {
 	}
 	p, d := decodeMP(t, Context{RIB: true}, 14, append([]byte{12}, make([]byte, 12)...)...)
 	want := []Diagnostic{{SeverityWarning, "bgp/attr-value", 0, AttrMPReach, "MP_REACH_NLRI next hop of 12 bytes"}}
-	if r := p.MPReach; r == nil || !r.Abbreviated || r.NextHop.IsValid() || len(p.Unknown) != 0 || !slices.Equal(d, want) {
+	if r := p.MPReach; r == nil || !r.Abbreviated || r.NextHop.IsValid() || len(p.Unknown()) != 0 || !slices.Equal(d, want) {
 		t.Fatalf("%+v %v, want %v", r, d, want)
 	}
 }
@@ -126,7 +126,7 @@ func TestMPReachMalformed(t *testing.T) {
 		{0, 2, 1, 255, 0},      // huge next hop length
 	} {
 		p, d := decodeMP(t, Context{}, 14, v...)
-		if p.MPReach != nil || len(p.Unknown) != 1 || len(d) != 1 || d[0].Code != "bgp/attr-length" || d[0].Attr != AttrMPReach {
+		if p.MPReach != nil || len(p.Unknown()) != 1 || len(d) != 1 || d[0].Code != "bgp/attr-length" || d[0].Attr != AttrMPReach {
 			t.Errorf("%x: %+v %v", v, p, d)
 		}
 	}
@@ -155,25 +155,25 @@ func TestMPUnknownFamilyKeptRaw(t *testing.T) {
 		t.Fatalf("%+v %v", r, d)
 	}
 	p, d = decodeMP(t, Context{}, 15, 0, 1, 128, 7, 7)
-	if len(d) != 0 || p.MPUnreach == nil || p.MPUnreach.Withdrawn != nil || string(p.MPUnreach.RawNLRI) != "\x07\x07" {
-		t.Fatalf("%+v %v", p.MPUnreach, d)
+	if len(d) != 0 || p.MPUnreach() == nil || p.MPUnreach().Withdrawn != nil || string(p.MPUnreach().RawNLRI) != "\x07\x07" {
+		t.Fatalf("%+v %v", p.MPUnreach(), d)
 	}
 }
 
 func TestMPUnreach(t *testing.T) {
 	p, d := decodeMP(t, Context{}, 15, 0, 2, 1, 32, 0x20, 1, 0x0d, 0xb8)
-	u := p.MPUnreach
+	u := p.MPUnreach()
 	if len(d) != 0 || u == nil || u.Family != (Family{2, 1}) || len(u.Withdrawn) != 1 ||
 		u.Withdrawn[0].Prefix != netip.MustParsePrefix("2001:db8::/32") {
 		t.Fatalf("%+v %v", u, d)
 	}
 	// End-of-RIB form: family only
 	p, d = decodeMP(t, Context{}, 15, 0, 2, 1)
-	if len(d) != 0 || p.MPUnreach == nil || len(p.MPUnreach.Withdrawn) != 0 {
-		t.Fatalf("%+v %v", p.MPUnreach, d)
+	if len(d) != 0 || p.MPUnreach() == nil || len(p.MPUnreach().Withdrawn) != 0 {
+		t.Fatalf("%+v %v", p.MPUnreach(), d)
 	}
 	p, d = decodeMP(t, Context{}, 15, 0, 2)
-	if p.MPUnreach != nil || len(p.Unknown) != 1 || d[0].Code != "bgp/attr-length" {
+	if p.MPUnreach() != nil || len(p.Unknown()) != 1 || d[0].Code != "bgp/attr-length" {
 		t.Fatalf("%+v %v", p, d)
 	}
 }
@@ -181,7 +181,7 @@ func TestMPUnreach(t *testing.T) {
 func TestMPDuplicate(t *testing.T) {
 	one := attr(0x80, 15, 0, 2, 1)
 	p, d := NewAttrs(concat(one, one), Context{}).Decode()
-	if p.MPUnreach == nil || len(p.Unknown) != 1 || len(d) != 1 || d[0].Code != "bgp/attr-duplicate" {
+	if p.MPUnreach() == nil || len(p.Unknown()) != 1 || len(d) != 1 || d[0].Code != "bgp/attr-duplicate" {
 		t.Fatalf("%+v %v", p, d)
 	}
 }

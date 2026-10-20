@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"unsafe"
 )
 
 // attr builds one attribute: flags, code, value (extended length when len > 255).
@@ -46,8 +47,8 @@ func TestDecodeSimple(t *testing.T) {
 	if !p.HasOrigin || p.Origin != OriginIGP {
 		t.Errorf("origin = %v %v", p.HasOrigin, p.Origin)
 	}
-	if p.NextHop != netip.MustParseAddr("192.0.2.1") {
-		t.Errorf("next hop = %v", p.NextHop)
+	if p.NextHop() != netip.MustParseAddr("192.0.2.1") {
+		t.Errorf("next hop = %v", p.NextHop())
 	}
 	if !p.HasMED || p.MED != 10 || !p.HasLocalPref || p.LocalPref != 100 || !p.AtomicAggregate {
 		t.Errorf("scalars = %+v", p)
@@ -55,15 +56,15 @@ func TestDecodeSimple(t *testing.T) {
 	if !reflect.DeepEqual(p.Communities, []Community{65000<<16 | 1}) {
 		t.Errorf("communities = %v", p.Communities)
 	}
-	if p.OriginatorID != netip.MustParseAddr("10.0.0.1") {
-		t.Errorf("originator = %v", p.OriginatorID)
+	if p.OriginatorID() != netip.MustParseAddr("10.0.0.1") {
+		t.Errorf("originator = %v", p.OriginatorID())
 	}
 	wantCL := []netip.Addr{netip.MustParseAddr("10.0.0.2"), netip.MustParseAddr("10.0.0.3")}
-	if !reflect.DeepEqual(p.ClusterList, wantCL) {
-		t.Errorf("cluster list = %v", p.ClusterList)
+	if !reflect.DeepEqual(p.ClusterList(), wantCL) {
+		t.Errorf("cluster list = %v", p.ClusterList())
 	}
-	if !reflect.DeepEqual(p.ExtCommunities, []ExtCommunity{{0, 2, 0xFD, 0xE8, 0, 0, 0, 1}}) {
-		t.Errorf("ext = %v", p.ExtCommunities)
+	if !reflect.DeepEqual(p.ExtCommunities(), []ExtCommunity{{0, 2, 0xFD, 0xE8, 0, 0, 0, 1}}) {
+		t.Errorf("ext = %v", p.ExtCommunities())
 	}
 	if !reflect.DeepEqual(p.LargeCommunities, []LargeCommunity{{1, 2, 3}}) {
 		t.Errorf("large = %v", p.LargeCommunities)
@@ -71,8 +72,8 @@ func TestDecodeSimple(t *testing.T) {
 	if !p.HasOnlyToCustomer || p.OnlyToCustomer != 65000 {
 		t.Errorf("otc = %v %v", p.HasOnlyToCustomer, p.OnlyToCustomer)
 	}
-	if !reflect.DeepEqual(p.Unknown, []Attribute{{0xC0, 99, []byte{0xAA}}}) {
-		t.Errorf("unknown = %v", p.Unknown)
+	if !reflect.DeepEqual(p.Unknown(), []Attribute{{0xC0, 99, []byte{0xAA}}}) {
+		t.Errorf("unknown = %v", p.Unknown())
 	}
 }
 
@@ -82,8 +83,8 @@ func TestDecodeMalformedKeepsGoing(t *testing.T) {
 	if p.HasMED {
 		t.Error("MED decoded")
 	}
-	if !reflect.DeepEqual(p.Unknown, []Attribute{{0x80, 4, []byte{0, 0, 10}}}) {
-		t.Errorf("unknown = %v", p.Unknown)
+	if !reflect.DeepEqual(p.Unknown(), []Attribute{{0x80, 4, []byte{0, 0, 10}}}) {
+		t.Errorf("unknown = %v", p.Unknown())
 	}
 	if len(diags) != 1 || diags[0].Code != "bgp/attr-length" || diags[0].Attr != AttrMED ||
 		diags[0].Severity != SeverityWarning || diags[0].Offset != 0 {
@@ -96,7 +97,7 @@ func TestDecodeMalformedKeepsGoing(t *testing.T) {
 
 func TestDecodeBadOrigin(t *testing.T) {
 	p, diags := NewAttrs(attr(0x40, 1, 7), Context{}).Decode()
-	if p.HasOrigin || len(p.Unknown) != 1 || len(diags) != 1 || diags[0].Code != "bgp/attr-value" {
+	if p.HasOrigin || len(p.Unknown()) != 1 || len(diags) != 1 || diags[0].Code != "bgp/attr-value" {
 		t.Errorf("p=%+v diags=%+v", p, diags)
 	}
 }
@@ -107,8 +108,8 @@ func TestDecodeTruncatedFraming(t *testing.T) {
 	if !p.HasOrigin {
 		t.Error("origin lost")
 	}
-	if len(p.Unknown) != 1 || !reflect.DeepEqual(p.Unknown[0].Value, raw[4:]) {
-		t.Errorf("unknown = %v", p.Unknown)
+	if len(p.Unknown()) != 1 || !reflect.DeepEqual(p.Unknown()[0].Value, raw[4:]) {
+		t.Errorf("unknown = %v", p.Unknown())
 	}
 	if len(diags) != 1 || diags[0].Code != "bgp/attr-truncated" || diags[0].Severity != SeverityError || diags[0].Offset != 4 {
 		t.Errorf("diags = %+v", diags)
@@ -126,8 +127,8 @@ func TestDecodeDuplicateFirstWins(t *testing.T) {
 	if p.MED != 10 {
 		t.Errorf("MED = %d", p.MED)
 	}
-	if len(p.Unknown) != 1 || p.Unknown[0].Value[3] != 20 {
-		t.Errorf("unknown = %v", p.Unknown)
+	if len(p.Unknown()) != 1 || p.Unknown()[0].Value[3] != 20 {
+		t.Errorf("unknown = %v", p.Unknown())
 	}
 	if len(diags) != 1 || diags[0].Code != "bgp/attr-duplicate" || diags[0].Severity != SeverityWarning || diags[0].Offset != 7 {
 		t.Errorf("diags = %+v", diags)
@@ -164,7 +165,7 @@ func TestAllWalksRawInOrder(t *testing.T) {
 func TestDecodeMalformedFirstCopyStillWins(t *testing.T) {
 	raw := concat(attr(0x80, 4, 0, 0, 10), attr(0x80, 4, 0, 0, 0, 20))
 	p, diags := NewAttrs(raw, Context{}).Decode()
-	if p.HasMED || len(p.Unknown) != 2 {
+	if p.HasMED || len(p.Unknown()) != 2 {
 		t.Fatalf("p = %+v", p)
 	}
 	if len(diags) != 2 || diags[0].Code != "bgp/attr-length" || diags[1].Code != "bgp/attr-duplicate" ||
@@ -180,8 +181,8 @@ func TestDecodeDuplicateUnknown(t *testing.T) {
 	for _, code := range []byte{99, 2, 17, 7, 18, 14, 15} {
 		raw := concat(attr(0xC0, code, 1), attr(0xC0, code, 2))
 		p, diags := NewAttrs(raw, Context{}).Decode()
-		if len(p.Unknown) != 2 {
-			t.Errorf("code %d: unknown = %v", code, p.Unknown)
+		if len(p.Unknown()) != 2 {
+			t.Errorf("code %d: unknown = %v", code, p.Unknown())
 		}
 		want := 1
 		if first, ok := malformed[code]; ok {
@@ -212,7 +213,9 @@ func cloneBlocks() [][]byte {
 			attr(0xC0, 8, 0xFD, 0xE8, 0, 1, 0xFD, 0xE8, 0, 2),
 			attr(0xC0, 16, 0, 2, 0xFD, 0xE8, 0, 0, 0, 1),
 			attr(0xC0, 32, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3),
+			attr(0x80, 9, 10, 0, 0, 1),
 			attr(0x80, 10, 10, 0, 0, 2, 10, 0, 0, 3),
+			attr(0xC0, 7, 0xFD, 0xE8, 192, 0, 2, 7),
 			attr(0x80, 14, concat([]byte{0, 2, 1, 32}, b16(v6global), b16(v6ll), []byte{0, 48, 0x20, 1, 0x0d, 0xb8, 0, 1})...),
 			attr(0x80, 15, 0, 1, 1, 24, 198, 51, 100),
 			attr(0xC0, 99, 0xAA, 0xBB),
@@ -235,6 +238,9 @@ func TestPathClone(t *testing.T) {
 		if !reflect.DeepEqual(c, p) {
 			t.Fatalf("block %d: clone differs:\n%+v\n%+v", i, c, p)
 		}
+		if p.rare != nil && c.rare == p.rare || p.MPReach != nil && c.MPReach == p.MPReach {
+			t.Fatalf("block %d: clone shares a pointer", i)
+		}
 		want, _ := NewAttrs(saved, Context{}).Decode()
 
 		for j := range block {
@@ -247,26 +253,34 @@ func TestPathClone(t *testing.T) {
 	}
 	// the three blocks together must have exercised every pointer and slice
 	p, _ := NewAttrs(cloneBlocks()[0], Context{}).Decode()
-	if p.MPReach == nil || len(p.MPReach.NLRI) == 0 || p.MPUnreach == nil || len(p.MPUnreach.Withdrawn) == 0 ||
-		len(p.Unknown) == 0 || len(p.ASPath.Segments) == 0 || len(p.AS4Path.Segments) == 0 || len(p.ClusterList) == 0 {
-		t.Fatalf("block 0 left a field unset: %+v", p)
+	_, hasAgg := p.Aggregator()
+	if p.MPReach == nil || len(p.MPReach.NLRI) == 0 || p.MPUnreach() == nil || len(p.MPUnreach().Withdrawn) == 0 ||
+		len(p.Unknown()) == 0 || len(p.ASPath.Segments) == 0 || len(p.AS4Path().Segments) == 0 || len(p.ClusterList()) == 0 ||
+		len(p.Communities) == 0 || len(p.LargeCommunities) == 0 || len(p.ExtCommunities()) == 0 ||
+		!p.rare.merged || len(p.ReceivedASPath().Segments) == 0 || !hasAgg || !p.OriginatorID().IsValid() || !p.NextHop().IsValid() {
+		t.Fatalf("block 0 left a field unset: %+v %+v", p, p.rare)
 	}
 	q, _ := NewAttrs(cloneBlocks()[1], Context{}).Decode()
 	u, _ := NewAttrs(cloneBlocks()[2], Context{}).Decode()
-	if q.MPReach == nil || len(q.MPReach.RawNLRI) == 0 || u.MPUnreach == nil || len(u.MPUnreach.RawNLRI) == 0 {
-		t.Fatalf("raw NLRI blocks left a field unset: %+v %+v", q.MPReach, u.MPUnreach)
+	if q.MPReach == nil || len(q.MPReach.RawNLRI) == 0 || u.MPUnreach() == nil || len(u.MPUnreach().RawNLRI) == 0 {
+		t.Fatalf("raw NLRI blocks left a field unset: %+v %+v", q.MPReach, u.MPUnreach())
 	}
 }
 
 func TestPathCloneNilAndEmpty(t *testing.T) {
 	var z Path
-	if c := z.Clone(); !reflect.DeepEqual(c, z) || c.Communities != nil || c.MPReach != nil || c.Unknown != nil {
+	if c := z.Clone(); !reflect.DeepEqual(c, z) || c.Communities != nil || c.MPReach != nil || c.rare != nil {
 		t.Errorf("zero path: %+v", c)
 	}
 	e := Path{
-		Communities: []Community{}, ClusterList: []netip.Addr{}, Unknown: []Attribute{{Value: []byte{}}, {}},
+		Communities: []Community{}, LargeCommunities: []LargeCommunity{},
 		ASPath:  ASPath{Segments: []Segment{{ASSequence, []ASN{}}, {ASSet, nil}}},
-		MPReach: &MPReach{NLRI: []NLRI{}, RawNLRI: []byte{}}, MPUnreach: &MPUnreach{},
+		MPReach: &MPReach{NLRI: []NLRI{}, RawNLRI: []byte{}},
+		rare: &pathRare{
+			clusterList: []netip.Addr{}, extCommunities: []ExtCommunity{}, unknown: []Attribute{{Value: []byte{}}, {}},
+			receivedASPath: ASPath{Segments: []Segment{}}, as4Path: ASPath{Segments: []Segment{{ASSequence, []ASN{}}}},
+			mpUnreach: &MPUnreach{Withdrawn: []NLRI{}, RawNLRI: []byte{}},
+		},
 	}
 	c := e.Clone()
 	if !reflect.DeepEqual(c, e) {
@@ -275,8 +289,11 @@ func TestPathCloneNilAndEmpty(t *testing.T) {
 }
 
 // scribble overwrites every slice element reachable from v, through pointers,
-// structs and slices, with garbage.
+// structs (unexported fields included) and slices, with garbage.
 func scribble(v reflect.Value) {
+	if v.CanAddr() && !v.CanSet() { // reached through an unexported field
+		v = reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem()
+	}
 	switch v.Kind() {
 	case reflect.Pointer:
 		if !v.IsNil() {
