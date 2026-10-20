@@ -57,6 +57,7 @@ bgp . FuzzParseUpdate
 bgp . FuzzDecodeAttrs
 bgp . FuzzASPathMerge
 internal/bzip2 . FuzzBzip2
+. . FuzzDecompress
 '
 
 # dir package fuzz-target; shard i of n takes targets i, i+n, i+2n, ...

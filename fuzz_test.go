@@ -2,6 +2,8 @@ package mrt_test
 
 import (
 	"bytes"
+	"compress/gzip"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rkolesnichenko/mrt"
 	"github.com/rkolesnichenko/mrt/bgp"
@@ -278,4 +281,88 @@ func TestHugeCountsAllocateLittle(t *testing.T) {
 			t.Errorf("%s: allocated %d bytes for a %d-byte input", c.name, d, len(c.in))
 		}
 	}
+}
+
+// FuzzDecompress checks spec §6.4 at Workers 2 on arbitrary bytes: the bytes
+// Decompress gives and a failure exactly where it fails (as
+// TestDecompressWithMatchesDecompress checks it), and no goroutine left once
+// the read has returned io.EOF or an error. An output is read up to 4 MiB, so
+// that an input expanding to hundreds of MB stays quick: past that, only the
+// common prefix is compared, and the read is ended by cancelling.
+func FuzzDecompress(f *testing.F) {
+	paths, err := filepath.Glob("testdata/bzip2/*.bz2")
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(b)
+	}
+	bench, err := os.ReadFile(benchBz2)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(bench[:4096])
+	f.Add([]byte("BZh9"))
+	raw, err := os.ReadFile("testdata/synthetic/state-changes.mrt")
+	if err != nil {
+		f.Fatal(err)
+	}
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Write(raw)
+	zw.Close()
+	f.Add(gz.Bytes())
+	f.Add([]byte{})
+	const limit = 4 << 20
+	read := func(r io.Reader) ([]byte, error) { return io.ReadAll(io.LimitReader(r, limit+1)) }
+	f.Fuzz(func(t *testing.T, in []byte) {
+		var want []byte
+		r, wantErr := mrt.Decompress(bytes.NewReader(in))
+		if wantErr == nil {
+			want, wantErr = read(r)
+		}
+		base := runtime.NumGoroutine()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var got []byte
+		r, gotErr := mrt.DecompressWith(bytes.NewReader(in), mrt.DecompressOptions{Workers: 2, Context: ctx})
+		if gotErr == nil {
+			got, gotErr = read(r)
+		}
+		wantCapped, gotCapped := len(want) > limit, len(got) > limit
+		if !wantCapped && !gotCapped {
+			checkSame(t, "workers 2", got, gotErr, want, wantErr)
+		} else {
+			n := min(len(got), len(want))
+			if !bytes.Equal(got[:n], want[:n]) {
+				t.Errorf("past %d bytes: the first %d bytes differ", limit, n)
+			}
+			// The shorter must be capped too, unless it ended with the bytes
+			// of a Read past the input's end (ruling 9).
+			if wantCapped != gotCapped && !errors.Is(wantErr, io.ErrUnexpectedEOF) && !errors.Is(gotErr, io.ErrUnexpectedEOF) {
+				t.Errorf("Decompress: %d bytes, error %v; DecompressWith: %d bytes, error %v (read up to %d)", len(want), wantErr, len(got), gotErr, limit+1)
+			}
+			if gotCapped {
+				cancel()
+				if _, err := r.Read(make([]byte, 1)); err == nil {
+					t.Errorf("Read after cancel: no error")
+				}
+			}
+		}
+		// A goroutine of the fuzzing harness may come or go meanwhile, so a
+		// count off by some is polled for a while; a worker left blocked
+		// would stay.
+		n := runtime.NumGoroutine()
+		for i := 0; i < 100 && n > base; i++ {
+			time.Sleep(10 * time.Millisecond)
+			n = runtime.NumGoroutine()
+		}
+		if n > base {
+			t.Errorf("%d goroutines after the read, %d before", n, base)
+		}
+	})
 }
