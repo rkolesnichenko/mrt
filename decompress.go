@@ -65,14 +65,18 @@ var (
 // goroutine starts. Workers < 0, or Workers > 0 with a nil Context, is an
 // error.
 //
-// The goroutines read r, so r must not be read by anything else once
+// r is read by the returned reader: for gzip by its goroutine, for bzip2
+// only by its Read. So r must not be read by anything else once
 // DecompressWith has returned. Every goroutine DecompressWith starts has
 // ended when a Read has returned io.EOF or an error other than Context's.
 // A caller that stops reading before then must cancel Context to release
 // them. After a cancel, a Read before the output has ended returns
-// Context.Err(), and the goroutines end soon after, except that the gzip
-// goroutine, if it is blocked inside r.Read (r is a pipe or stdin, say), ends
-// only when that Read returns, since a Context cannot interrupt it.
+// Context.Err(), and the goroutines end soon after. For bzip2, a cancel takes
+// effect after the block being decoded: a Read that is decoding a block
+// itself finishes it first, and the Read that returns Context.Err() waits
+// for each worker to finish the block it is decoding. The gzip goroutine,
+// if it is blocked inside r.Read (r is a pipe or stdin, say), ends only when
+// that Read returns, since a Context cannot interrupt it.
 func DecompressWith(r io.Reader, opts DecompressOptions) (io.Reader, error) {
 	return decompressWith(r, opts, nil)
 }

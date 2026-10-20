@@ -175,10 +175,10 @@ for route, err := range mrt.Routes(mrt.Records(r)) {
 `Context` is required when `Workers > 0`; cancel it when you stop before the
 end, or the goroutines stay until you do. On the machine below (Apple M3 Max,
 Go 1.27.2, `GOMAXPROCS=4`, `Workers: 4`) bzip2 decompression of route-views2's
-RIB took 19.28 s with `Decompress` and 5.35 s with `DecompressWith` (3.60x;
-`.data/decompress-v03-gate-bzip2.log`). gzip is a smaller gain: a full `Routes`
-pass over RIPE's rrc00 bview took 13.94 s and 9.51 s (1.47x), while copying
-the bytes alone got slower, 5.68 s and 6.81 s (0.83x;
+RIB took 20.59 s with `Decompress` and 5.39 s with `DecompressWith` (3.82x;
+`.data/decompress-v03-gate-bzip2-fix.log`). gzip is a smaller gain: a full
+`Routes` pass over RIPE's rrc00 bview took 13.94 s and 9.51 s (1.47x), while
+copying the bytes alone got slower, 5.68 s and 6.81 s (0.83x;
 `.data/decompress-v03-gate-gzip.log`). Other `Workers`, other machines and
 resident memory are not measured. `mrtdump` uses it.
 

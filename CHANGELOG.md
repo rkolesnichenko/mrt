@@ -10,7 +10,8 @@ a minor version may change the API.
 
 Faster decompression. Every figure below comes from a command run on
 2026-10-20 or 2026-10-21 with Go 1.27.2 on an Apple M3 Max, `GOMAXPROCS=4`,
-and names its log; the first line of each log records the settings.
+and names its log; the first line of the baseline and gate logs
+(`.data/decompress-v03-*.log`) records the settings.
 
 ### Added
 
@@ -41,10 +42,10 @@ and names its log; the first line of each log records the settings.
 
 - Before: decompression was 84% of a full `Routes` pass over rv6-rib, 87%
   over rv2-rib and 41% over rrc00-bview (`.data/decompress-v03-baseline.log`).
-- bzip2, `Workers: 4` (`.data/decompress-v03-gate-bzip2.log`). Decompress
-  only: rv2-rib 19.28 s to 5.35 s (3.60x), rv6-rib 6.95 s to 1.87 s (3.72x).
-  Decompress plus `Routes`: rv2-rib 23.30 s to 6.13 s (3.80x), rv6-rib 7.71 s
-  to 2.12 s (3.63x). The output hashes are identical and the route counts
+- bzip2, `Workers: 4` (`.data/decompress-v03-gate-bzip2-fix.log`). Decompress
+  only: rv2-rib 20.59 s to 5.39 s (3.82x), rv6-rib 7.44 s to 1.90 s (3.91x).
+  Decompress plus `Routes`: rv2-rib 22.95 s to 6.09 s (3.77x), rv6-rib 8.35 s
+  to 2.12 s (3.95x). The output hashes are identical and the route counts
   match (17,471,006 and 4,723,276, 0 errors).
 - gzip, `Workers: 4` (`.data/decompress-v03-gate-gzip.log`), rrc00-bview:
   decompress plus `Routes` 13.94 s to 9.51 s (1.47x). Decompress only, a
@@ -54,11 +55,12 @@ and names its log; the first line of each log records the settings.
   identical bytes on all 19 files of the real-data run (4 rv2 and 12 rrc00
   updates files, rv6-rib, rv2-rib, rrc00-bview;
   `.data/realdata-decompress-v03.log`).
-- On a small file the parallel path costs more than it gains. The two-block
-  bench file reads at about 52 MB/s with `Decompress` and about 74 MB/s with
-  `DecompressWith` (`BenchmarkBzip2`, `BenchmarkDecompressWith`), but
-  allocates 15.4 MB per operation against 3.7 MB, because each worker keeps
-  its own decoder and buffers (`.data/bench-v03.log`).
+- On a small file the parallel path is faster but allocates about four times
+  as much. The two-block bench file reads at about 52 MB/s with `Decompress`
+  and about 74 MB/s with `DecompressWith` (`BenchmarkBzip2`,
+  `BenchmarkDecompressWith`), and allocates 15.4 MB per operation against
+  3.7 MB (`.data/bench-v03.log`). That each worker keeping its own decoder
+  and buffers accounts for the difference is not measured.
 
 ### Not measured
 
