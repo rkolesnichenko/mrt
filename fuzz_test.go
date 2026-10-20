@@ -139,17 +139,15 @@ func FuzzRoutes(f *testing.F) {
 			r   mrt.Route
 			err string
 		}
-		run := func(opts mrt.RoutesOptions, skipStates bool) (out []result) {
+		run := func(opts mrt.RoutesOptions) (out []result) {
 			for rt, err := range mrt.RoutesWith(mrt.Records(bytes.NewReader(in)), opts) {
 				if err != nil {
 					out = append(out, result{err: err.Error()})
 					continue
 				}
 				if rt.Kind == mrt.KindPeerState {
-					if skipStates {
-						continue
-					}
-					if rt.Prefix.IsValid() || rt.Path != nil {
+					if rt.Family != (bgp.Family{}) || rt.Prefix.IsValid() || rt.PathID != 0 || rt.HasPathID ||
+						!rt.Originated.IsZero() || rt.Path != nil || rt.Diagnostics != nil {
 						t.Fatalf("peer state event carries route fields: %+v", rt)
 					}
 					out = append(out, result{r: rt})
@@ -169,14 +167,37 @@ func FuzzRoutes(f *testing.F) {
 			}
 			return out
 		}
-		plain := run(mrt.RoutesOptions{}, false)
-		interned := run(mrt.RoutesOptions{Interner: bgp.NewInterner()}, false)
+		// split separates the peer state events from everything else.
+		split := func(rs []result) (events, rest []result) {
+			for _, r := range rs {
+				if r.err == "" && r.r.Kind == mrt.KindPeerState {
+					events = append(events, r)
+				} else {
+					rest = append(rest, r)
+				}
+			}
+			return
+		}
+		plain := run(mrt.RoutesOptions{})
+		if events, _ := split(plain); len(events) != 0 {
+			t.Fatalf("peer state events without the option: %+v", events)
+		}
+		interned := run(mrt.RoutesOptions{Interner: bgp.NewInterner()})
 		if !reflect.DeepEqual(plain, interned) {
 			t.Fatalf("interner changes the routes:\n%+v\n%+v", plain, interned)
 		}
-		withStates := run(mrt.RoutesOptions{PeerStates: true}, true)
-		if !reflect.DeepEqual(plain, withStates) {
-			t.Fatalf("PeerStates changes the other routes:\n%+v\n%+v", plain, withStates)
+		withStates := run(mrt.RoutesOptions{PeerStates: true})
+		wsEvents, wsRest := split(withStates)
+		if !reflect.DeepEqual(plain, wsRest) {
+			t.Fatalf("PeerStates changes the other routes:\n%+v\n%+v", plain, wsRest)
+		}
+		both := run(mrt.RoutesOptions{PeerStates: true, Interner: bgp.NewInterner()})
+		bEvents, bRest := split(both)
+		if !reflect.DeepEqual(plain, bRest) {
+			t.Fatalf("PeerStates with Interner changes the other routes:\n%+v\n%+v", plain, bRest)
+		}
+		if !reflect.DeepEqual(wsEvents, bEvents) {
+			t.Fatalf("Interner changes the peer state events:\n%+v\n%+v", wsEvents, bEvents)
 		}
 	})
 }
