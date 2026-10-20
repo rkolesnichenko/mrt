@@ -5,9 +5,15 @@
 #   scripts/fuzz.sh                      # every target, 15s each
 #   FUZZTIME=1m scripts/fuzz.sh          # every target, 1m each
 #   FUZZ_SHARD=2/3 scripts/fuzz.sh       # the 2nd of 3 shards (every 3rd target)
+#
+# FUZZMINIMIZETIME (default 2s) bounds how long the fuzzer minimizes each new
+# input. Go's default is 60s, during which no new inputs are tried, so a run of
+# 15s to 30s could be spent entirely minimizing. A failing input is written
+# whole even when its minimization is cut short.
 set -u
 cd "$(dirname "$0")/.."
 FUZZTIME=${FUZZTIME:-15s}
+FUZZMINIMIZETIME=${FUZZMINIMIZETIME:-2s}
 FUZZ_SHARD=${FUZZ_SHARD:-1/1}
 shard=${FUZZ_SHARD%%/*}
 shards=${FUZZ_SHARD#*/}
@@ -31,13 +37,13 @@ bad() { echo "FAIL: $*"; fail=1; }
 # at -fuzztime; a real crash always prints "Failing input written to". So a run
 # that fails that way without a failing input is retried once.
 fuzz() {
-	out=$(cd "$1" && go test -run='^$' -fuzz="^$3\$" -fuzztime="$FUZZTIME" "$2" 2>&1)
+	out=$(cd "$1" && go test -run='^$' -fuzz="^$3\$" -fuzztime="$FUZZTIME" -fuzzminimizetime="$FUZZMINIMIZETIME" "$2" 2>&1)
 	rc=$?
 	printf '%s\n' "$out"
 	if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "context deadline exceeded" &&
 		! printf '%s' "$out" | grep -q "Failing input written"; then
 		step "fuzz $3: harness deadline without a failing input; retrying once"
-		(cd "$1" && go test -run='^$' -fuzz="^$3\$" -fuzztime="$FUZZTIME" "$2")
+		(cd "$1" && go test -run='^$' -fuzz="^$3\$" -fuzztime="$FUZZTIME" -fuzzminimizetime="$FUZZMINIMIZETIME" "$2")
 		rc=$?
 	fi
 	return "$rc"

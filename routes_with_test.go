@@ -1,10 +1,12 @@
 package mrt_test
 
 import (
+	"fmt"
 	"net/netip"
 	"os"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/rkolesnichenko/mrt"
 	"github.com/rkolesnichenko/mrt/bgp"
@@ -29,6 +31,8 @@ func TestRoutesPeerStates(t *testing.T) {
 		}
 		return mrt.Records(r)
 	}
+	// Record i is stamped 1700000000+i seconds (mrtgen); BGP4MP_ET adds 250 µs.
+	const epoch = 1700000000
 	peerA := mrt.Peer{Addr: netip.MustParseAddr("192.0.2.10"), AS: 64500}
 	peerB := mrt.Peer{Addr: netip.MustParseAddr("2001:db8::11"), AS: 4200000001}
 	type ev struct {
@@ -59,11 +63,11 @@ func TestRoutesPeerStates(t *testing.T) {
 	}
 	for i, w := range want {
 		g := got[i]
-		if g.Kind != w.kind || g.Peer.Addr != w.peer.Addr || g.Peer.AS != w.peer.AS {
+		if g.Kind != w.kind || g.Peer != w.peer || g.Peer.BGPID.IsValid() {
 			t.Errorf("%d: %v peer %+v, want %v %+v", i, g.Kind, g.Peer, w.kind, w.peer)
 		}
-		if g.Time.Nanosecond() != w.micro*1000 {
-			t.Errorf("%d: time %v, want %d µs", i, g.Time, w.micro)
+		if wt := time.Unix(epoch+int64(i), int64(w.micro)*1000); !g.Time.Equal(wt) {
+			t.Errorf("%d: time %v, want %v", i, g.Time.UTC(), wt.UTC())
 		}
 		if w.kind != mrt.KindPeerState {
 			continue
@@ -106,6 +110,18 @@ func collect(seq func(func(mrt.Route, error) bool)) []routeOrErr {
 	return out
 }
 
+// describe prints a route with its path dereferenced (unexported fields of
+// routeOrErr would otherwise print raw, and Path as an address).
+func describe(x routeOrErr) string {
+	r := x.r
+	var path bgp.Path
+	if r.Path != nil {
+		path = *r.Path
+	}
+	r.Path = nil
+	return fmt.Sprintf("%+v path=%+v err=%q", r, path, x.err)
+}
+
 func TestRoutesInternerSameRoutes(t *testing.T) {
 	in := bgp.NewInterner()
 	for _, f := range fixtures(t) {
@@ -118,8 +134,14 @@ func TestRoutesInternerSameRoutes(t *testing.T) {
 		}
 		want := collect(mrt.Routes(open()))
 		got := collect(mrt.RoutesWith(open(), mrt.RoutesOptions{Interner: in}))
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("%s: interner routes differ (%d vs %d)", f.name, len(got), len(want))
+		if len(got) != len(want) {
+			t.Errorf("%s: interner gives %d routes, plain Routes %d", f.name, len(got), len(want))
+		}
+		for i := range min(len(got), len(want)) {
+			if !reflect.DeepEqual(got[i], want[i]) {
+				t.Errorf("%s: route %d differs:\ninterner: %s\nplain:    %s", f.name, i, describe(got[i]), describe(want[i]))
+				break
+			}
 		}
 	}
 }

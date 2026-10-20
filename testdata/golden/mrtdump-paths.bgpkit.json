@@ -1,0 +1,13 @@
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.0/24","origin":"IGP","next_hop":"192.0.2.10","med":10,"local_pref":100,"aggregator":"64500 192.0.2.77","atomic":true}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.1/32","origin":"IGP","next_hop":"192.0.2.10"}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.2/32","as_path":"1 2 {3,4}","origin":"IGP","next_hop":"192.0.2.10"}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.3/32","as_path":"(65001 65002) [65003,65004] 64500","origin":"INCOMPLETE","next_hop":"192.0.2.10"}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.4/32","as_path":"64500","origin":"EGP","next_hop":"192.0.2.20","med":4000000000,"local_pref":3000000000}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.7/32","as_path":"64500","origin":"IGP","next_hop":"192.0.2.10"}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.8/32","as_path":"64500","origin":"IGP","next_hop":"192.0.2.10"}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.9/32","as_path":"64500","origin":"IGP","next_hop":"192.0.2.10","communities":["65535:65281","65535:65282","65535:65283","65535:65284","0:0"]}
+{"kind":"A","peer":"2001:db8::11","peer_as":4200000001,"prefix":"2001:db8:600::/48","as_path":"64496","origin":"IGP","next_hop":"2001:db8::1"}
+{"kind":"A","peer":"2001:db8::11","peer_as":64500,"prefix":"2001:db8:700::/48","as_path":"64500","origin":"IGP","next_hop":"2001:db8::11"}
+{"kind":"W","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.5/32"}
+{"kind":"W","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.6/32"}
+{"kind":"W","peer":"192.0.2.10","peer_as":64500,"prefix":"2001:db8:500::/48"}

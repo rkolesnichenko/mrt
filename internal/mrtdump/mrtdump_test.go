@@ -188,13 +188,15 @@ func TestMrtdumpMalformedExit1(t *testing.T) {
 	}
 }
 
-// Every expected text below is what bgpdump (caf2cb07, TZ=UTC) printed for
-// the same bytes with the same flags, unless a comment says otherwise.
+// The files are synthetic fixtures (internal/mrtgen). Their -m -l -u lines
+// are held to bgpdump's golden by the root package's TestGoldens; where a line
+// here is not bgpdump's, a comment says so and testdata/bgpdump/divergences.md
+// has the entry. The lines with other flags were printed by bgpdump (caf2cb07,
+// TZ=UTC) for the same file and flags; no test runs bgpdump on them again.
 func TestMrtdumpLinePrefixes(t *testing.T) {
 	tests := []struct {
 		name  string
-		file  string // under testdata/synthetic, or
-		bytes []byte // built in cases_test.go
+		file  string // under testdata/synthetic
 		flags []string
 		want  string
 	}{
@@ -264,34 +266,34 @@ func TestMrtdumpLinePrefixes(t *testing.T) {
 			"BGP4MP|1700000002|A|192.0.2.10|64500|203.0.113.2/32|64500 64501|IGP|192.0.2.10|0|0|||NAG||",
 			"BGP4MP|1700000003|A|192.0.2.10|64500|203.0.113.3/32|64500 64501|IGP|192.0.2.10|0|0|65000:1|64500:10:20|NAG||",
 		)},
-		{name: "STATE", bytes: stateFile(), flags: []string{"-m", "-l", "-u"}, want: lines(
+		{name: "STATE", file: "mrtdump-states.mrt", flags: []string{"-m", "-l", "-u"}, want: lines(
 			"BGP4MP|1700000000|STATE|192.0.2.10|64500|1|2",
 			"BGP4MP|1700000001|STATE|2001:db8::11|4200000001|5|6",
 			"BGP4MP_ET|1700000002.000005|STATE|192.0.2.10|64500|6|1",
 			"BGP4MP|1700000003|STATE|192.0.2.10|64500|1|9",
 		)},
-		{name: "STATE -M", bytes: stateFile(), flags: []string{"-M"}, want: lines(
+		{name: "STATE -M", file: "mrtdump-states.mrt", flags: []string{"-M"}, want: lines(
 			"BGP4MP|11/14/23 22:13:20|STATE|192.0.2.10|64500|1|2",
 			"BGP4MP|11/14/23 22:13:21|STATE|2001:db8::11|4200000001|5|6",
 			"BGP4MP_ET|11/14/23 22:13:22.000005|STATE|192.0.2.10|64500|6|1",
 			"BGP4MP|11/14/23 22:13:23|STATE|192.0.2.10|64500|1|9",
 		)},
-		{name: "TABLE_DUMP", bytes: tableDumpFile(), flags: []string{"-m", "-l", "-u"}, want: lines(
+		{name: "TABLE_DUMP", file: "mrtdump-table-dump.mrt", flags: []string{"-m", "-l", "-u"}, want: lines(
 			"TABLE_DUMP|1700000000|B|192.0.2.10|64500|198.51.100.0/24|64500 64501|IGP|192.0.2.10|0|0|64500:1||NAG|||",
 			"TABLE_DUMP|1700000001|B|2001:db8::11|64500|2001:db8:100::/48|64500|IGP|2001:db8::11|0|0|||NAG|||",
 		)},
-		{name: "TABLE_DUMP -M", bytes: tableDumpFile(), flags: []string{"-M"}, want: lines(
+		{name: "TABLE_DUMP -M", file: "mrtdump-table-dump.mrt", flags: []string{"-M"}, want: lines(
 			"TABLE_DUMP|11/14/23 22:13:20|B|192.0.2.10|64500|198.51.100.0/24|64500 64501|IGP",
 			"TABLE_DUMP|11/14/23 22:13:21|B|2001:db8::11|64500|2001:db8:100::/48|64500|IGP",
 		)},
-		{name: "BGP4MP, BGP4MP_LOCAL", bytes: pathsFile(), flags: []string{"-m", "-l", "-u"}, want: lines(
+		{name: "BGP4MP, BGP4MP_LOCAL", file: "mrtdump-paths.mrt", flags: []string{"-m", "-l", "-u"}, want: lines(
 			"BGP4MP|1700000000|A|192.0.2.10|64500|198.51.100.0/24||IGP|192.0.2.10|100|10|||AG|64500 192.0.2.77||",
 			"BGP4MP|1700000001|A|192.0.2.10|64500|198.51.100.1/32||IGP|192.0.2.10|0|0|||NAG|||",
 			"BGP4MP|1700000002|A|192.0.2.10|64500|198.51.100.2/32|1 2 {3,4}|IGP|192.0.2.10|0|0|||NAG|||",
 			"BGP4MP|1700000003|A|192.0.2.10|64500|198.51.100.3/32|(65001 65002) [65003,65004] 64500|INCOMPLETE|192.0.2.10|0|0|||NAG|||",
 			// bgpdump prints LOCAL_PREF and MED here with %d, as
 			// -1294967296|-294967296; mrtdump prints them unsigned, as
-			// every other bgpdump line does.
+			// every other bgpdump line does (divergences.md B5).
 			"BGP4MP|1700000004|A|192.0.2.10|64500|198.51.100.4/32|64500|EGP|192.0.2.20|3000000000|4000000000|||NAG|||",
 			"BGP4MP|1700000005|W|192.0.2.10|64500|198.51.100.5/32",
 			"BGP4MP|1700000005|W|192.0.2.10|64500|198.51.100.6/32",
@@ -302,7 +304,7 @@ func TestMrtdumpLinePrefixes(t *testing.T) {
 			"BGP4MP|1700000007|A|2001:db8::11|64500|2001:db8:700::/48|64500|IGP|2001:db8::11|0|0|||NAG|||",
 			"BGP4MP|1700000009|A|192.0.2.10|64500|198.51.100.9/32|64500|IGP|192.0.2.10|0|0|no-export no-advertise local-AS 65535:65284 0:0||NAG|||",
 		)},
-		{name: "BGP4MP -M", bytes: pathsFile(), flags: []string{"-M", "-l", "-u"}, want: lines(
+		{name: "BGP4MP -M", file: "mrtdump-paths.mrt", flags: []string{"-M", "-l", "-u"}, want: lines(
 			"BGP4MP|11/14/23 22:13:20|A|192.0.2.10|64500|198.51.100.0/24||IGP",
 			"BGP4MP|11/14/23 22:13:21|A|192.0.2.10|64500|198.51.100.1/32||IGP",
 			"BGP4MP|11/14/23 22:13:22|A|192.0.2.10|64500|198.51.100.2/32|1 2 {3,4}|IGP",
@@ -324,23 +326,17 @@ func TestMrtdumpLinePrefixes(t *testing.T) {
 			"TABLE_DUMP2|1700000000|B|192.0.2.10|64500|192.0.2.0/25|64500 64501|IGP|192.0.2.10|0|0|||NAG|||",
 			"TABLE_DUMP2_AP|1700000000|B|2001:db8::11|4200000001|2001:db8:300::/48|5|4200000001|IGP|2001:db8::11|0|0|||NAG|||",
 		)},
-		{name: "TABLE_DUMP2 empty path, no NEXT_HOP, multicast", bytes: ribMiscFile(), flags: []string{"-m", "-l", "-u"}, want: lines(
+		{name: "TABLE_DUMP2 empty path, no NEXT_HOP, multicast", file: "mrtdump-rib-misc.mrt", flags: []string{"-m", "-l", "-u"}, want: lines(
 			"TABLE_DUMP2|1700000000|B|192.0.2.10|64500|198.51.100.0/24||IGP|192.0.2.10|100|0|||NAG|||",
 			"TABLE_DUMP2|1700000000|B|192.0.2.10|64500|198.51.101.0/24|64500|IGP|255.255.255.255|0|0|||NAG|||",
 			// bgpdump prints nothing for an IPv4 multicast RIB; this line
-			// is in its TABLE_DUMP2 format.
+			// is in its TABLE_DUMP2 format (divergences.md B4).
 			"TABLE_DUMP2|1700000000|B|192.0.2.10|64500|198.51.102.0/24|64500|IGP|192.0.2.10|0|0|||NAG|||",
 		)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var code int
-			var out, errs string
-			if tc.file != "" {
-				code, out, errs = run(t, nil, append(tc.flags, synthetic+tc.file)...)
-			} else {
-				code, out, errs = runBytes(t, tc.bytes, tc.flags...)
-			}
+			code, out, errs := run(t, nil, append(tc.flags, synthetic+tc.file)...)
 			if code != 0 || errs != "" {
 				t.Errorf("exit %d, stderr %q; want 0 and nothing", code, errs)
 			}
@@ -351,23 +347,24 @@ func TestMrtdumpLinePrefixes(t *testing.T) {
 
 // bgpdump's words for attributes it cannot use: "! Error !" for an AS_PATH
 // that does not parse, INCOMPLETE for an ORIGIN above 2, AG for any
-// ATOMIC_AGGREGATE. Both lines are bgpdump's for the same bytes; mrtdump also
-// reports the three attributes (exit 1).
+// ATOMIC_AGGREGATE. Both lines are bgpdump's for mrtdump-odd-attrs.mrt (the
+// -m -l -u one is its golden); mrtdump also reports the three attributes
+// (exit 1).
 func TestMrtdumpMalformedAttrsPrintAsBgpdump(t *testing.T) {
-	code, out, errs := runBytes(t, oddAttrsFile(), "-m", "-l", "-u")
+	code, out, errs := run(t, nil, "-m", "-l", "-u", synthetic+"mrtdump-odd-attrs.mrt")
 	checkOut(t, "-m -l -u", out, lines(
 		"BGP4MP|1700000000|A|192.0.2.10|64500|198.51.100.0/24|! Error !|INCOMPLETE|192.0.2.10|0|0|||AG|||"))
 	if code != 1 || strings.Count(errs, "\n") != 3 {
 		t.Errorf("exit %d, stderr:\n%s\nwant 1 and three diagnostics", code, errs)
 	}
-	_, out, _ = runBytes(t, oddAttrsFile(), "-M")
+	_, out, _ = run(t, nil, "-M", synthetic+"mrtdump-odd-attrs.mrt")
 	checkOut(t, "-M", out, lines("BGP4MP|11/14/23 22:13:20|A|192.0.2.10|64500|198.51.100.0/24|! Error !|INCOMPLETE"))
 }
 
 // Review Focus 5: an empty AS path is an empty field, not a missing one, and
 // a path ending in an AS_SET keeps the set's braces. bgpdump printed both.
 func TestMrtdumpEmptyPath(t *testing.T) {
-	_, out, _ := runBytes(t, pathsFile(), "-m")
+	_, out, _ := run(t, nil, "-m", synthetic+"mrtdump-paths.mrt")
 	got := strings.Split(out, "\n")
 	for i, want := range map[int]string{
 		0: "BGP4MP|1700000000|A|192.0.2.10|64500|198.51.100.0/24||IGP|192.0.2.10|100|10||AG|64500 192.0.2.77|",
@@ -378,7 +375,7 @@ func TestMrtdumpEmptyPath(t *testing.T) {
 			t.Errorf("line %d:\ngot  %q\nwant %q", i, got[min(i, len(got)-1)], want)
 		}
 	}
-	_, out, _ = runBytes(t, ribMiscFile(), "-M")
+	_, out, _ = run(t, nil, "-M", synthetic+"mrtdump-rib-misc.mrt")
 	if want := "TABLE_DUMP2|11/14/23 22:13:20|B|192.0.2.10|64500|198.51.100.0/24||IGP\n"; !strings.HasPrefix(out, want) {
 		t.Errorf("RIB entry with an empty path:\ngot  %q\nwant %q", out, want)
 	}

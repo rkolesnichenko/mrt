@@ -101,8 +101,10 @@ bgpdump: (none)
 Reason: bgpdump's `process_mrtd_table_dump_v2` has no case for
 RIB_IPV4_MULTICAST, RIB_IPV6_MULTICAST and their add-path forms (subtypes 3,
 5, 9, 11); it prints nothing. mrt decodes them like the unicast subtypes.
+`mrtdump-rib-misc` record 4 is a RIB_IPV4_MULTICAST record as well.
 
-Decides: bgpkit-parser, which gives the same two routes as mrt.
+Decides: bgpkit-parser, which gives the same routes as mrt (two in
+`rib-multicast`, 198.51.102.0/24 in `mrtdump-rib-misc`).
 
 ```pair
 fixture: rib-multicast
@@ -116,19 +118,33 @@ mrtdump: TABLE_DUMP2|1700000000|B|2001:db8::11|4200000001|2001:db8:500::/48|4200
 bgpdump: (none)
 ```
 
+```pair
+fixture: mrtdump-rib-misc
+mrtdump: TABLE_DUMP2|1700000000|B|192.0.2.10|64500|198.51.102.0/24|64500|IGP|192.0.2.10|0|0|||NAG|||
+bgpdump: (none)
+```
+
 ### B5. LOCAL_PREF and MED of 2^31 or more on IPv4 routes in MP_REACH_NLRI
 
 Reason: bgpdump's `table_line_announce_1` (IPv4 prefixes announced in
 MP_REACH_NLRI) prints LOCAL_PREF and MED with `%d`; every other printer uses
 `%u`. 3000000000 and 4000000000 come out negative. The same values in the
-NLRI field (record 2 of the fixture) print alike in both.
+NLRI field (record 2 of `mp-ipv4-large-values`) print alike in both.
+`mrtdump-paths` record 5 is the same case (ORIGIN EGP, AS_PATH `64500`).
 
-Decides: bgpkit-parser (local_pref 3000000000, med 4000000000).
+Decides: bgpkit-parser (local_pref 3000000000, med 4000000000, in both
+fixtures).
 
 ```pair
 fixture: mp-ipv4-large-values
 mrtdump: BGP4MP|1700000000|A|192.0.2.10|64500|198.51.110.0/24|64500 64501|IGP|192.0.2.20|3000000000|4000000000|||NAG|||
 bgpdump: BGP4MP|1700000000|A|192.0.2.10|64500|198.51.110.0/24|64500 64501|IGP|192.0.2.20|-1294967296|-294967296|||NAG|||
+```
+
+```pair
+fixture: mrtdump-paths
+mrtdump: BGP4MP|1700000004|A|192.0.2.10|64500|198.51.100.4/32|64500|EGP|192.0.2.20|3000000000|4000000000|||NAG|||
+bgpdump: BGP4MP|1700000004|A|192.0.2.10|64500|198.51.100.4/32|64500|EGP|192.0.2.20|-1294967296|-294967296|||NAG|||
 ```
 
 ### B6. AS4 merge: bgpdump counts confederation segments
@@ -381,6 +397,75 @@ bgpkit: {"kind":"A","peer":"2001:418:1::3","peer_as":3130,"prefix":"2400:7400:43
 fixture: rv6-updates-et.20261015.1200
 mrt: {"kind":"A","peer":"2001:418:1::3","peer_as":3130,"prefix":"2803:9c0::/40","as_path":"3130 6939 212895 207036","origin":"IGP","next_hop":"2001:418:1::3","communities":["3130:376","6939:1000","6939:7525","6939:8840","6939:9001"],"otc":33108}
 bgpkit: {"kind":"A","peer":"2001:418:1::3","peer_as":3130,"prefix":"2803:9c0::/40","as_path":"3130 6939 212895 207036","origin":"IGP","next_hop":"206.81.81.212","communities":["3130:376","6939:1000","6939:7525","6939:8840","6939:9001"],"otc":33108}
+```
+
+### K8. An ATOMIC_AGGREGATE that is not empty
+
+Reason: the ATOMIC_AGGREGATE of `mrtdump-odd-attrs` is 1 byte long.
+bgpkit-parser takes it as present (`atomic: true`). RFC 7606 section 7.6:
+"The attribute SHALL be considered malformed if its length is not 0" and "An
+UPDATE message with a malformed ATOMIC_AGGREGATE attribute SHALL be handled
+using the approach of "attribute discard"". mrt leaves
+`Path.AtomicAggregate` false, keeps the raw attribute in `Path.Unknown()` and
+reports a Warning `bgp/attr-length` (as for S2; RFC 7606's actions are out of
+scope, spec §11). bgpdump prints `AG` for any ATOMIC_AGGREGATE, and mrtdump
+prints the same line (`TestMrtdumpMalformedAttrsPrintAsBgpdump`), so the
+bgpdump golden matches mrtdump. The record's ORIGIN of 7 and its AS_PATH,
+whose segment claims 3 ASNs with only 2 bytes after its header, are
+malformed too; mrt and
+bgpkit-parser both leave origin and AS path out.
+
+Decides: RFC 7606 section 7.6 (both oracles keep the attribute).
+
+```pair
+fixture: mrtdump-odd-attrs
+mrt: {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.0/24","next_hop":"192.0.2.10"}
+bgpkit: {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"198.51.100.0/24","next_hop":"192.0.2.10","atomic":true}
+```
+
+### K9. A locally generated message gives a route in bgpkit-parser
+
+Reason: `mrtdump-paths` record 7 is a BGP4MP_MESSAGE_AS4_LOCAL UPDATE: the
+collector's own announcement to the peer. RFC 6396 section 4.4.5: "This
+subtype is added to indicate a locally generated BGP message", and "The Local
+fields continue to refer to the local IP and AS number of the collector that
+generated the BGP message"; section 4.4.6 says the same of the AS4 form.
+bgpkit-parser gives it as an announcement from peer 2001:db8::11 (AS
+4200000001), with the collector's AS path `64496` and next hop
+`2001:db8::1`. `Routes` yields no route for `*_LOCAL` messages (spec §5:
+"the collector's own outbound"); they stay visible through `Records`.
+
+Decides: RFC 6396 section 4.4.5 and bgpdump, which prints the message as a
+`BGP4MP_LOCAL` line, apart from what peers sent (its golden matches mrtdump).
+
+```pair
+fixture: mrtdump-paths
+mrt: (none)
+bgpkit: {"kind":"A","peer":"2001:db8::11","peer_as":4200000001,"prefix":"2001:db8:600::/48","as_path":"64496","origin":"IGP","next_hop":"2001:db8::1"}
+```
+
+### K10. Abbreviated MP_REACH_NLRI in a legacy TABLE_DUMP record
+
+Reason: `mrtdump-table-dump` record 2 is an AFI_IPv6 TABLE_DUMP record whose
+MP_REACH_NLRI holds only the next hop length and the next hop, as in a
+TABLE_DUMP_V2 RIB entry (RFC 6396 section 4.3.4: "only the Next Hop Address
+Length and Next Hop Address fields are included"). bgpkit-parser 0.22.0
+does not decode it there: it lists the attribute among its unknown
+attributes and gives the route no next hop. mrt reads it as in any RIB entry
+(Ruling R20: a non-zero first byte is the abbreviated form) and gives next
+hop 2001:db8::11.
+
+Decides: bgpdump, whose line carries `2001:db8::11` as mrt does (the
+bgpdump golden matches mrtdump). RFC 6396 section 4.2 (TABLE_DUMP) does not
+mention MP_REACH_NLRI, so the RFC does not decide; mrt reads a TABLE_DUMP
+entry's attributes as a RIB entry's (Ruling R20). No real TABLE_DUMP file in
+`testdata/mrt` has this form: `rv6-tabledump.20070601.0123` carries no
+MP_REACH_NLRI.
+
+```pair
+fixture: mrtdump-table-dump
+mrt: {"kind":"A","peer":"2001:db8::11","peer_as":64500,"prefix":"2001:db8:100::/48","as_path":"64500","origin":"IGP","next_hop":"2001:db8::11"}
+bgpkit: {"kind":"A","peer":"2001:db8::11","peer_as":64500,"prefix":"2001:db8:100::/48","as_path":"64500","origin":"IGP"}
 ```
 
 ## Known from bgpdump's source or other inputs, in no fixture

@@ -423,6 +423,18 @@ func TestRoutesOriginated(t *testing.T) {
 		t.Errorf("RIB Originated %v, want %v", rs[0].Originated, want)
 	}
 
+	// RIB_GENERIC for a prefix family (IPv4 unicast): the same entry framing.
+	gen := frame(ts, TypeTableDumpV2, SubRIBGeneric, 0,
+		cat(be32(1), be16(1), []byte{1}, []byte{24, 198, 51, 100}, be16(1), entry))
+	rs, errs = routesOf(t, cat(peerTable("192.0.2.1"), gen))
+	if len(errs) != 0 || len(rs) != 1 {
+		t.Fatalf("RIB_GENERIC: %v %v", rs, errs)
+	}
+	if rs[0].Kind != KindRIB || rs[0].Prefix != netip.MustParsePrefix("198.51.100.0/24") ||
+		!rs[0].Originated.Equal(want) || rs[0].Originated.Location() != time.UTC {
+		t.Errorf("RIB_GENERIC route %+v, want prefix 198.51.100.0/24 originated %v", rs[0], want)
+	}
+
 	// Legacy TABLE_DUMP.
 	body := cat(be16(0), be16(5), []byte{10, 0, 0, 0}, []byte{8, 1}, be32(orig),
 		[]byte{192, 0, 2, 1}, be16(65000), be16(uint16(len(attrs))), attrs)

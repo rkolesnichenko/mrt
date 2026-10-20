@@ -65,6 +65,11 @@ func Synthetic() []File {
 		{"as4-confed.mrt", as4Confed()},
 		{"rib-multicast.mrt", ribMulticast()},
 		{"mp-ipv4-large-values.mrt", mpIPv4LargeValues()},
+		{"mrtdump-states.mrt", mrtdumpStates()},
+		{"mrtdump-paths.mrt", mrtdumpPaths()},
+		{"mrtdump-table-dump.mrt", mrtdumpTableDump()},
+		{"mrtdump-rib-misc.mrt", mrtdumpRIBMisc()},
+		{"mrtdump-odd-attrs.mrt", mrtdumpOddAttrs()},
 	}
 }
 
@@ -341,4 +346,127 @@ func mpIPv4LargeValues() []byte {
 		return Header(mrt.TypeBGP4MP, mrt.SubMessageAS4, at(n), BGP4MP(mrt.SubMessageAS4, peerA.AS, 64496, peerA.Addr, local4, m))
 	}
 	return catRecords(msg(0, mp), msg(1, plain))
+}
+
+// The mrtdump-* fixtures are internal/mrtdump's test inputs: cases the files
+// above lack. Its tests pin mrtdump's lines on them; the goldens pin the
+// oracles'.
+
+// mrtdumpStates holds state changes: 2-byte IPv4, 4-byte IPv6, BGP4MP_ET
+// (5 microseconds), and a state number (9) bgpdump has no name for.
+func mrtdumpStates() []byte {
+	state := func(typ mrt.Type, st mrt.Subtype, ts time.Time, p mrt.Peer, local netip.Addr, old, new mrt.State) []byte {
+		return Header(typ, st, ts, StateChange(st, p.AS, 64496, p.Addr, local, old, new))
+	}
+	return catRecords(
+		state(mrt.TypeBGP4MP, mrt.SubStateChange, at(0), peerA, local4, mrt.StateIdle, mrt.StateConnect),
+		state(mrt.TypeBGP4MP, mrt.SubStateChangeAS4, at(1), peerB, local6, mrt.StateOpenConfirm, mrt.StateEstablished),
+		state(mrt.TypeBGP4MPET, mrt.SubStateChangeAS4, at(2).Add(5*time.Microsecond), peerA, local4, mrt.StateEstablished, mrt.StateIdle),
+		state(mrt.TypeBGP4MP, mrt.SubStateChange, at(3), peerA, local4, mrt.StateIdle, 9),
+	)
+}
+
+// mrtdumpPaths holds BGP4MP UPDATEs over paths and attributes: an empty
+// AS_PATH, none at all, an AS_SET, confederation segments, IPv4 in
+// MP_REACH_NLRI with LOCAL_PREF and MED of 2^31 or more, withdrawals over
+// MP_UNREACH_NLRI, a LOCAL message, IPv6 multicast in a 2-byte
+// BGP4MP_MESSAGE, a KEEPALIVE and well-known communities.
+func mrtdumpPaths() []byte {
+	nh := NextHop(peerA.Addr)
+	org := Origin(bgp.OriginIGP)
+	agg := netip.MustParseAddr("192.0.2.77")
+	upd := func(attrs []byte, prefixes ...string) []byte {
+		var ns []bgp.NLRI
+		for _, p := range prefixes {
+			ns = append(ns, nlri(p))
+		}
+		return Update(nil, ns, attrs, false)
+	}
+	msg := func(n int, st mrt.Subtype, p mrt.Peer, local netip.Addr, m []byte) []byte {
+		return Header(mrt.TypeBGP4MP, st, at(n), BGP4MP(st, p.AS, 64496, p.Addr, local, m))
+	}
+	confed := bgp.Segment{Type: bgp.ASConfedSequence, ASNs: []bgp.ASN{65001, 65002}}
+	confedSet := bgp.Segment{Type: bgp.ASConfedSet, ASNs: []bgp.ASN{65003, 65004}}
+	keepalive := append(slices.Repeat([]byte{0xFF}, 16), 0, 19, 4)
+	return catRecords(
+		// 0: empty AS_PATH (iBGP), LOCAL_PREF, MED, ATOMIC_AGGREGATE, AGGREGATOR.
+		msg(0, mrt.SubMessageAS4, peerA, local4, upd(Attrs(org, ASPath(true), nh,
+			MED(10), LocalPref(100), Raw(FlagTransitive, 6, nil), AggregatorAttr(true, 64500, agg)),
+			"198.51.100.0/24")),
+		// 1: no AS_PATH attribute at all.
+		msg(1, mrt.SubMessageAS4, peerA, local4, upd(Attrs(org, nh), "198.51.100.1/32")),
+		// 2: a path ending in an AS_SET.
+		msg(2, mrt.SubMessageAS4, peerA, local4, upd(Attrs(org,
+			ASPath(true, Seq(1, 2), Set(3, 4)), nh), "198.51.100.2/32")),
+		// 3: confederation sequence and set.
+		msg(3, mrt.SubMessageAS4, peerA, local4, upd(Attrs(Origin(bgp.OriginIncomplete),
+			ASPath(true, confed, confedSet, Seq(64500)), nh), "198.51.100.3/32")),
+		// 4: IPv4 over MP_REACH_NLRI, LOCAL_PREF and MED above 2^31.
+		msg(4, mrt.SubMessageAS4, peerA, local4, upd(Attrs(Origin(bgp.OriginEGP),
+			ASPath(true, Seq(64500)), LocalPref(3000000000), MED(4000000000),
+			MPReach(v4u, []netip.Addr{netip.MustParseAddr("192.0.2.20")}, []bgp.NLRI{nlri("198.51.100.4/32")}, false)))),
+		// 5: classic withdrawals and announcements, and an IPv6 MP_UNREACH_NLRI, in one UPDATE.
+		msg(5, mrt.SubMessageAS4, peerA, local4, Update(
+			[]bgp.NLRI{nlri("198.51.100.5/32"), nlri("198.51.100.6/32")},
+			[]bgp.NLRI{nlri("198.51.100.7/32"), nlri("198.51.100.8/32")},
+			Attrs(org, ASPath(true, Seq(64500)), nh,
+				MPUnreach(v6u, []bgp.NLRI{nlri("2001:db8:500::/48")}, false)), false)),
+		// 6: LOCAL (sent by the collector) announcement over IPv6.
+		msg(6, mrt.SubMessageAS4Local, peerB, local6, upd(Attrs(org,
+			ASPath(true, Seq(64496)),
+			MPReach(v6u, []netip.Addr{local6}, []bgp.NLRI{nlri("2001:db8:600::/48")}, false)))),
+		// 7: 2-byte BGP4MP_MESSAGE over an IPv6 session, IPv6 multicast.
+		Header(mrt.TypeBGP4MP, mrt.SubMessage, at(7), BGP4MP(mrt.SubMessage, peerA.AS, 64496, peerB.Addr, local6,
+			upd(Attrs(org, ASPath(false, Seq(64500)),
+				MPReach(bgp.Family{AFI: bgp.AFIIPv6, SAFI: bgp.SAFIMulticast}, []netip.Addr{peerB.Addr},
+					[]bgp.NLRI{nlri("2001:db8:700::/48")}, false))))),
+		// 8: KEEPALIVE: nothing to print.
+		msg(8, mrt.SubMessageAS4, peerA, local4, keepalive),
+		// 9: well-known communities.
+		msg(9, mrt.SubMessageAS4, peerA, local4, upd(Attrs(org, ASPath(true, Seq(64500)), nh,
+			Communities(0xFFFFFF01, 0xFFFFFF02, 0xFFFFFF03, 0xFFFFFF04, 0)), "198.51.100.9/32")),
+	)
+}
+
+// mrtdumpTableDump holds legacy TABLE_DUMP records (RFC 6396 section 4.2),
+// IPv4 and IPv6, with 2-byte ASNs in AS_PATH.
+func mrtdumpTableDump() []byte {
+	org := Origin(bgp.OriginIGP)
+	td := func(n int, p string, peer netip.Addr, peerAS uint16, attrs []byte) []byte {
+		st := mrt.SubAFIIPv4
+		if pfx(p).Addr().Is6() {
+			st = mrt.SubAFIIPv6
+		}
+		return Header(mrt.TypeTableDump, st, at(n), TableDump(0, uint16(n), pfx(p), 1, at(-100), peer, peerAS, attrs))
+	}
+	return catRecords(
+		td(0, "198.51.100.0/24", peerA.Addr, 64500,
+			Attrs(org, ASPath(false, Seq(64500, 64501)), NextHop(peerA.Addr), Communities(64500<<16|1))),
+		td(1, "2001:db8:100::/48", peerB.Addr, 64500,
+			Attrs(org, ASPath(false, Seq(64500)), MPReachAbbrev(peerB.Addr))),
+	)
+}
+
+// mrtdumpRIBMisc holds TABLE_DUMP_V2 cases: an empty AS path, no NEXT_HOP,
+// and an IPv4 multicast RIB. Its PEER_INDEX_TABLE has an empty view name.
+func mrtdumpRIBMisc() []byte {
+	t := at(0)
+	org := Origin(bgp.OriginIGP)
+	entry := func(attrs []byte) Entry { return Entry{0, t, 0, attrs} }
+	return catRecords(
+		Header(mrt.TypeTableDumpV2, mrt.SubPeerIndexTable, t, PeerIndexTable(collector, "", []mrt.Peer{peerA})),
+		rib(mrt.SubRIBIPv4Unicast, t, 0, "198.51.100.0/24", entry(Attrs(org, ASPath(true), NextHop(peerA.Addr), LocalPref(100)))),
+		rib(mrt.SubRIBIPv4Unicast, t, 1, "198.51.101.0/24", entry(Attrs(org, ASPath(true, Seq(64500))))),
+		rib(mrt.SubRIBIPv4Multicast, t, 2, "198.51.102.0/24", entry(Attrs(org, ASPath(true, Seq(64500)), NextHop(peerA.Addr)))),
+	)
+}
+
+// mrtdumpOddAttrs holds one UPDATE with attributes bgpdump still prints from:
+// an ORIGIN value of 7, an AS_PATH whose segment claims more ASNs than it
+// holds, and a 1-byte ATOMIC_AGGREGATE.
+func mrtdumpOddAttrs() []byte {
+	attrs := Attrs(Raw(FlagTransitive, 1, []byte{7}), Raw(FlagTransitive, 2, []byte{2, 3, 0, 1}),
+		NextHop(peerA.Addr), RawLen(FlagTransitive, 6, 1, []byte{0}))
+	msg := Update(nil, []bgp.NLRI{nlri("198.51.100.0/24")}, attrs, false)
+	return Header(mrt.TypeBGP4MP, mrt.SubMessageAS4, at(0), BGP4MP(mrt.SubMessageAS4, peerA.AS, 64496, peerA.Addr, local4, msg))
 }

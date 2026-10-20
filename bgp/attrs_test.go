@@ -257,13 +257,99 @@ func TestPathClone(t *testing.T) {
 	if p.MPReach == nil || len(p.MPReach.NLRI) == 0 || p.MPUnreach() == nil || len(p.MPUnreach().Withdrawn) == 0 ||
 		len(p.Unknown()) == 0 || len(p.ASPath.Segments) == 0 || len(p.AS4Path().Segments) == 0 || len(p.ClusterList()) == 0 ||
 		len(p.Communities) == 0 || len(p.LargeCommunities) == 0 || len(p.ExtCommunities()) == 0 ||
-		!p.rare.merged || len(p.ReceivedASPath().Segments) == 0 || !hasAgg || !p.OriginatorID().IsValid() || !p.NextHop().IsValid() {
+		!p.rare.merged || len(p.ReceivedASPath().Segments) == 0 || reflect.DeepEqual(p.ReceivedASPath(), p.ASPath) || !hasAgg || !p.OriginatorID().IsValid() || !p.NextHop().IsValid() {
 		t.Fatalf("block 0 left a field unset: %+v %+v", p, p.rare)
 	}
 	q, _ := NewAttrs(cloneBlocks()[1], Context{}).Decode()
 	u, _ := NewAttrs(cloneBlocks()[2], Context{}).Decode()
 	if q.MPReach == nil || len(q.MPReach.RawNLRI) == 0 || u.MPUnreach() == nil || len(u.MPUnreach().RawNLRI) == 0 {
 		t.Fatalf("raw NLRI blocks left a field unset: %+v %+v", q.MPReach, u.MPUnreach())
+	}
+}
+
+// TestPathCloneCoversEveryReferenceField is the reflection guard behind
+// TestPathClone: every slice, map and pointer field (exported or not) of Path,
+// its rare part, MPReach, MPUnreach and Attribute, and of every type they hold
+// by value, slice or pointer, must be set (non-nil, non-empty) in at least one
+// of cloneBlocks' decoded paths. A new reference field that Clone might forget
+// therefore fails here until a block sets it, and then TestPathClone's
+// overwrite check covers it.
+func TestPathCloneCoversEveryReferenceField(t *testing.T) {
+	opaque := map[reflect.Type]bool{reflect.TypeOf(netip.Addr{}): true, reflect.TypeOf(netip.Prefix{}): true}
+	isRef := func(k reflect.Kind) bool {
+		return k == reflect.Slice || k == reflect.Pointer || k == reflect.Map || k == reflect.Interface
+	}
+	// Every reference field reachable from the roots.
+	required := map[string]bool{}
+	seen := map[reflect.Type]bool{}
+	var walkType func(ty reflect.Type)
+	walkType = func(ty reflect.Type) {
+		for ty.Kind() == reflect.Slice || ty.Kind() == reflect.Pointer || ty.Kind() == reflect.Array || ty.Kind() == reflect.Map {
+			ty = ty.Elem()
+		}
+		if ty.Kind() != reflect.Struct || opaque[ty] || seen[ty] {
+			return
+		}
+		seen[ty] = true
+		for i := 0; i < ty.NumField(); i++ {
+			f := ty.Field(i)
+			if isRef(f.Type.Kind()) {
+				required[ty.String()+"."+f.Name] = true
+			}
+			walkType(f.Type)
+		}
+	}
+	for _, root := range []any{Path{}, pathRare{}, MPReach{}, MPUnreach{}, Attribute{}} {
+		walkType(reflect.TypeOf(root))
+	}
+	if len(required) < 10 {
+		t.Fatalf("the type walk found only %d reference fields: %v", len(required), required)
+	}
+	// Every reference field set in a decoded block.
+	set := map[string]bool{}
+	var walkValue func(v reflect.Value)
+	walkValue = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.Pointer:
+			if !v.IsNil() {
+				walkValue(v.Elem())
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < v.Len(); i++ {
+				walkValue(v.Index(i))
+			}
+		case reflect.Map:
+			for it := v.MapRange(); it.Next(); {
+				walkValue(it.Value())
+			}
+		case reflect.Struct:
+			if opaque[v.Type()] {
+				return
+			}
+			for i := 0; i < v.NumField(); i++ {
+				f := v.Field(i)
+				switch f.Kind() {
+				case reflect.Slice, reflect.Map:
+					if f.Len() > 0 {
+						set[v.Type().String()+"."+v.Type().Field(i).Name] = true
+					}
+				case reflect.Pointer, reflect.Interface:
+					if !f.IsNil() {
+						set[v.Type().String()+"."+v.Type().Field(i).Name] = true
+					}
+				}
+				walkValue(f)
+			}
+		}
+	}
+	for _, block := range cloneBlocks() {
+		p, _ := NewAttrs(block, Context{}).Decode()
+		walkValue(reflect.ValueOf(p))
+	}
+	for name := range required {
+		if !set[name] {
+			t.Errorf("no cloneBlocks block sets %s: add one, so TestPathClone covers it (and check Path.Clone copies it)", name)
+		}
 	}
 }
 

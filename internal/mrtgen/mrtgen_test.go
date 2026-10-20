@@ -242,8 +242,8 @@ const dir = "../../testdata/synthetic"
 
 func TestGeneratedFiles(t *testing.T) {
 	files := mrtgen.Synthetic()
-	if len(files) != 13 {
-		t.Fatalf("%d files, want 13", len(files))
+	if len(files) != 18 {
+		t.Fatalf("%d files, want 18", len(files))
 	}
 	again := mrtgen.Synthetic()
 	for i, f := range files {
@@ -273,10 +273,11 @@ func TestGeneratedFiles(t *testing.T) {
 				routes++
 				diags += len(rt.Diagnostics)
 			}
-			if n == 0 || routes == 0 {
+			// mrtdump-states.mrt holds state changes only: no route.
+			if n == 0 || (routes == 0) != (f.Name == "mrtdump-states.mrt") {
 				t.Errorf("%d records, %d routes", n, routes)
 			}
-			malformed := f.Name == "attrs-malformed.mrt" || f.Name == "short-message.mrt"
+			malformed := f.Name == "attrs-malformed.mrt" || f.Name == "short-message.mrt" || f.Name == "mrtdump-odd-attrs.mrt"
 			if malformed && diags == 0 {
 				t.Errorf("%s should produce diagnostics", f.Name)
 			}

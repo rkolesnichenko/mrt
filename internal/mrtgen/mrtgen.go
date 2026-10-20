@@ -132,6 +132,22 @@ func RIBGeneric(st mrt.Subtype, seq uint32, fam bgp.Family, nlri []byte, entries
 	return append(b, ribEntries(st, entries)...)
 }
 
+// TableDump returns the body of a legacy TABLE_DUMP record (RFC 6396 section
+// 4.2): view, sequence, the prefix address in full and its length, status,
+// originated time, peer address and 2-byte peer AS, then attrs, whose AS_PATH
+// carries 2-byte ASNs. The prefix's family is not written; the subtype
+// (AFI_IPv4 or AFI_IPv6) given to Header carries it.
+func TableDump(view, seq uint16, p netip.Prefix, status uint8, originated time.Time, peer netip.Addr, peerAS uint16, attrs []byte) []byte {
+	b := append(u16(view), u16(seq)...)
+	b = append(b, addrBytes(p.Addr())...)
+	b = append(b, byte(p.Bits()), status)
+	b = append(b, u32(uint32(originated.Unix()))...)
+	b = append(b, addrBytes(peer)...)
+	b = append(b, u16(peerAS)...)
+	b = append(b, u16(uint16(len(attrs)))...)
+	return append(b, attrs...)
+}
+
 func isAS4(st mrt.Subtype) bool {
 	switch st {
 	case mrt.SubMessageAS4, mrt.SubStateChangeAS4, mrt.SubMessageAS4Local,
