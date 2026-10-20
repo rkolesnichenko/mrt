@@ -712,7 +712,7 @@ func TestFixturesListed(t *testing.T) {
 		names[f.name] = true
 		base := filepath.Base(f.path)
 		doc := "testdata/README.md"
-		if strings.HasPrefix(f.path, "testdata/synthetic/") {
+		if strings.HasPrefix(filepath.ToSlash(f.path), "testdata/synthetic/") {
 			doc = "testdata/synthetic/README.md"
 		}
 		if !bytes.Contains(readme[doc], []byte("`"+base+"`")) {
