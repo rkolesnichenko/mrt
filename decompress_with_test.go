@@ -423,7 +423,8 @@ func readWithHooks(t *testing.T, in []byte, workers int, extra []uint64) ([]byte
 // TestDecompressWithSpeculates checks that the chain takes the workers'
 // results: every block of the bench file is taken speculatively, and the
 // padded file's first block, whose end is past its 8 MiB segment, is decoded
-// by the chain itself (the chain-miss path), the others speculatively. The
+// by the chain itself (the chain-miss path), the others speculatively, and
+// both blocks of multi-stream.bz2 (levels 1 and 9) are speculative. The
 // padding changes no byte of the output (internal/bzip2's
 // TestBlockSpanning8MiB; TestDecompressWithMatchesDecompress compares the
 // padded file with Decompress too, without -race).
@@ -433,7 +434,7 @@ func TestDecompressWithSpeculates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := decompressed(bytes.NewReader(in), 0, false)
+	benchOut, err := decompressed(bytes.NewReader(in), 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,6 +447,16 @@ func TestDecompressWithSpeculates(t *testing.T) {
 	for _, b := range blocks[1:] {
 		paddedBlocks = append(paddedBlocks, b+8*benchPadBytes)
 	}
+	// Two streams, of levels 1 and 9: the second stream's block is taken
+	// speculatively only if the scan read its level after the end magic.
+	multi, err := os.ReadFile("testdata/bzip2/multi-stream.bz2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	multiBlocks, _ := blockMagics(multi)
+	if len(multiBlocks) < 2 {
+		t.Fatalf("multi-stream.bz2: blocks at %v, want one per stream", multiBlocks)
+	}
 	for _, c := range []struct {
 		name                string
 		in                  []byte
@@ -453,9 +464,17 @@ func TestDecompressWithSpeculates(t *testing.T) {
 	}{
 		{"bench", in, blocks, nil},
 		{"padded", padded, paddedBlocks, blocks[:1]},
+		{"multi-stream", multi, multiBlocks, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
+			want, err := decompressed(bytes.NewReader(c.in), 0, false)
+			if c.name == "padded" {
+				want, err = benchOut, nil // the padding changes no byte
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
 			got, log := readWithHooks(t, c.in, 2, nil)
 			if !bytes.Equal(got, want) {
 				t.Fatalf("%d bytes, not the %d Decompress gives", len(got), len(want))
