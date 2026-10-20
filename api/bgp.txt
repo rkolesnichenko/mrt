@@ -55,6 +55,7 @@ const ValidationValid ValidationState = 0
 var ErrMarker = errors.New(…)
 var ErrShortMessage = errors.New(…)
 func NewAttrs(raw []byte, ctx Context) Attrs
+func NewInterner() *Interner
 func ParseMessageHeader(msg []byte) (MessageHeader, error)
 func ParseNLRI(b []byte, fam Family, addPath bool) ([]NLRI, []Diagnostic)
 func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic)
@@ -108,6 +109,10 @@ type Family struct
 	AFI AFI
 	SAFI SAFI
 func (Family) HasPrefixes() bool
+type Interner struct
+func (*Interner) Decode(a Attrs) (*Path, []Diagnostic)
+func (*Interner) DropPathIndex()
+func (*Interner) Len() int
 type LargeCommunity struct
 	Global uint32
 	Local1 uint32
