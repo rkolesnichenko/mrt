@@ -58,8 +58,8 @@ the differential test.
   as far as the bytes go (whole prefixes and attributes) and adds one Error `bgp/message-truncated`.
 - **MP_REACH in a RIB entry (R20).** First byte non-zero is the abbreviated RFC 6396 §4.3.4 form; zero
   is the full RFC 4760 form. The full form gets no diagnostic (route-views6 writes it on every
-  entry); its family and next hops are decoded but its NLRI stays in `RawNLRI`, because the record
-  supplies the prefix. Outside a RIB the NLRI is parsed. Next hops of length 16/32 are IPv6 for any
+  entry); its family and next hops are decoded and its NLRI is not kept (the record supplies the prefix; the
+  bytes stay in `Attrs.Raw()`), amended 2026-10-20 by the user. Outside a RIB the NLRI is parsed. Next hops of length 16/32 are IPv6 for any
   AFI (R8); `Path.NextHop` is the NEXT_HOP attribute only.
 - **Duplicates and malformed attributes.** First duplicate wins (RFC 7606 §3 g), later ones to `Unknown`
   with a Warning. RFC 7606 actions are out of scope: diagnostics carry the fault.

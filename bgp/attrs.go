@@ -98,7 +98,7 @@ type Path struct {
 // Unknown with a diagnostic and decoding continues. Broken framing puts the
 // rest of the block, header included, in one Unknown entry (Flags and Code
 // zero) and stops. Diagnostic.Offset is the attribute's offset in the block.
-// Path.Unknown[i].Value, MPReach.RawNLRI and MPUnreach.RawNLRI alias the block.
+// Path.Unknown[i].Value, MPReach.RawNLRI (outside a RIB entry) and MPUnreach.RawNLRI alias the block.
 func (a Attrs) Decode() (Path, []Diagnostic) {
 	var (
 		p     Path

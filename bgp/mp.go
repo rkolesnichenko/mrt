@@ -11,7 +11,7 @@ type MPReach struct {
 	NextHop     netip.Addr // global
 	LinkLocal   netip.Addr // second IPv6 next hop, when present
 	NLRI        []NLRI     // decoded for IPv4/IPv6 unicast and multicast only, outside a RIB entry
-	RawNLRI     []byte     // other families, and the full form in a RIB entry: kept raw
+	RawNLRI     []byte     // other families outside a RIB entry: kept raw
 	Abbreviated bool       // RFC 6396 §4.3.4 form
 }
 
@@ -80,16 +80,19 @@ func decodeMPReach(v []byte, ctx Context, off int) (r MPReach, ok bool, diags []
 	}
 	rest := v[4+nh+1:] // skip the reserved byte
 	// The full form in a RIB entry (first byte zero, or the test above would
-	// have taken it): the record carries the prefix, so the NLRI is kept raw,
-	// not parsed (Ruling R20). Abbreviated=false records the form.
-	if r.Family.HasPrefixes() && !ctx.RIB {
+	// have taken it): the record carries the prefix, so the NLRI is neither
+	// parsed nor kept (Ruling R20, amended 2026-10-20); the bytes stay in
+	// Attrs.Raw(). Abbreviated=false records the form.
+	switch {
+	case ctx.RIB:
+	case r.Family.HasPrefixes():
 		var nd []Diagnostic
 		r.NLRI, nd = parseNLRI(rest, r.Family.AFI, ctx.AddPath)
 		for _, d := range nd {
 			d.Offset, d.Attr = off, AttrMPReach
 			diags = append(diags, d)
 		}
-	} else {
+	default:
 		r.RawNLRI = rawOrNil(rest)
 	}
 	return r, true, diags

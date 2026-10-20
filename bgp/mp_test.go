@@ -1,7 +1,6 @@
 package bgp
 
 import (
-	"bytes"
 	"net/netip"
 	"slices"
 	"testing"
@@ -40,21 +39,21 @@ func TestMPReachAbbreviatedInRIB(t *testing.T) {
 		t.Fatalf("%+v %v", r, d)
 	}
 	// The full form in a RIB entry (route-views6 writes it on every entry,
-	// Ruling R20): no diagnostic, family and next hops decoded, the NLRI kept
-	// raw (the record supplies the prefix).
+	// Ruling R20, amended 2026-10-20): no diagnostic, family and next hops
+	// decoded, the NLRI not kept (the record supplies the prefix).
 	nlri := []byte{32, 0x20, 1, 0x0d, 0xb8}
 	v := concat([]byte{0, 2, 1, 32}, b16(v6global), b16(v6ll), []byte{0}, nlri)
 	p, d = decodeMP(t, Context{RIB: true}, 14, v...)
 	r = p.MPReach
 	if len(d) != 0 || r == nil || r.Abbreviated || r.Family != (Family{2, 1}) || r.NextHop != v6global || r.LinkLocal != v6ll ||
-		r.NLRI != nil || !bytes.Equal(r.RawNLRI, nlri) || len(p.Unknown) != 0 {
+		r.NLRI != nil || r.RawNLRI != nil || len(p.Unknown) != 0 {
 		t.Fatalf("%+v %v", r, d)
 	}
 	// ... also with add-path, and when the NLRI would not parse: it is not read.
 	for _, ctx := range []Context{{RIB: true, AddPath: true}, {RIB: true, AS4: true}} {
 		v = concat([]byte{0, 2, 1, 16}, b16(v6global), []byte{0, 200, 1})
 		p, d = decodeMP(t, ctx, 14, v...)
-		if r = p.MPReach; len(d) != 0 || r == nil || r.NLRI != nil || !bytes.Equal(r.RawNLRI, []byte{200, 1}) {
+		if r = p.MPReach; len(d) != 0 || r == nil || r.NLRI != nil || r.RawNLRI != nil {
 			t.Fatalf("%+v: %+v %v", ctx, r, d)
 		}
 	}
