@@ -109,8 +109,8 @@ the differential test.
   the fuzz targets. On this machine always run it guarded:
   `memguard.sh 8 3600 env GOMAXPROCS=4 FUZZTIME=15s scripts/check.sh`
   (output to a file, then `echo "exit=$?"`; it must end SUCCESS and `check: ok`).
-- `scripts/fuzz.sh` — five targets (FuzzRecords, FuzzRoutes, FuzzParseUpdate, FuzzDecodeAttrs,
-  FuzzASPathMerge). `FUZZTIME=1m`, `FUZZ_SHARD=i/n` (CI runs two shards; `i/n` is validated).
+- `scripts/fuzz.sh` — seven targets (FuzzRecords, FuzzRoutes, FuzzParseUpdate, FuzzDecodeAttrs,
+  FuzzASPathMerge, FuzzBzip2, FuzzDecompress). `FUZZTIME=1m`, `FUZZ_SHARD=i/n` (CI runs two shards; `i/n` is validated).
 - `MRT_API_UPDATE=1 go run ./internal/apisurface -check` rewrites `api/`; review `git diff api/`, it
   is the API change list.
 - `scripts/build-oracles.sh [PREFIX]` — builds the two oracles (needs autoconf, automake, cargo).

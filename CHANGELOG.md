@@ -8,6 +8,75 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+Faster decompression. Every figure below comes from a command run on
+2026-10-20 or 2026-10-21 with Go 1.27.2 on an Apple M3 Max, `GOMAXPROCS=4`,
+and names its log; the first line of each log records the settings.
+
+### Added
+
+- `mrt.DecompressWith(r, DecompressOptions{Workers, Context})`.
+  `DecompressWith(r, DecompressOptions{})` is `Decompress(r)`. With
+  `Workers > 0` a bzip2 input is decoded block by block on `Workers`
+  goroutines, along the exact block ends (a block is taken from a speculative
+  decode only when it starts where the previous block ended, else it is
+  decoded serially), and a gzip input is decompressed one goroutine ahead of
+  the reader, at most 256 KiB of output. The bytes read, and the error where
+  `Decompress` fails, are the same. `Context` is required when `Workers > 0`
+  and `Workers < 0` is an error; cancel the `Context` when you stop reading
+  before EOF or an error. The API diff (`api/mrt.txt`): `func DecompressWith(r
+  io.Reader, opts DecompressOptions) (io.Reader, error)` and `type
+  DecompressOptions struct { Workers int; Context context.Context }`.
+- `internal/bzip2`: a copy of Go 1.27.2's `compress/bzip2` (BSD-3, The Go
+  Authors; the licence is kept in `internal/bzip2/LICENSE`) with block-level
+  entry points. The root module still has no `require`.
+  `FuzzBzip2` checks its serial reader against `compress/bzip2`, and
+  `FuzzDecompress` checks `DecompressWith` against `Decompress`; both are in
+  `scripts/fuzz.sh`.
+
+### Changed
+
+- `mrtdump`, `internal/heldsize` and `mrtcut` read through `DecompressWith`.
+
+### Measured
+
+- Before: decompression was 84% of a full `Routes` pass over rv6-rib, 87%
+  over rv2-rib and 41% over rrc00-bview (`.data/decompress-v03-baseline.log`).
+- bzip2, `Workers: 4` (`.data/decompress-v03-gate-bzip2.log`). Decompress
+  only: rv2-rib 19.28 s to 5.35 s (3.60x), rv6-rib 6.95 s to 1.87 s (3.72x).
+  Decompress plus `Routes`: rv2-rib 23.30 s to 6.13 s (3.80x), rv6-rib 7.71 s
+  to 2.12 s (3.63x). The output hashes are identical and the route counts
+  match (17,471,006 and 4,723,276, 0 errors).
+- gzip, `Workers: 4` (`.data/decompress-v03-gate-gzip.log`), rrc00-bview:
+  decompress plus `Routes` 13.94 s to 9.51 s (1.47x). Decompress only, a
+  caller that just copies the bytes is slower: 5.68 s to 6.81 s (0.83x). The
+  output is identical.
+- Equivalence on real data: `DecompressWith` (4 workers) and `Decompress` give
+  identical bytes on all 19 files of the real-data run (4 rv2 and 12 rrc00
+  updates files, rv6-rib, rv2-rib, rrc00-bview;
+  `.data/realdata-decompress-v03.log`).
+- On a small file the parallel path costs more than it gains. The two-block
+  bench file reads at about 52 MB/s with `Decompress` and about 74 MB/s with
+  `DecompressWith` (`BenchmarkBzip2`, `BenchmarkDecompressWith`), but
+  allocates 15.4 MB per operation against 3.7 MB, because each worker keeps
+  its own decoder and buffers (`.data/bench-v03.log`).
+
+### Not measured
+
+`Workers` other than 4, other machines, resident memory (RSS), and several
+files being loaded in parallel at once. By design a block in flight takes
+about twice its decoded size, so the worst case for hostile input is
+`2 × Workers × (8 MiB + ~2 × 46.6 MB)`; the typical case is about
+`2 × Workers × 1 MB`. These are bounds from the design (§6.2), not
+measurements.
+
+### Consumer check
+
+routecheck v0.6.0 pins mrt v0.1.0 and does not build against v0.2.0 or later,
+because `bgp.Path.NextHop`, `MPUnreach` and `ReceivedASPath` became methods in
+v0.2. Built in a throwaway copy against this branch and against v0.2.1, it
+fails with the same errors in both (in `observe/session.go` and
+`internal/mrtgen`), none about `Decompress`. v0.3 adds nothing to break it.
+
 ## [0.2.1] - 2026-10-20
 
 Tests and internal tools only: no change to the API (`api/` is unchanged) or
