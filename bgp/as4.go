@@ -96,7 +96,7 @@ func mergeAS4(asPath, as4Path ASPath) (ASPath, bool) {
 // decoded AS4_PATH or AS4_AGGREGATOR, naming AS4_PATH when that was present.
 func applyAS4(p *Path, st *as4State, ctx Context) []Diagnostic {
 	ignored := func(msg string) []Diagnostic {
-		d := Diagnostic{SeverityInfo, "bgp/as4path-ignored", st.as4PathOff, AttrAS4Path, msg}
+		d := Diagnostic{SeverityInfo, DiagAS4PathIgnored, st.as4PathOff, AttrAS4Path, msg}
 		if !st.hasAS4Path {
 			d.Offset, d.Attr = st.as4AggOff, AttrAS4Aggregator
 		}

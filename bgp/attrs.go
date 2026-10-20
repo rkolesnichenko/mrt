@@ -285,13 +285,13 @@ func (a Attrs) Decode() (Path, []Diagnostic) {
 				code = AttrCode(rest[1])
 			}
 			p.addUnknown(Attribute{Value: rest[:len(rest):len(rest)]})
-			diags = append(diags, Diagnostic{SeverityError, "bgp/attr-truncated", off, code,
+			diags = append(diags, Diagnostic{SeverityError, DiagAttrTruncated, off, code,
 				"path attribute framing runs past the end of the block"})
 			break
 		}
 		if seen[at.Code] {
 			p.addUnknown(at)
-			diags = append(diags, Diagnostic{SeverityWarning, "bgp/attr-duplicate", off, at.Code,
+			diags = append(diags, Diagnostic{SeverityWarning, DiagAttrDuplicate, off, at.Code,
 				"duplicate path attribute ignored"})
 			off = next
 			continue
@@ -336,7 +336,7 @@ func (a Attrs) decodeAttr(p *Path, st *as4State, at Attribute, off int) (d *Diag
 	diag := func(sev Severity, code, msg string) *Diagnostic {
 		return &Diagnostic{sev, code, off, at.Code, msg}
 	}
-	badLen := func(msg string) (*Diagnostic, bool) { return diag(SeverityWarning, "bgp/attr-length", msg), false }
+	badLen := func(msg string) (*Diagnostic, bool) { return diag(SeverityWarning, DiagAttrLength, msg), false }
 	v := at.Value
 	switch at.Code {
 	case AttrOrigin:
@@ -344,7 +344,7 @@ func (a Attrs) decodeAttr(p *Path, st *as4State, at Attribute, off int) (d *Diag
 			return badLen("ORIGIN is not 1 byte")
 		}
 		if v[0] > 2 {
-			return diag(SeverityWarning, "bgp/attr-value", "ORIGIN value above 2"), false
+			return diag(SeverityWarning, DiagAttrValue, "ORIGIN value above 2"), false
 		}
 		p.Origin, p.HasOrigin = Origin(v[0]), true
 	case AttrASPath:
@@ -354,13 +354,13 @@ func (a Attrs) decodeAttr(p *Path, st *as4State, at Attribute, off int) (d *Diag
 		}
 		asp, good := parseASPath(v, width)
 		if !good {
-			return diag(SeverityWarning, "bgp/aspath-width", "AS_PATH does not parse at the record's AS width"), false
+			return diag(SeverityWarning, DiagASPathWidth, "AS_PATH does not parse at the record's AS width"), false
 		}
 		p.ASPath = asp // the AS4 rule may replace it with the merged path
 	case AttrAS4Path:
 		asp, good := parseASPath(v, 4)
 		if !good || len(v) == 0 { // RFC 6793 §6: too short to carry an AS is malformed too
-			return diag(SeverityWarning, "bgp/attr-value", "AS4_PATH is malformed"), false
+			return diag(SeverityWarning, DiagAttrValue, "AS4_PATH is malformed"), false
 		}
 		// RFC 6793 §6: confederation segments must not be in AS4_PATH; they
 		// are discarded and the rest of the attribute is used.
@@ -371,11 +371,11 @@ func (a Attrs) decodeAttr(p *Path, st *as4State, at Attribute, off int) (d *Diag
 			}
 		}
 		if len(kept) == 0 {
-			return diag(SeverityWarning, "bgp/attr-value", "AS4_PATH holds only confederation segments, all discarded"), false
+			return diag(SeverityWarning, DiagAttrValue, "AS4_PATH holds only confederation segments, all discarded"), false
 		}
 		p.rarePart().as4Path, st.hasAS4Path, st.as4PathOff = ASPath{kept}, true, off
 		if len(kept) < len(asp.Segments) {
-			return diag(SeverityWarning, "bgp/attr-value", "AS4_PATH confederation segments discarded"), true
+			return diag(SeverityWarning, DiagAttrValue, "AS4_PATH confederation segments discarded"), true
 		}
 	case AttrAggregator:
 		switch {
