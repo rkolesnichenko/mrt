@@ -8,6 +8,8 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-20
+
 ### Fixed
 
 - `Records` and `RecordsWith`: ranging over the sequence again after a
@@ -37,7 +39,9 @@ a minor version may change the API.
 - Tests: `TestMatchesBgpdump` fails when bgpdump is killed by a signal on a
   fixture other than the one it is known to abort on (B2), so an oracle that
   dies at once no longer passes. `TestRealData` checks each file's size and
-  sha256 against MANIFEST.
+  sha256 against MANIFEST. Two tests that failed only on Windows (a path
+  separator, and process-wide allocation measured around a single decode) are
+  fixed.
 - CI: tests also run on macOS, Windows and linux/386; `internal/compare` is
   vetted and tested; a failing fuzz job uploads its inputs.
   `.gitattributes` turns off end-of-line conversion.
@@ -132,5 +136,6 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/rkolesnichenko/mrt/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/rkolesnichenko/mrt/releases/tag/v0.1.0
