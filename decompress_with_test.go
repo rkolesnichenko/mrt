@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -73,9 +74,9 @@ func checkSame(t testing.TB, what string, got []byte, gotErr error, want []byte,
 	}
 }
 
-// matchesDecompress checks §6.4 on in at workers 1, 2 and 8, reading with
+// matchesDecompress checks §6.4 on in at each of workers, reading with
 // io.ReadAll and, when oneByte is set, through iotest.OneByteReader.
-func matchesDecompress(t testing.TB, in []byte, oneByte bool) {
+func matchesDecompress(t testing.TB, in []byte, oneByte bool, workers []int) {
 	t.Helper()
 	modes := []bool{false}
 	if oneByte {
@@ -83,7 +84,7 @@ func matchesDecompress(t testing.TB, in []byte, oneByte bool) {
 	}
 	for _, ob := range modes {
 		want, wantErr := decompressed(bytes.NewReader(in), 0, ob)
-		for _, w := range []int{1, 2, 8} {
+		for _, w := range workers {
 			got, gotErr := decompressed(bytes.NewReader(in), w, ob)
 			checkSame(t, fmt.Sprintf("workers %d, one byte per Read %v", w, ob), got, gotErr, want, wantErr)
 		}
@@ -314,7 +315,7 @@ func TestDecompressWithMatchesDecompress(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			matchesDecompress(t, c.in, c.oneByte)
+			matchesDecompress(t, c.in, c.oneByte, []int{1, 2, 8})
 		})
 	}
 }
@@ -339,15 +340,21 @@ func (f *failAfter) Read(p []byte) (int, error) {
 }
 
 // TestDecompressWithInputReaders reads the bench file through input readers
-// that behave oddly: one byte per Read, data returned with io.EOF, and an
-// error 60% of the way in. DecompressWith gives the bytes and the failure
-// Decompress gives on the same reader.
+// that behave oddly (inputReadersMatch).
 func TestDecompressWithInputReaders(t *testing.T) {
 	t.Parallel()
 	in, err := os.ReadFile(benchBz2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	inputReadersMatch(t, in, []int{1, 2, 8})
+}
+
+// inputReadersMatch reads in through input readers that behave oddly: one
+// byte per Read, data returned with io.EOF, and an error 60% of the way in.
+// At each of workers, DecompressWith gives the bytes and the failure
+// Decompress gives on the same reader.
+func inputReadersMatch(t *testing.T, in []byte, workers []int) {
 	errInput := errors.New("input failed")
 	readers := map[string]func() io.Reader{
 		"OneByteReader": func() io.Reader { return iotest.OneByteReader(bytes.NewReader(in)) },
@@ -360,7 +367,7 @@ func TestDecompressWithInputReaders(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			want, wantErr := decompressed(mk(), 0, false)
-			for _, w := range []int{1, 2, 8} {
+			for _, w := range workers {
 				got, gotErr := decompressed(mk(), w, false)
 				checkSame(t, fmt.Sprintf("workers %d", w), got, gotErr, want, wantErr)
 				if errors.Is(gotErr, errInput) != errors.Is(wantErr, errInput) {
@@ -610,14 +617,20 @@ func TestDecompressWithOptions(t *testing.T) {
 	}
 }
 
-// TestDecompressWithStopsEarly reads 10 records, stops and cancels: Read
-// then returns context.Canceled, and every goroutine ends. Not parallel: it
-// counts goroutines.
+// TestDecompressWithStopsEarly is stopsEarly on the bench file. Not
+// parallel: it counts goroutines.
 func TestDecompressWithStopsEarly(t *testing.T) {
 	in, err := os.ReadFile(benchBz2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	stopsEarly(t, in)
+}
+
+// stopsEarly reads 10 records of in, stops and cancels: Read then returns
+// context.Canceled, and every goroutine ends.
+func stopsEarly(t *testing.T, in []byte) {
+	t.Helper()
 	base := goroutineBaseline()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -649,14 +662,21 @@ func TestDecompressWithStopsEarly(t *testing.T) {
 	}
 }
 
-// TestDecompressWithNoGoroutineAfterEOF: the Read that returns EOF or an
-// error has waited for every worker, so no goroutine is left, with no wait.
-// Not parallel: it counts goroutines.
+// TestDecompressWithNoGoroutineAfterEOF is noGoroutineAfterEOF on the bench
+// file. Not parallel: it counts goroutines.
 func TestDecompressWithNoGoroutineAfterEOF(t *testing.T) {
 	in, err := os.ReadFile(benchBz2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	noGoroutineAfterEOF(t, in)
+}
+
+// noGoroutineAfterEOF reads in whole and cut in half: the Read that returns
+// EOF or an error has waited for every goroutine, so none is left, with no
+// wait.
+func noGoroutineAfterEOF(t *testing.T, in []byte) {
+	t.Helper()
 	for name, in := range map[string][]byte{"whole": in, "cut": in[:len(in)/2]} {
 		base := goroutineBaseline()
 		ctx, cancel := context.WithCancel(context.Background())
@@ -727,4 +747,177 @@ func notIn(a, b []uint64) (out []uint64) {
 		}
 	}
 	return out
+}
+
+// gzipFixture is the committed fixture TestMrtdumpWriteErrorStops reads:
+// 287,052 bytes of gzip, 1,399,027 of output.
+const gzipFixture = "testdata/mrt/rv2-updates-et.20261015.1200.gz"
+
+// twoMemberGzip is a gzip input of two members, as concatenated .gz files
+// are: rv6-updates-et's output, then state-changes.mrt.
+func twoMemberGzip(t testing.TB) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	for _, p := range []string{"testdata/mrt/rv6-updates-et.20261015.1200.gz", "testdata/synthetic/state-changes.mrt"} {
+		raw, err := decompressedFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		zw := gzip.NewWriter(&out)
+		if _, err := zw.Write(raw); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return out.Bytes()
+}
+
+// decompressedFile is the file at p read through Decompress.
+func decompressedFile(p string) ([]byte, error) {
+	in, err := os.ReadFile(p)
+	if err != nil {
+		return nil, err
+	}
+	return decompressed(bytes.NewReader(in), 0, false)
+}
+
+// TestDecompressWithGzipMatches is spec §6.4 on gzip at Workers 1 and 4:
+// every testdata/mrt/*.gz and a two-member gzip, whole, cut at 50 offsets
+// and with one byte flipped at 50 offsets; and the input readers of
+// TestDecompressWithInputReaders on gzipFixture. Whole inputs are also read
+// one byte per Read. Under -race, as in TestDecompressWithMatchesDecompress,
+// each input is cut and flipped at 10 offsets, and read only with
+// io.ReadAll.
+func TestDecompressWithGzipMatches(t *testing.T) {
+	t.Parallel()
+	full := !mrt.RaceEnabled
+	workers := []int{1, 4}
+	paths, err := filepath.Glob("testdata/mrt/*.gz")
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("no testdata/mrt/*.gz: %v", err)
+	}
+	inputs := map[string][]byte{"two-members.gz": twoMemberGzip(t)}
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inputs[filepath.Base(p)] = b
+	}
+	type input struct {
+		in      []byte
+		oneByte bool
+	}
+	cases := map[string]input{}
+	n := 50
+	if !full {
+		n = 10
+	}
+	for name, in := range inputs {
+		cases[name+"/whole"] = input{in, full}
+		for i := 0; i < n; i++ {
+			off := i * len(in) / n
+			cases[fmt.Sprintf("%s/cut-%d", name, off)] = input{in[:off], false}
+			flipped := bytes.Clone(in)
+			flipped[off] ^= 0xff
+			cases[fmt.Sprintf("%s/flip-byte-%d", name, off)] = input{flipped, false}
+		}
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			matchesDecompress(t, c.in, c.oneByte, workers)
+		})
+	}
+	t.Run("input-readers", func(t *testing.T) {
+		t.Parallel()
+		inputReadersMatch(t, inputs[filepath.Base(gzipFixture)], workers)
+	})
+}
+
+// countingReader counts the bytes read from r; the count may be read while
+// another goroutine reads.
+type countingReader struct {
+	r io.Reader
+	n atomic.Int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
+}
+
+// TestDecompressWithGzipBounded: the readahead goroutine decompresses ahead
+// of Read, and at most the 256 KiB queue plus one chunk ahead. What it has
+// decompressed is measured by what it has taken from r: Decompress of those
+// input bytes gives at least the bytes Read returned plus a full queue, and,
+// without the up to 4 KiB DecompressWith's bufio.Reader holds unread, at most
+// that plus one chunk (or flate's 32 KiB window, which it decodes ahead of
+// what it returns, where that is larger). It is checked after 200 ms with no
+// Read, and again after reading 512 KiB. With no Read, the readahead has also
+// taken at most half of the input, which TestMrtdumpWriteErrorStops needs.
+// Not parallel: it times.
+func TestDecompressWithGzipBounded(t *testing.T) {
+	const (
+		bufioSize = 4096
+		window    = 32 << 10
+	)
+	in, err := os.ReadFile(gzipFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mrt.GzipQueueBytes != 256<<10 {
+		t.Errorf("queue of %d bytes, want 256 KiB", mrt.GzipQueueBytes)
+	}
+	decodable := func(n int64) int {
+		out, _ := decompressed(bytes.NewReader(in[:max(n, 0)]), 0, false)
+		return len(out)
+	}
+	cr := &countingReader{r: bytes.NewReader(in)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r, err := mrt.DecompressWith(cr, mrt.DecompressOptions{Workers: 4, Context: ctx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(what string, returned int) {
+		t.Helper()
+		time.Sleep(200 * time.Millisecond)
+		n := cr.n.Load()
+		t.Logf("%s: %d input bytes taken, which decode to %d bytes (%d without the last %d)",
+			what, n, decodable(n), decodable(n-bufioSize), bufioSize)
+		if got, want := decodable(n), returned+mrt.GzipQueueBytes; got < want {
+			t.Errorf("%s: %d input bytes taken, which decode to %d bytes; want a full queue ahead, at least %d",
+				what, n, got, want)
+		}
+		ahead := mrt.GzipQueueBytes + max(mrt.GzipChunkBytes, window)
+		if got := decodable(n - bufioSize); got > returned+ahead {
+			t.Errorf("%s: %d input bytes taken, of which the first %d decode to %d bytes; want at most %d",
+				what, n, n-bufioSize, got, returned+ahead)
+		}
+		if returned == 0 && n > int64(len(in)/2) {
+			t.Errorf("%s: %d of %d input bytes taken", what, n, len(in))
+		}
+	}
+	check("no Read", 0)
+	if _, err := io.ReadFull(r, make([]byte, 512<<10)); err != nil {
+		t.Fatal(err)
+	}
+	check("after reading 512 KiB", 512<<10)
+}
+
+// TestDecompressWithGzipStops is stopsEarly and noGoroutineAfterEOF on
+// gzipFixture, whose output is more than the queue and a chunk, so the
+// readahead goroutine is still running after 10 records. Not parallel: it
+// counts goroutines.
+func TestDecompressWithGzipStops(t *testing.T) {
+	in, err := os.ReadFile(gzipFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("StopsEarly", func(t *testing.T) { stopsEarly(t, in) })
+	t.Run("NoGoroutineAfterEOF", func(t *testing.T) { noGoroutineAfterEOF(t, in) })
 }

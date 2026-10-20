@@ -17,3 +17,9 @@ func DecompressWithHooks(r io.Reader, opts DecompressOptions,
 // RaceEnabled reports whether the race detector is on, for tests that cut
 // their work under it.
 const RaceEnabled = raceEnabled
+
+// GzipQueueBytes and GzipChunkBytes are the gzip readahead's bounds.
+const (
+	GzipQueueBytes = gzipQueueBytes
+	GzipChunkBytes = gzipChunkBytes
+)

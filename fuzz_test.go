@@ -316,6 +316,8 @@ func FuzzDecompress(f *testing.F) {
 	zw.Write(raw)
 	zw.Close()
 	f.Add(gz.Bytes())
+	f.Add(gz.Bytes()[:gz.Len()/2])
+	f.Add(twoMemberGzip(f))
 	f.Add([]byte{})
 	const limit = 4 << 20
 	read := func(r io.Reader) ([]byte, error) { return io.ReadAll(io.LimitReader(r, limit+1)) }
