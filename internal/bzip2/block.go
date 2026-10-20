@@ -1,15 +1,14 @@
 package bzip2
 
 // This file is not from the Go source. It adds what the copy is for: decoding
-// one block from a bit offset and knowing exactly where it ended. NewReader is
-// rebuilt on it, so the copy's serial reader is the code that Decoder.Block
-// runs; the decoding itself (readBlock, readFromBlock, setup, the Huffman,
-// move-to-front and CRC code) is the standard code, unchanged.
+// one block from a bit offset and knowing exactly where it ended
+// (Decoder.Block), and the standard stream handling as entry points of their
+// own (Decoder.Header, Decoder.StreamEnd), so that a reader built on them
+// needs none of its own. NewReader is rebuilt on them, so the copy's serial
+// reader runs that code. The decoding itself (readBlock, readFromBlock, setup,
+// the Huffman, move-to-front and CRC code) is the standard code, unchanged.
 
-import (
-	"io"
-	"slices"
-)
+import "io"
 
 // BlockMagic starts every block and EndMagic ends every stream, 48 bits each.
 // Neither is byte-aligned in general.
@@ -31,10 +30,10 @@ func (br *bitReader) Offset() uint64 {
 	return 8*br.read - uint64(br.bits)
 }
 
-// peekMagic returns the next 48 bits without consuming them, or 0 with Err
+// PeekMagic returns the next 48 bits without consuming them, or 0 with Err
 // set if the input ends first. ReadBits64 leaves the bits it returns in br.n
 // (at most 55 bits are held), so giving them back is adding 48 to br.bits.
-func (br *bitReader) peekMagic() uint64 {
+func (br *bitReader) PeekMagic() uint64 {
 	v := br.ReadBits64(48)
 	if br.err == nil {
 		br.bits += 48
@@ -60,16 +59,24 @@ func FoldCRC(stream, block uint32) uint32 {
 }
 
 // A Decoder decodes blocks. Its zero value is ready to use. It keeps its
-// block buffer (up to 3.6 MB, at level 9) between calls; it is not safe for
-// concurrent use.
+// block buffer (up to 3.6 MB, at level 9) and its output chunks (2 MiB)
+// between calls; it is not safe for concurrent use.
 type Decoder struct {
-	r reader
+	r      reader
+	chunks [][]byte // a block's bytes, before they are copied out
 }
 
-// growBy is how much a block's output buffer grows at a time. The output is
-// never sized from what the input says: RLE can expand a hostile block about
-// 51-fold.
-const growBy = 64 << 10
+// A block's bytes are decoded into chunks of chunkSize, and then copied into
+// one slice of their exact length. So the output is never sized from what
+// the input says (RLE can expand a hostile block about 51-fold), and a block
+// costs at most twice its size in memory, once in chunks and once in the
+// slice returned. The Decoder keeps keepChunks chunks between calls, which
+// hold a real block (about 1 MB), so it then allocates only the returned
+// slice.
+const (
+	chunkSize  = 1 << 20
+	keepChunks = 2
+)
 
 // Block decodes the block at br, which must be at the block's magic, for a
 // stream of the given level ('1' to '9' in the stream header, here 1 to 9).
@@ -89,8 +96,7 @@ func (d *Decoder) Block(br *BitReader, level int) (data []byte, storedCRC uint32
 	if level < 1 || level > 9 {
 		return nil, 0, StructuralError("invalid compression level")
 	}
-	// The standard code reads d.r.br. br is copied in and back out; it may
-	// be d.r.br itself (NewReader's reader).
+	// The standard code reads d.r.br, so br is copied in and back out.
 	d.r.br = *br
 	data, err = d.block(level)
 	*br = d.r.br
@@ -114,16 +120,24 @@ func (d *Decoder) block(level int) ([]byte, error) {
 	if err := bz2.readBlock(); err != nil {
 		return nil, err
 	}
-	var data []byte
-	for {
-		if len(data) == cap(data) {
-			data = slices.Grow(data, growBy)
+	n := 0
+	for i := 0; ; i++ {
+		if i == len(d.chunks) {
+			d.chunks = append(d.chunks, make([]byte, chunkSize))
 		}
-		n := bz2.readFromBlock(data[len(data):cap(data)])
-		if n == 0 {
+		m := bz2.readFromBlock(d.chunks[i]) // fills the chunk unless the block ends
+		n += m
+		if m < chunkSize {
 			break
 		}
-		data = data[:len(data)+n]
+	}
+	data := make([]byte, 0, n)
+	for _, c := range d.chunks {
+		data = append(data, c[:min(len(c), n-len(data))]...)
+	}
+	if len(d.chunks) > keepChunks {
+		clear(d.chunks[keepChunks:])
+		d.chunks = d.chunks[:keepChunks]
 	}
 	if updateCRC(0, data) != bz2.wantBlockCRC {
 		return data, StructuralError("block checksum mismatch")
@@ -131,16 +145,94 @@ func (d *Decoder) block(level int) ([]byte, error) {
 	return data, nil
 }
 
-// streamReader is NewReader's reader: compress/bzip2's handling of stream
-// headers, stream ends and concatenated streams, around Decoder.Block.
+// Header reads a stream header at br: "BZh" and the level digit. It returns
+// the level, 1 to 9, and the error compress/bzip2 gives for a bad header.
+// Afterwards br is at the stream's first block magic, or at its end magic if
+// it has no block.
+func (d *Decoder) Header(br *BitReader) (level int, err error) {
+	return d.header(br, true)
+}
+
+// header runs the standard setup on br, after "BZ" if needMagic is false.
+func (d *Decoder) header(br *BitReader, needMagic bool) (int, error) {
+	d.r.br = *br
+	err := d.r.setup(needMagic)
+	*br = d.r.br
+	if br.err != nil {
+		err = br.err // as the standard reader's Read prefers it
+	}
+	if err != nil {
+		return 0, err
+	}
+	return d.r.blockSize / (100 * 1000), nil
+}
+
+// StreamEnd reads a stream's end at br, which must be at the end magic: the
+// magic, the stream CRC, which must equal streamCRC (the FoldCRC of the
+// stream's blocks' stored CRCs), and then what compress/bzip2 accepts after
+// an end of stream:
+//   - the end of the input: nextLevel 0 and io.EOF;
+//   - another stream, "BZh" and a level digit: its level, with br at its
+//     first block magic (or its end magic);
+//   - anything else, one byte then the end of the input included: 0 and the
+//     error the standard reader gives (io.ErrUnexpectedEOF for one byte).
+//
+// Telling the end magic from a block magic is the caller's: br.PeekMagic.
+func (d *Decoder) StreamEnd(br *BitReader, streamCRC uint32) (nextLevel int, err error) {
+	nextLevel, err = d.streamEnd(br, streamCRC)
+	if br.err != nil {
+		err = br.err // as the standard reader's Read prefers it
+	}
+	if err != nil {
+		nextLevel = 0
+	}
+	return nextLevel, err
+}
+
+func (d *Decoder) streamEnd(br *BitReader, streamCRC uint32) (int, error) {
+	if br.ReadBits64(48) != EndMagic {
+		return 0, StructuralError("bad magic value found")
+	}
+	wantCRC := uint32(br.ReadBits64(32))
+	if br.err != nil {
+		return 0, br.err
+	}
+	if streamCRC != wantCRC {
+		return 0, StructuralError("file checksum mismatch")
+	}
+	// Skip ahead to byte boundary. Is there a stream concatenated to this
+	// one? It would start with BZ.
+	if br.bits%8 != 0 {
+		br.ReadBits(br.bits % 8)
+	}
+	b, err := br.readByte()
+	if err != nil {
+		return 0, err // io.EOF as is: the input ends here
+	}
+	c, err := br.readByte()
+	if err != nil {
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+		return 0, err
+	}
+	if b != 'B' || c != 'Z' {
+		return 0, StructuralError("bad magic value in continuation file")
+	}
+	return d.header(br, false)
+}
+
+// streamReader is NewReader's reader: compress/bzip2's Read, made of
+// Decoder.Header, Decoder.Block and Decoder.StreamEnd.
 type streamReader struct {
-	d       Decoder // d.r.br is the stream's bit reader
-	started bool    // the first stream header is read
-	level   int     // of the current stream
-	crc     uint32  // the current stream's CRC so far
-	data    []byte  // the rest of the current block
-	err     error   // returned once data is drained, and from then on
-	errNow  bool    // err comes with the next Read's bytes, the rest dropped
+	br      BitReader
+	d       Decoder
+	started bool   // the first stream header is read
+	level   int    // of the current stream
+	crc     uint32 // the current stream's CRC so far
+	data    []byte // the rest of the current block
+	err     error  // returned once data is drained, and from then on
+	errNow  bool   // err comes with the next Read's bytes, the rest dropped
 }
 
 func (z *streamReader) Read(buf []byte) (int, error) {
@@ -170,88 +262,32 @@ func (z *streamReader) Read(buf []byte) (int, error) {
 // next reads the next block into data, or ends with err set, as
 // compress/bzip2's Read and read do.
 func (z *streamReader) next() {
-	br := &z.d.r.br
+	br := &z.br
 	if !z.started {
-		if err := z.header(true); err != nil {
-			z.fail(err)
+		if z.level, z.err = z.d.Header(br); z.err != nil {
 			return
 		}
 		z.started = true
 	}
 	for {
-		switch br.peekMagic() {
+		switch br.PeekMagic() {
 		case BlockMagic:
 			data, crc, err := z.d.Block(br, z.level)
 			z.crc = FoldCRC(z.crc, crc)
 			z.data, z.err = data, err
 			z.errNow = br.Err() != nil
 			return
-
 		case EndMagic:
-			br.ReadBits64(48)
-			wantCRC := uint32(br.ReadBits64(32))
-			if br.err != nil {
-				z.fail(br.err)
+			if z.level, z.err = z.d.StreamEnd(br, z.crc); z.err != nil {
 				return
 			}
-			if z.crc != wantCRC {
-				z.fail(StructuralError("file checksum mismatch"))
-				return
-			}
-			// Skip ahead to byte boundary. Is there a stream
-			// concatenated to this one? It would start with BZ.
-			if br.bits%8 != 0 {
-				br.ReadBits(br.bits % 8)
-			}
-			b, err := br.readByte()
-			if err == io.EOF {
-				z.err = io.EOF
-				return
-			}
-			if err != nil {
-				z.fail(err)
-				return
-			}
-			c, err := br.readByte()
-			if err != nil {
-				if err == io.EOF {
-					err = io.ErrUnexpectedEOF
-				}
-				z.fail(err)
-				return
-			}
-			if b != 'B' || c != 'Z' {
-				z.fail(StructuralError("bad magic value in continuation file"))
-				return
-			}
-			if err := z.header(false); err != nil {
-				z.fail(err)
-				return
-			}
-
+			z.crc = 0
 		default:
-			z.fail(StructuralError("bad magic value found"))
+			z.err = StructuralError("bad magic value found")
+			if br.err != nil {
+				z.err = br.err // as the standard reader's Read prefers it
+			}
 			return
 		}
 	}
-}
-
-// header reads a stream header with the standard setup, after "BZ" if
-// needMagic is false.
-func (z *streamReader) header(needMagic bool) error {
-	if err := z.d.r.setup(needMagic); err != nil {
-		return err
-	}
-	z.level = z.d.r.blockSize / (100 * 1000)
-	z.crc = 0
-	return nil
-}
-
-// fail ends the stream with err, or with the bit reader's error if it has
-// one, as compress/bzip2's Read prefers that.
-func (z *streamReader) fail(err error) {
-	if z.d.r.br.err != nil {
-		err = z.d.r.br.err
-	}
-	z.err = err
 }

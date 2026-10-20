@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -300,5 +301,86 @@ func TestBlockSpanning8MiB(t *testing.T) {
 	got, err := io.ReadAll(NewReader(bytes.NewReader(padded)))
 	if err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("NewReader on the padded stream: %d bytes, error %v; want the %d original bytes", len(got), err, len(want))
+	}
+}
+
+// TestBlockAllocs checks that Block's output buffer grows geometrically: the
+// bytes allocated for each of the bench file's blocks, with the Decoder's
+// block buffer already allocated, are less than 2.5 times its decoded size.
+// Not parallel: it reads the process-wide runtime.MemStats.TotalAlloc.
+func TestBlockAllocs(t *testing.T) {
+	in, err := os.ReadFile(benchFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	level := int(in[3] - '0')
+	var d Decoder
+	for pass := 0; pass < 2; pass++ { // the first pass allocates d's block buffer
+		br := NewBitReader(bytes.NewReader(in))
+		br.ReadBits64(32)
+		for i := 0; br.PeekMagic() == BlockMagic; i++ {
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			data, _, err := d.Block(br, level)
+			runtime.ReadMemStats(&after)
+			if err != nil {
+				t.Fatalf("block %d: %v", i, err)
+			}
+			alloc := after.TotalAlloc - before.TotalAlloc
+			ratio := float64(alloc) / float64(len(data))
+			if pass == 1 {
+				t.Logf("block %d: %d bytes decoded, %d allocated (%.2fx), cap %d", i, len(data), alloc, ratio, cap(data))
+				if ratio >= 2.5 {
+					t.Errorf("block %d: %d bytes allocated for %d decoded, %.2fx; want under 2.5x", i, alloc, len(data), ratio)
+				}
+			}
+		}
+	}
+}
+
+// TestStreamWalk walks multi-stream.bz2 with Header, PeekMagic, Block and
+// StreamEnd, as Task 2's reader does: two streams of levels 1 and 9, every
+// byte the standard reader gives, then io.EOF with the whole input consumed.
+func TestStreamWalk(t *testing.T) {
+	in := inputs(t)["multi-stream.bz2"]
+	want, err := io.ReadAll(stdbzip2.NewReader(bytes.NewReader(in)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d Decoder
+	br := NewBitReader(bytes.NewReader(in))
+	level, err := d.Header(br)
+	if err != nil || level != 1 || br.Offset() != 32 {
+		t.Fatalf("Header: level %d, error %v, at bit %d; want level 1 at bit 32", level, err, br.Offset())
+	}
+	var levels []int
+	var got []byte
+	for level != 0 {
+		levels = append(levels, level)
+		var crc uint32
+		for br.PeekMagic() == BlockMagic {
+			data, stored, err := d.Block(br, level)
+			if err != nil {
+				t.Fatalf("Block at bit %d: %v", br.Offset(), err)
+			}
+			got = append(got, data...)
+			crc = FoldCRC(crc, stored)
+		}
+		if level, err = d.StreamEnd(br, crc); err != nil && err != io.EOF {
+			t.Fatalf("StreamEnd: %v", err)
+		}
+	}
+	if err != io.EOF || fmt.Sprint(levels) != "[1 9]" || !bytes.Equal(got, want) || br.Offset() != uint64(len(in))*8 {
+		t.Errorf("walk: levels %v, %d bytes, last error %v, at bit %d; want levels [1 9], %d bytes, io.EOF at bit %d",
+			levels, len(got), err, br.Offset(), len(want), len(in)*8)
+	}
+	// A wrong stream CRC is the standard reader's error.
+	br = NewBitReader(bytes.NewReader(in))
+	d.Header(br)
+	for br.PeekMagic() == BlockMagic {
+		d.Block(br, 1)
+	}
+	if level, err := d.StreamEnd(br, 0); level != 0 || err == nil || err.Error() != "bzip2 data invalid: file checksum mismatch" {
+		t.Errorf("StreamEnd with a wrong CRC: level %d, error %v", level, err)
 	}
 }

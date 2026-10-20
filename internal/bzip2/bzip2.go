@@ -48,7 +48,7 @@ type reader struct {
 // the decompressor may read more data than necessary from r.
 func NewReader(r io.Reader) io.Reader {
 	z := new(streamReader)
-	z.d.r.br = newBitReader(r)
+	z.br = newBitReader(r)
 	return z
 }
 
