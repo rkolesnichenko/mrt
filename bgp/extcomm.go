@@ -105,7 +105,10 @@ func (c ExtCommunity) OriginValidation() (ValidationState, bool) {
 // String labels the community: rt:AS:local, ro:AS:local, rt:a.b.c.d:local,
 // ro:a.b.c.d:local, color:N, encap:N, lbw:AS:F or ov:valid|not-found|invalid;
 // anything else is 0x and the 8 bytes in hex. The transitive bit does not
-// change a label.
+// change a label. A label never hides bytes: a Color with non-zero flag bytes,
+// an Encapsulation or origin validation with non-zero reserved bytes, and a
+// link bandwidth that is NaN or infinite print as hex, so String is injective.
+// The accessors still return their values for those forms.
 func (c ExtCommunity) String() string {
 	for _, k := range [...]struct {
 		sub  uint8
@@ -119,16 +122,16 @@ func (c ExtCommunity) String() string {
 			return k.name + who + ":" + strconv.FormatUint(uint64(a.Local), 10)
 		}
 	}
-	if v, ok := c.Color(); ok {
+	if v, ok := c.Color(); ok && c[2] == 0 && c[3] == 0 {
 		return "color:" + strconv.FormatUint(uint64(v), 10)
 	}
-	if v, ok := c.Encapsulation(); ok {
+	if v, ok := c.Encapsulation(); ok && c[2]|c[3]|c[4]|c[5] == 0 {
 		return "encap:" + strconv.FormatUint(uint64(v), 10)
 	}
-	if as, f, ok := c.LinkBandwidth(); ok {
+	if as, f, ok := c.LinkBandwidth(); ok && !math.IsNaN(float64(f)) && !math.IsInf(float64(f), 0) {
 		return "lbw:" + strconv.FormatUint(uint64(as), 10) + ":" + strconv.FormatFloat(float64(f), 'g', -1, 32)
 	}
-	if v, ok := c.OriginValidation(); ok {
+	if v, ok := c.OriginValidation(); ok && c[2]|c[3]|c[4]|c[5]|c[6] == 0 {
 		return "ov:" + [...]string{"valid", "not-found", "invalid"}[v]
 	}
 	return "0x" + hex.EncodeToString(c[:])

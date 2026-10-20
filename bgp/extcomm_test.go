@@ -1,6 +1,7 @@
 package bgp
 
 import (
+	"math"
 	"net/netip"
 	"testing"
 )
@@ -38,6 +39,15 @@ func TestExtCommunity(t *testing.T) {
 		{raw: ExtCommunity{0x43, 0x00, 0, 0, 0, 0, 0, 7}, str: "0x4300000000000007", typ: 0x43, st: 0},
 		{raw: ExtCommunity{0x1A, 0x70, 0x01, 0x00, 0x00, 0x00, 0x40, 0x81}, str: "0x1a70010000004081", typ: 0x1A, st: 0x70, trans: true},
 		{raw: ExtCommunity{0x80, 0x08, 0, 0, 0xFB, 0xF4, 0, 0}, str: "0x80080000fbf40000", typ: 0x80, st: 8, trans: true},
+		{raw: ExtCommunity{0x03, 0x0B, 0, 1, 0, 0, 0, 100}, str: "0x030b000100000064", typ: 3, st: 0x0B, trans: true, color: ptr(uint32(100))},
+		{raw: ExtCommunity{0x03, 0x0C, 0, 0, 0, 1, 0, 8}, str: "0x030c000000010008", typ: 3, st: 0x0C, trans: true, encap: ptr(uint16(8))},
+		{raw: ExtCommunity{0x43, 0x00, 0, 0, 0, 0, 1, 2}, str: "0x4300000000000102", typ: 0x43, st: 0, ov: ptr(ValidationInvalid)},
+		{raw: ExtCommunity{0x00, 0x04, 0xFB, 0xF4, 0x7F, 0xC0, 0, 0}, str: "0x0004fbf47fc00000", typ: 0, st: 4, trans: true, lbwAS: 64500, lbw: ptr(float32(math.NaN()))},
+		{raw: ExtCommunity{0x40, 0x04, 0xFB, 0xF4, 0xFF, 0x80, 0, 0}, str: "0x4004fbf4ff800000", typ: 0x40, st: 4, lbwAS: 64500, lbw: ptr(float32(math.Inf(-1)))},
+		{raw: ExtCommunity{0x42, 0x02, 0xFA, 0x56, 0xEA, 0x01, 0x00, 0x0A}, str: "rt:4200000001:10", typ: 0x42, st: 2, rt: &ExtCommunityAdmin{AS: 4200000001, Local: 10}},
+		{raw: ExtCommunity{0x00, 0x04, 0xFB, 0xF4, 0x4C, 0x3E, 0xBC, 0x20}, str: "lbw:64500:5e+07", typ: 0, st: 4, trans: true, lbwAS: 64500, lbw: ptr(float32(5e7))},
+		{raw: ExtCommunity{0x43, 0x0B, 0, 0, 0, 0, 0, 1}, str: "0x430b000000000001", typ: 0x43, st: 0x0B},
+		{raw: ExtCommunity{0x03, 0x0D, 0, 0, 0, 0, 0, 1}, str: "0x030d000000000001", typ: 3, st: 0x0D, trans: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.str, func(t *testing.T) {
@@ -62,7 +72,7 @@ func TestExtCommunity(t *testing.T) {
 			if v, ok := c.Encapsulation(); ok != (tc.encap != nil) || (ok && v != *tc.encap) {
 				t.Errorf("Encapsulation = %v, %v", v, ok)
 			}
-			if as, f, ok := c.LinkBandwidth(); ok != (tc.lbw != nil) || (ok && (f != *tc.lbw || as != tc.lbwAS)) {
+			if as, f, ok := c.LinkBandwidth(); ok != (tc.lbw != nil) || (ok && ((f != *tc.lbw && !(f != f && *tc.lbw != *tc.lbw)) || as != tc.lbwAS)) {
 				t.Errorf("LinkBandwidth = %v, %v, %v", as, f, ok)
 			}
 			if v, ok := c.OriginValidation(); ok != (tc.ov != nil) || (ok && v != *tc.ov) {
