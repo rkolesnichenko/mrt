@@ -41,8 +41,9 @@ type options struct {
 // Run runs mrtdump with args (the command line without the program name)
 // and returns the exit status: 0 done, 1 some records or attributes were
 // malformed (each reported on stderr), 2 a bad command line, 3 a file could
-// not be opened or read. Files are read in order; one that fails does not
-// stop the others.
+// not be opened or read, or the output could not be written. Files are read
+// in order; one that fails to read does not stop the others, and a failed
+// write stops everything at the record it happened in.
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var o options
 	fs := flag.NewFlagSet("mrtdump", flag.ContinueOnError)
@@ -73,7 +74,11 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	status := exitOK
 	for _, name := range fs.Args() {
 		status = max(status, d.file(name, stdin))
-		if err := w.Flush(); err != nil {
+		err := d.werr
+		if err == nil {
+			err = w.Flush()
+		}
+		if err != nil {
 			fmt.Fprintf(stderr, "mrtdump: writing output: %v\n", err)
 			return exitRead
 		}
@@ -88,6 +93,7 @@ type dumper struct {
 	out  *bufio.Writer
 	errw io.Writer
 	line []byte // reused line buffer
+	werr error  // the first error writing out
 
 	name   string // file name as given
 	index  int    // record number in the file, from 1
@@ -145,6 +151,9 @@ func (d *dumper) file(name string, stdin io.Reader) int {
 			d.stateChange(r)
 		}
 		d.offset += int64(len(rec.Raw()))
+		if d.werr != nil {
+			break // Run reports it
+		}
 	}
 	return d.status
 }

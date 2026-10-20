@@ -11,7 +11,7 @@ import (
 	g "github.com/rkolesnichenko/mrt/internal/mrtgen"
 )
 
-// Inputs the eight synthetic files lack: state changes, legacy TABLE_DUMP,
+// Inputs the synthetic files lack: state changes, legacy TABLE_DUMP,
 // empty and confederation paths, LOCAL messages, withdrawals over
 // MP_UNREACH_NLRI, a RIB entry without NEXT_HOP. Every expected line in the
 // tests that read them was printed by bgpdump (caf2cb07, TZ=UTC) from exactly
