@@ -4,11 +4,12 @@
 //
 //	go run ./internal/heldsize FILE...
 //
-// Every route of every file is held in a 16-byte stand-in for the table keeper
-// (path pointer, peer index, prefix id). After the load it prints the routes,
-// the interner's whole-path count (Len), and five heap readings, each after two
-// collections, HeapAlloc (live bytes, the gate metric) first and HeapInuse
-// (spans in use) beside it:
+// It first prints its environment (Go version, GOOS/GOARCH, GOMAXPROCS, memory
+// limit). Every route of every file is held in a 16-byte stand-in for the
+// table keeper (path pointer, peer index, prefix id). After the load it prints
+// the routes, the interner's whole-path count (Len), and five heap readings,
+// each after two collections, HeapAlloc (live bytes, the gate metric) first
+// and HeapInuse (bytes in heap spans holding any object; not RSS) beside it:
 //
 //  0. everything live: stand-in table, paths, whole-path index, components;
 //  1. stand-in table dropped (paths, whole-path index, component maps);
@@ -26,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"time"
 	"unsafe"
 
@@ -59,6 +61,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: heldsize FILE...")
 		os.Exit(2)
 	}
+	fmt.Printf("env: %s %s/%s GOMAXPROCS=%d memory limit=%d bytes (GOMEMLIMIT=%q)\n",
+		runtime.Version(), runtime.GOOS, runtime.GOARCH, runtime.GOMAXPROCS(0),
+		debug.SetMemoryLimit(-1), os.Getenv("GOMEMLIMIT"))
 	s := &state{in: bgp.NewInterner()}
 	start := time.Now()
 	for _, name := range os.Args[1:] {

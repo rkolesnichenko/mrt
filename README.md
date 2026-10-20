@@ -129,15 +129,18 @@ grows until it is dropped.
 On the 2026-10-20 RIBs of RIS rrc00 (08:00), route-views2 and route-views6
 (14:00), loaded into one interner (`internal/heldsize`, log
 `.data/heldsize-v0.2.log`): 77,853,052 routes, 12,809,618 distinct paths, and
-after `DropPathIndex` 3,886,148,000 live bytes (`HeapAlloc`) retained by `mrt`
-(5,266,546,688 bytes of heap spans in use, `HeapInuse`, the resident cost).
+after `DropPathIndex` 3,886,148,000 live bytes (`HeapAlloc`) retained by `mrt`.
+`HeapInuse`, the bytes in the Go heap's spans that hold any object, was
+5,266,546,688 at that point; resident memory (RSS) was not measured.
 The whole-path index cost 1,510,980,216 live bytes before it was dropped, and
 the interner's maps of shared parts (their keys and tables, not the shared
 arrays) 1,194,734,912 of the 3,886,148,000. The caller's own table is not
 counted: the tool's 16-byte stand-in per route is 1,245,648,832 bytes more.
-The load took 55.9 s (Go 1.27.2, Apple M3 Max, `GOMAXPROCS=4`,
-`GOMEMLIMIT=16GiB`). A `bgp.Path` is 112 bytes (328 in v0.1; log
-`.data/pathsize-main.log`).
+The load took 55.9 s, run with `GOMAXPROCS=4 GOMEMLIMIT=16GiB` on the
+command line (the log does not record them; `heldsize` prints its
+environment from now on) with Go 1.27.2 on an Apple M3 Max
+(`.data/machine-v0.2.log`, recorded the same day). A `bgp.Path` is 112 bytes
+(328 in v0.1; log `.data/pathsize-main.log`).
 
 `mrt.Records` is the layer below: every record, typed (`PeerIndexTable`, `RIB`,
 `TableDump`, `BGP4MPMessage`, `BGP4MPStateChange`, or `Other`), each with its
@@ -201,7 +204,8 @@ benchmarks over the committed fixtures gave, at normal priority and then under
 `Records` over route-views2's 6,969.71 and 1,374.06 MB/s, bzip2 decompression
 52.63 and 13.70 MB/s (logs `.data/bench-v011-normal.log` and
 `.data/bench-v011-background.log`). `Routes` decodes about eight times faster
-than bzip2 decompresses, at either priority. (The v0.2 full pass above was timed at normal priority.)
+than bzip2 decompresses, at either priority. The v0.2 full pass above ran at
+normal priority.
 
 ## Data and licence
 

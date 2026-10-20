@@ -84,13 +84,19 @@ is named.
   2026-10-20 RIBs of RIS rrc00 (bview 08:00), route-views2 and route-views6
   (14:00), loaded through `RoutesWith` into one `Interner`: 77,853,052
   routes, 0 record errors, 12,809,618 distinct paths (`Len`). After
-  `DropPathIndex`, `mrt` retains 3,886,148,000 live bytes (`HeapAlloc`;
-  `HeapInuse`, the heap spans in use, is 5,266,546,688). Of that, the
+  `DropPathIndex`, `mrt` retains 3,886,148,000 live bytes (`HeapAlloc`).
+  `HeapInuse`, the bytes in the Go heap's spans that hold any object, is
+  5,266,546,688; resident memory (RSS) was not measured. Of the live bytes, the
   interner's maps of shared parts are 1,194,734,912 (`HeapAlloc`); the paths
   with the arrays they share are 2,691,413,088. The whole-path index cost
   1,510,980,216 more before it was dropped. The caller's table is not
   counted (the tool's 16-byte stand-in per route: 1,245,648,832 bytes). The
-  load took 55.9 s, with `GOMEMLIMIT=16GiB`.
+  load took 55.9 s. The log does not record the environment: the run's
+  command line set `GOMAXPROCS=4 GOMEMLIMIT=16GiB` (the maintainer's notes
+  of the run, kept beside `.data/`), and Go
+  1.27.2 on an Apple M3 Max is from `.data/machine-v0.2.log`, recorded the
+  same day. `heldsize` now prints its Go version, GOOS/GOARCH, GOMAXPROCS and
+  memory limit first.
 - Against gobgp v4.10.0 on the route-views6 RIB (25,709,978 bytes
   compressed, 471,448,090 decompressed; `.data/compare-v0.2.log`):
   `mrt.Routes` with every path decoded allocates 2,055,757,256 bytes in
