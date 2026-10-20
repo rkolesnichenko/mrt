@@ -8,6 +8,40 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+### Fixed
+
+- `Records` and `RecordsWith`: ranging over the sequence again after a
+  `break` goes on with the next record. It used to start a new read buffer,
+  drop the bytes the first one had read ahead and count offsets from 0 again;
+  the rest of the stream was then skipped without an error, or read from
+  mid-record and reported as one `ErrTruncated`. Once the stream has ended, ranging
+  again yields nothing. `Routes` likewise keeps its peer index table across
+  ranges; the routes left in the record it broke in are not yielded.
+- `mrtdump` stops at the first failed write to standard output (exit status
+  3), instead of decoding the rest of the input first.
+
+### Changed
+
+- Documentation: `docs/mrtdump.md` said `*_LOCAL` messages print no line;
+  mrtdump prints them as `BGP4MP_LOCAL` (only `Routes` skips them). Exit
+  status 3 also covers a failed write. A header that lies about its length
+  allocates, in total, about four times the bytes present and under five, not
+  about twice (`TestRecordsLyingLengthAllocation`). README no longer says nothing is
+  released.
+- The 0.1.0 throughput figures (`Records` 1,333.56 MB/s, `Routes` 95.83 MB/s,
+  bzip2 13.72 MB/s, and the 30.748 s full pass) were measured at macOS
+  background priority. On 2026-10-20, at normal priority, the same benchmarks
+  gave 6,969.71, 441.55 and 52.63 MB/s, and under `taskpolicy -b` 1,374.06,
+  101.91 and 13.70 MB/s (logs `.data/bench-v011-normal.log`,
+  `.data/bench-v011-background.log`). Allocation figures are unaffected.
+- Tests: `TestMatchesBgpdump` fails when bgpdump is killed by a signal on a
+  fixture other than the one it is known to abort on (B2), so an oracle that
+  dies at once no longer passes. `TestRealData` checks each file's size and
+  sha256 against MANIFEST.
+- CI: tests also run on macOS, Windows and linux/386; `internal/compare` is
+  vetted and tested; a failing fuzz job uploads its inputs.
+  `.gitattributes` turns off end-of-line conversion.
+
 ## [0.1.0] - 2026-10-16
 
 First release. Every figure below comes from a command run on
