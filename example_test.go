@@ -58,6 +58,7 @@ func ExampleRoutes() {
 func ExampleRoutesWith() {
 	type key struct {
 		peer   netip.Addr
+		as     bgp.ASN // a peer is its address and AS
 		prefix netip.Prefix
 		pathID uint32
 	}
@@ -81,7 +82,7 @@ func ExampleRoutesWith() {
 				bad++
 				continue
 			}
-			k := key{route.Peer.Addr, route.Prefix, route.PathID}
+			k := key{route.Peer.Addr, route.Peer.AS, route.Prefix, route.PathID}
 			switch route.Kind {
 			case mrt.KindRIB, mrt.KindAnnounce:
 				table[k] = route.Path // shared and read-only
@@ -90,7 +91,7 @@ func ExampleRoutesWith() {
 			case mrt.KindPeerState:
 				if route.OldState == mrt.StateEstablished && route.NewState != mrt.StateEstablished {
 					for k := range table {
-						if k.peer == route.Peer.Addr {
+						if k.peer == route.Peer.Addr && k.as == route.Peer.AS {
 							delete(table, k)
 							dropped++
 						}

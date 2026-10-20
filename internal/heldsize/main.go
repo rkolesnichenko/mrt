@@ -188,7 +188,8 @@ func (s *state) report() {
 	fmt.Printf("routes held: %d (other kinds skipped: %d)\n", s.routes, s.other)
 	fmt.Printf("routes with a Warning/Error diagnostic (fresh path each): %d; with Info only: %d\n", s.fresh, s.infoOnly)
 	fmt.Printf("interner Len before DropPathIndex (distinct whole paths): %d\n", s.in.Len())
-	fmt.Printf("sizeof bgp.Path: %d, MPReach: %d, stand-in: %d\n", unsafe.Sizeof(bgp.Path{}), unsafe.Sizeof(bgp.MPReach{}), unsafe.Sizeof(standIn{}))
+	fmt.Printf("sizeof bgp.Path: %d, MPReach: %d, stand-in: %d\n",
+		unsafe.Sizeof(bgp.Path{}), unsafe.Sizeof(bgp.MPReach{}), unsafe.Sizeof(standIn{}))
 	fmt.Printf("stand-in table bytes (routes*16): %d\n", s.routes*16)
 
 	a0, i0 := readMem()

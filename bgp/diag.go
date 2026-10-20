@@ -21,15 +21,19 @@ type Diagnostic struct {
 
 // Diagnostic codes. The values are stable; Diagnostic.Code holds one of them.
 const (
-	// DiagMessageHeader reports a BGP message header that is too short, has a bad marker or a bad length.
+	// DiagMessageHeader reports a BGP message header that is too short, has a bad marker or a bad length
+	// (an Error), and bytes after the message's own length (a Warning; they are not read).
 	DiagMessageHeader = "bgp/message-header"
 	// DiagNotUpdate reports a BGP message whose type is not UPDATE.
 	DiagNotUpdate = "bgp/not-update"
-	// DiagUpdateLength reports UPDATE length fields (withdrawn routes, attributes) that run past the message.
+	// DiagUpdateLength reports UPDATE length fields (withdrawn routes, attributes) that are missing or
+	// run past the message.
 	DiagUpdateLength = "bgp/update-length"
 	// DiagMessageTruncated reports a message cut short: its header length exceeds the bytes present.
 	DiagMessageTruncated = "bgp/message-truncated"
-	// DiagNLRILength reports an NLRI prefix that runs past its bytes; the parse stops there.
+	// DiagNLRILength reports NLRI that cannot be read: a prefix (or its path identifier) that runs past
+	// its bytes, a prefix length above the family's width, or NLRI of an AFI that cannot be parsed. The
+	// parse stops there.
 	DiagNLRILength = "bgp/nlri-length"
 	// DiagNLRIFamily reports an address family whose NLRI is not a list of prefixes.
 	DiagNLRIFamily = "bgp/nlri-family"
@@ -39,11 +43,13 @@ const (
 	DiagAttrTruncated = "bgp/attr-truncated"
 	// DiagAttrDuplicate reports an attribute that appears more than once; the first wins.
 	DiagAttrDuplicate = "bgp/attr-duplicate"
-	// DiagAttrLength reports an attribute whose length is wrong for its type.
+	// DiagAttrLength reports an attribute whose length, or a length inside it (MP_REACH_NLRI's next hop
+	// length), is wrong for its type.
 	DiagAttrLength = "bgp/attr-length"
-	// DiagAttrValue reports an attribute whose value is invalid or unusable.
+	// DiagAttrValue reports an attribute whose value is invalid or unusable, or of which a part was
+	// discarded (AS4_PATH confederation segments).
 	DiagAttrValue = "bgp/attr-value"
-	// DiagASPathWidth reports a 2-byte AS_PATH that does not parse at the record's AS width.
+	// DiagASPathWidth reports an AS_PATH that does not parse at the record's AS width (2 or 4 bytes).
 	DiagASPathWidth = "bgp/aspath-width"
 	// DiagAS4PathIgnored reports an AS4_PATH (or AS4_AGGREGATOR) that was not applied.
 	DiagAS4PathIgnored = "bgp/as4path-ignored"

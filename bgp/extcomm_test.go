@@ -83,3 +83,21 @@ func TestExtCommunity(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestValidationStateString(t *testing.T) {
+	for v, want := range map[ValidationState]string{
+		ValidationValid:    "valid",
+		ValidationNotFound: "not-found",
+		ValidationInvalid:  "invalid",
+		3:                  "ValidationState(3)",
+		255:                "ValidationState(255)",
+	} {
+		if got := v.String(); got != want {
+			t.Errorf("ValidationState(%d).String() = %q, want %q", uint8(v), got, want)
+		}
+	}
+	var zero ValidationState
+	if zero != ValidationValid {
+		t.Errorf("zero ValidationState = %v, want ValidationValid (the wire encoding)", zero)
+	}
+}

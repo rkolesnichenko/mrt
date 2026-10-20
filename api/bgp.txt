@@ -173,3 +173,4 @@ type Update struct
 	Attrs Attrs
 	Announced []NLRI
 type ValidationState uint8
+func (ValidationState) String() string

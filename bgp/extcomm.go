@@ -23,7 +23,8 @@ type ExtCommunityAdmin struct {
 	Local uint32
 }
 
-// ValidationState is the BGP origin validation state of RFC 8097.
+// ValidationState is the BGP origin validation state of RFC 8097. Its values
+// are the wire encoding, so the zero value is ValidationValid.
 type ValidationState uint8
 
 // Origin validation states.
@@ -32,6 +33,20 @@ const (
 	ValidationNotFound ValidationState = 1
 	ValidationInvalid  ValidationState = 2
 )
+
+// String returns "valid", "not-found" or "invalid", and "ValidationState(N)"
+// for any other value.
+func (v ValidationState) String() string {
+	switch v {
+	case ValidationValid:
+		return "valid"
+	case ValidationNotFound:
+		return "not-found"
+	case ValidationInvalid:
+		return "invalid"
+	}
+	return "ValidationState(" + strconv.FormatUint(uint64(v), 10) + ")"
+}
 
 // Type returns the high-order type octet, transitive bit included.
 func (c ExtCommunity) Type() uint8 { return c[0] }
@@ -136,7 +151,7 @@ func (c ExtCommunity) String() string {
 		return "lbw:" + strconv.FormatUint(uint64(as), 10) + ":" + strconv.FormatFloat(float64(f), 'g', -1, 32)
 	}
 	if v, ok := c.OriginValidation(); ok && c[2]|c[3]|c[4]|c[5]|c[6] == 0 {
-		return "ov:" + [...]string{"valid", "not-found", "invalid"}[v]
+		return "ov:" + v.String()
 	}
 	return "0x" + hex.EncodeToString(c[:])
 }

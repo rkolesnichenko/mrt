@@ -42,10 +42,10 @@ func NewInterner() *Interner { return new(Interner) }
 // Decode decodes a like a.Decode, through in. For a RIB-entry block (Context
 // RIB) with no Warning or Error diagnostic it returns the path and diagnostics
 // already held for an equal block in the same Context, or holds this one's:
-// blocks without diagnostics are equal when they differ only in the NLRI of a
-// full-form MP_REACH_NLRI (and in that attribute's length field), which a RIB
-// entry does not read; blocks with Info diagnostics only when their bytes are
-// equal. Any other block (an UPDATE's, or one with a Warning or Error) is
+// blocks without diagnostics are equal when they differ only in a full-form
+// MP_REACH_NLRI's NLRI, its length field and its flags byte, which decoding a
+// RIB entry does not read; blocks with Info diagnostics only when their bytes
+// are equal. Any other block (an UPDATE's, or one with a Warning or Error) is
 // decoded afresh on every call. Either way the path's AS paths (merged,
 // received and AS4) and community, extended community and large community
 // lists share their arrays with equal ones decoded before.

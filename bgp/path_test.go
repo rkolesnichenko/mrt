@@ -1,6 +1,7 @@
 package bgp_test
 
 import (
+	"math/bits"
 	"slices"
 	"testing"
 	"unsafe"
@@ -8,11 +9,17 @@ import (
 	"github.com/rkolesnichenko/mrt/bgp"
 )
 
-// TestPathSize pins the compact layout (spec §6.4a): 112 bytes is a size class
-// of its own, so a held Path costs 112 bytes, not the 352 of v0.1.
+// TestPathSize pins the compact layout (spec §6.4a): 112 bytes on 64-bit
+// platforms, a size class of its own, so a held Path costs 112 bytes, not the
+// 352-byte object of v0.1's 328-byte Path. On 32-bit platforms (CI runs
+// GOARCH=386) the same fields take 68 bytes.
 func TestPathSize(t *testing.T) {
-	if n := unsafe.Sizeof(bgp.Path{}); n != 112 {
-		t.Errorf("unsafe.Sizeof(bgp.Path{}) = %d, want 112", n)
+	want := uintptr(112)
+	if bits.UintSize == 32 {
+		want = 68
+	}
+	if n := unsafe.Sizeof(bgp.Path{}); n != want {
+		t.Errorf("unsafe.Sizeof(bgp.Path{}) = %d, want %d (%d-bit)", n, want, bits.UintSize)
 	}
 }
 

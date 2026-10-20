@@ -106,6 +106,11 @@ func (o RoutesOptions) decode(a bgp.Attrs) (*bgp.Path, []bgp.Diagnostic) {
 // beginning; the routes left in the record it broke in are not yielded. It
 // must not be ranged over by two goroutines at once. Routes is
 // RoutesWith(records, RoutesOptions{}).
+//
+// Without an Interner a path is decoded in place, so the values of its
+// Unknown() attributes, an UPDATE's MPReach.RawNLRI and MPUnreach().RawNLRI
+// alias the record's bytes: holding the path holds the record. To hold paths,
+// decode through RoutesOptions.Interner, or keep a Path.Clone.
 func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error] {
 	return RoutesWith(records, RoutesOptions{})
 }
