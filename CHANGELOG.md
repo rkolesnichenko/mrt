@@ -8,6 +8,34 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+Tests only: no change to the API (`api/` is unchanged) or to what the library
+decodes.
+
+### Fixed
+
+- `FuzzRecords` and `FuzzRoutes` barely fuzzed. Every new input was minimized
+  for up to Go's default 60 s, during which nothing else ran, and 64 KiB seeds
+  made that slow: in the v0.2.0 check they ran 77 and 71 executions in 15 s
+  (`.data/check-v0.2-final.log`). Seeds are now cut at 4 KiB (still whole
+  records of every kind) and `scripts/fuzz.sh` bounds minimization to 2 s
+  (`FUZZMINIMIZETIME`); the same run gave 1,369,559 and 855,449
+  (`.data/fuzz-v021.log`).
+- mrtdump's hand-built test inputs are now synthetic fixtures
+  (`testdata/synthetic/mrtdump-*.mrt`) with goldens from both oracles, so the
+  expected lines are checked against bgpdump and bgpkit-parser. The new
+  differences are documented: examples under B4 and B5, and K8 (a non-empty
+  ATOMIC_AGGREGATE), K9 (`*_LOCAL` messages, which `Routes` skips) and K10
+  (abbreviated MP_REACH_NLRI in a legacy TABLE_DUMP record).
+
+### Changed
+
+- Tests from the v0.2 reviews: `Path.Clone` is checked by reflection for every
+  reference field; the rare part's size is pinned; the interner keeps contexts
+  apart by `AddPath` too and shares paths across RIB blocks on real data;
+  peer-state events are checked field by field, also with an interner in
+  `FuzzRoutes`; `Route.Originated` is tested on RIB_GENERIC; the diagnostic-code
+  test also rejects any `Diagnostic` whose code is not a `Diag*` constant.
+
 ## [0.2.0] - 2026-10-20
 
 Routes a reconciliation library can hold. Every figure below comes from a
