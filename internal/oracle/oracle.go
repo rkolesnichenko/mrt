@@ -25,24 +25,32 @@
 //	                   MED or LOCAL_PREF, so absent and 0 are the same here)
 //	communities        COMMUNITIES as "asn:value", in wire order (well-known
 //	                   ones numerically too)
+//	ext_communities    EXTENDED COMMUNITIES in wire order, as
+//	                   bgp.ExtCommunity.String labels them: rt:, ro:,
+//	                   color:, encap:, lbw:, ov:, else 0x and the 8 bytes in
+//	                   hex. bgpkit-parser's side is rebuilt from its own
+//	                   fields (bgpkitExt), not through mrt's decoder
 //	large_communities  LARGE_COMMUNITY as "global:local1:local2"
 //	otc                ONLY_TO_CUSTOMER's AS
 //	aggregator         "AS address" of the effective aggregator
 //	atomic             ATOMIC_AGGREGATE present
 //
 // A withdrawal carries only kind, peer, peer_as, prefix and path_id.
-// Extended communities, timestamps, ORIGINATOR_ID, CLUSTER_LIST and unknown
-// attributes are not compared.
+// IPv6 address specific extended communities (attribute 25), timestamps,
+// ORIGINATOR_ID, CLUSTER_LIST and unknown attributes are not compared.
 package oracle
 
 import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -100,6 +108,7 @@ type line struct {
 	MED         uint32   `json:"med,omitempty"`
 	LocalPref   uint32   `json:"local_pref,omitempty"`
 	Communities []string `json:"communities,omitempty"`
+	Ext         []string `json:"ext_communities,omitempty"`
 	Large       []string `json:"large_communities,omitempty"`
 	OTC         *uint32  `json:"otc,omitempty"`
 	Aggregator  string   `json:"aggregator,omitempty"`
@@ -194,6 +203,9 @@ func FromRoute(r mrt.Route) string {
 	}
 	for _, c := range p.Communities {
 		l.Communities = append(l.Communities, fmt.Sprintf("%d:%d", uint32(c)>>16, uint32(c)&0xffff))
+	}
+	for _, c := range p.ExtCommunities() {
+		l.Ext = append(l.Ext, c.String())
 	}
 	for _, c := range p.LargeCommunities {
 		l.Large = append(l.Large, fmt.Sprintf("%d:%d:%d", c.Global, c.Local1, c.Local2))
@@ -377,8 +389,8 @@ var wellKnown = map[string]string{
 	"NoExport": "65535:65281", "NoAdvertise": "65535:65282", "NoExportSubConfed": "65535:65283",
 }
 
-// elemCommunity sorts one entry of "communities" (standard, extended and
-// large communities in one list) into l.
+// elemCommunity sorts one entry of "communities" (standard, extended, IPv6
+// address specific extended and large communities in one list) into l.
 func elemCommunity(raw json.RawMessage, l *line) error {
 	var name string
 	if err := json.Unmarshal(raw, &name); err == nil {
@@ -411,7 +423,185 @@ func elemCommunity(raw json.RawMessage, l *line) error {
 			}
 		}
 	}
-	return nil // an extended community: not compared
+	if _, ok := obj["community_type"]; ok {
+		return nil // IPv6 address specific (attribute 25): not compared
+	}
+	if len(obj) != 1 {
+		return fmt.Errorf("community %s", raw)
+	}
+	for variant, v := range obj {
+		s, err := bgpkitExt(variant, v)
+		if err != nil {
+			return fmt.Errorf("extended community %s: %w", raw, err)
+		}
+		l.Ext = append(l.Ext, s)
+	}
+	return nil
+}
+
+// extFields are the fields of bgpkit-parser's extended community variants.
+// Byte arrays are read as numbers and checked, so that a wrong length or an
+// out-of-range value fails instead of being cut or padded.
+type extFields struct {
+	Subtype     *uint32         `json:"subtype"`
+	GlobalAdmin json.RawMessage `json:"global_admin"`
+	LocalAdmin  []uint32        `json:"local_admin"`
+	Value       []uint32        `json:"value"`
+	Bandwidth   json.RawMessage `json:"bandwidth"`
+	Transitive  *bool           `json:"transitive"`
+}
+
+// extBytes checks that v holds n byte values and returns them.
+func extBytes(what string, v []uint32, n int) ([]byte, error) {
+	if len(v) != n {
+		return nil, fmt.Errorf("%s has %d bytes, want %d", what, len(v), n)
+	}
+	b := make([]byte, n)
+	for i, x := range v {
+		if x > 0xff {
+			return nil, fmt.Errorf("%s byte %d is %d", what, i, x)
+		}
+		b[i] = byte(x)
+	}
+	return b, nil
+}
+
+// bgpkitExt labels one of bgpkit-parser 0.22.0's extended community variants
+// the way bgp.ExtCommunity.String labels the same 8 bytes, working from
+// bgpkit's fields only: route target and route origin (subtypes 2 and 3) of
+// the two-octet AS, IPv4 and four-octet AS forms of either transitivity;
+// Color (transitive opaque 11) with zero flags; Encapsulation (transitive
+// opaque 12) with zero reserved bytes; link bandwidth with a finite
+// bandwidth; origin validation (non-transitive opaque 0) with zero reserved
+// bytes and a state up to 2. Anything else of those shapes, Raw and
+// FlowSpecRedirect are 0x and the 8 bytes rebuilt from the fields, in hex.
+// A variant that cannot be rebuilt exactly (a link bandwidth whose NaN or
+// infinite bandwidth bgpkit-parser writes as null, the other flowspec
+// variants, which drop bits) or that is not known is an error.
+func bgpkitExt(variant string, raw json.RawMessage) (string, error) {
+	if variant == "Raw" {
+		var v []uint32
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return "", err
+		}
+		b, err := extBytes("Raw", v, 8)
+		if err != nil {
+			return "", err
+		}
+		return "0x" + hex.EncodeToString(b), nil
+	}
+	var f extFields
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return "", err
+	}
+	if variant == "LinkBandwidth" {
+		return bgpkitLinkBandwidth(f)
+	}
+	types := map[string]byte{
+		"TransitiveTwoOctetAs": 0x00, "TransitiveIpv4Addr": 0x01, "TransitiveFourOctetAs": 0x02, "TransitiveOpaque": 0x03,
+		"NonTransitiveTwoOctetAs": 0x40, "NonTransitiveIpv4Addr": 0x41, "NonTransitiveFourOctetAs": 0x42, "NonTransitiveOpaque": 0x43,
+		"FlowSpecRedirect": 0x40,
+	}
+	typ, ok := types[variant]
+	if !ok {
+		return "", fmt.Errorf("variant %q is not known", variant)
+	}
+	if f.Subtype == nil || *f.Subtype > 0xff {
+		return "", fmt.Errorf("%s: subtype missing or out of range", variant)
+	}
+	sub := byte(*f.Subtype)
+	b := []byte{typ, sub}
+	label := ""
+	switch typ &^ 0x40 {
+	case 0x00, 0x02: // two-octet and four-octet AS
+		global, n, width := uint64(0), 4, uint64(0xffff)
+		if typ&^0x40 == 0x02 {
+			n, width = 2, 0xffffffff
+		}
+		if err := json.Unmarshal(f.GlobalAdmin, &global); err != nil || global > width {
+			return "", fmt.Errorf("%s: global_admin %s", variant, f.GlobalAdmin)
+		}
+		local, err := extBytes(variant+" local_admin", f.LocalAdmin, n)
+		if err != nil {
+			return "", err
+		}
+		if n == 4 {
+			b = binary.BigEndian.AppendUint16(b, uint16(global))
+		} else {
+			b = binary.BigEndian.AppendUint32(b, uint32(global))
+		}
+		b = append(b, local...)
+		label = strconv.FormatUint(global, 10) + ":" + strconv.FormatUint(beUint(local), 10)
+	case 0x01: // IPv4 address
+		var s string
+		if err := json.Unmarshal(f.GlobalAdmin, &s); err != nil {
+			return "", fmt.Errorf("%s: global_admin %s", variant, f.GlobalAdmin)
+		}
+		a, err := netip.ParseAddr(s)
+		if err != nil || !a.Is4() {
+			return "", fmt.Errorf("%s: global_admin %q is not an IPv4 address", variant, s)
+		}
+		local, err := extBytes(variant+" local_admin", f.LocalAdmin, 2)
+		if err != nil {
+			return "", err
+		}
+		a4 := a.As4()
+		b = append(append(b, a4[:]...), local...)
+		label = a.String() + ":" + strconv.FormatUint(beUint(local), 10)
+	case 0x03: // opaque
+		v, err := extBytes(variant+" value", f.Value, 6)
+		if err != nil {
+			return "", err
+		}
+		b = append(b, v...)
+		switch {
+		case typ == 0x03 && sub == 0x0b && v[0]|v[1] == 0:
+			return "color:" + strconv.FormatUint(beUint(v[2:]), 10), nil
+		case typ == 0x03 && sub == 0x0c && v[0]|v[1]|v[2]|v[3] == 0:
+			return "encap:" + strconv.FormatUint(beUint(v[4:]), 10), nil
+		case typ == 0x43 && sub == 0x00 && v[0]|v[1]|v[2]|v[3]|v[4] == 0 && v[5] <= 2:
+			return "ov:" + [...]string{"valid", "not-found", "invalid"}[v[5]], nil
+		}
+	}
+	if variant != "FlowSpecRedirect" && typ&^0x40 != 0x03 {
+		switch sub {
+		case 0x02:
+			return "rt:" + label, nil
+		case 0x03:
+			return "ro:" + label, nil
+		}
+	}
+	return "0x" + hex.EncodeToString(b), nil
+}
+
+// bgpkitLinkBandwidth labels bgpkit-parser's LinkBandwidth variant (type 0x00
+// or 0x40, subtype 4).
+func bgpkitLinkBandwidth(f extFields) (string, error) {
+	var global uint64
+	if err := json.Unmarshal(f.GlobalAdmin, &global); err != nil || global > 0xffff || f.Transitive == nil {
+		return "", fmt.Errorf("LinkBandwidth: global_admin %s, transitive %v", f.GlobalAdmin, f.Transitive)
+	}
+	if bytes.Equal(bytes.TrimSpace(f.Bandwidth), []byte("null")) {
+		return "", errors.New("LinkBandwidth: bandwidth is null (a NaN or an infinity, whose bits bgpkit-parser does not keep)")
+	}
+	var num json.Number
+	if err := json.Unmarshal(f.Bandwidth, &num); err != nil {
+		return "", fmt.Errorf("LinkBandwidth: bandwidth %s: %w", f.Bandwidth, err)
+	}
+	bw, err := strconv.ParseFloat(num.String(), 32)
+	if err != nil || math.IsInf(bw, 0) {
+		return "", fmt.Errorf("LinkBandwidth: bandwidth %s is not a float32", num)
+	}
+	return "lbw:" + strconv.FormatUint(global, 10) + ":" + strconv.FormatFloat(bw, 'g', -1, 32), nil
+}
+
+// beUint reads b (at most 8 bytes) as a big-endian unsigned number.
+func beUint(b []byte) uint64 {
+	var v uint64
+	for _, x := range b {
+		v = v<<8 | uint64(x)
+	}
+	return v
 }
 
 // Sorted returns a sorted copy of lines, duplicates kept.

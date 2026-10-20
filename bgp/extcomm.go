@@ -104,11 +104,15 @@ func (c ExtCommunity) OriginValidation() (ValidationState, bool) {
 
 // String labels the community: rt:AS:local, ro:AS:local, rt:a.b.c.d:local,
 // ro:a.b.c.d:local, color:N, encap:N, lbw:AS:F or ov:valid|not-found|invalid;
-// anything else is 0x and the 8 bytes in hex. The transitive bit does not
-// change a label. A label never hides bytes: a Color with non-zero flag bytes,
-// an Encapsulation or origin validation with non-zero reserved bytes, and a
-// link bandwidth that is NaN or infinite print as hex, so String is injective.
-// The accessors still return their values for those forms.
+// anything else is 0x and the 8 bytes in hex. The label kinds never collide
+// with each other or with hex, and within one form a label never hides
+// bytes: a Color with non-zero flag bytes, an Encapsulation or origin
+// validation with non-zero reserved bytes, and a link bandwidth that is NaN
+// or infinite print as hex (the accessors still return their values for
+// those). String is not injective, though: the transitive bit does not change
+// a label, and a route target or route origin whose AS fits two bytes reads
+// the same in the two- and four-octet AS forms when the local administrator
+// fits two bytes too; Type and Transitive tell them apart.
 func (c ExtCommunity) String() string {
 	for _, k := range [...]struct {
 		sub  uint8

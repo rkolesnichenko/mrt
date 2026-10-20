@@ -1,4 +1,4 @@
 {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"203.0.113.0/32","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10","otc":64500}
 {"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"203.0.113.1/32","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10","communities":["65535:1","64500:100","65535:65281"],"large_communities":["64500:1:2","4200000001:0:4294967295"]}
-{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"203.0.113.2/32","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10","otc":4200000001}
-{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"203.0.113.3/32","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10","communities":["65000:1"],"large_communities":["64500:10:20"],"otc":64501}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"203.0.113.2/32","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10","ext_communities":["rt:64500:100","ro:192.0.2.1:7"],"otc":4200000001}
+{"kind":"A","peer":"192.0.2.10","peer_as":64500,"prefix":"203.0.113.3/32","as_path":"64500 64501","origin":"IGP","next_hop":"192.0.2.10","communities":["65000:1"],"ext_communities":["rt:64500:100"],"large_communities":["64500:10:20"],"otc":64501}
