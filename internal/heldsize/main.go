@@ -24,6 +24,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"reflect"
@@ -85,7 +86,9 @@ func (s *state) file(name string) error {
 		return err
 	}
 	defer f.Close()
-	r, err := mrt.Decompress(f)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r, err := mrt.DecompressWith(f, mrt.DecompressOptions{Workers: runtime.GOMAXPROCS(0), Context: ctx})
 	if err != nil {
 		return err
 	}

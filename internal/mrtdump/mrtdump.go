@@ -5,11 +5,13 @@ package mrtdump
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 
 	"github.com/rkolesnichenko/mrt"
@@ -115,7 +117,9 @@ func (d *dumper) file(name string, stdin io.Reader) int {
 		defer f.Close()
 		in = f
 	}
-	r, err := mrt.Decompress(in)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r, err := mrt.DecompressWith(in, mrt.DecompressOptions{Workers: runtime.GOMAXPROCS(0), Context: ctx})
 	if err != nil {
 		fmt.Fprintf(d.errw, "mrtdump: %s: %v\n", name, err)
 		return exitRead

@@ -23,11 +23,13 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,12 +113,14 @@ func open(name string, stdin io.Reader) (io.Reader, func(), error) {
 		}
 		in, closer = f, func() { f.Close() }
 	}
-	r, err := mrt.Decompress(in)
+	ctx, cancel := context.WithCancel(context.Background())
+	r, err := mrt.DecompressWith(in, mrt.DecompressOptions{Workers: runtime.GOMAXPROCS(0), Context: ctx})
 	if err != nil {
+		cancel()
 		closer()
 		return nil, nil, err
 	}
-	return r, closer, nil
+	return r, func() { cancel(); closer() }, nil
 }
 
 // raw returns the bytes of one yielded record, or nil when err ends the
