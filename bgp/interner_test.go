@@ -113,7 +113,7 @@ func TestInternerContextsApart(t *testing.T) {
 	as4, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{AS4: true, RIB: true}))
 	upd, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{RIB: false}))
 	ap, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{AS4: false, RIB: true, AddPath: true}))
-	if as2 == as4 || as2 == upd || as4 == upd || as2 == ap {
+	if as2 == as4 || as2 == upd || as4 == upd || as2 == ap || as4 == ap || upd == ap {
 		t.Errorf("contexts share a path: AS4 false %p, AS4 true %p, RIB false %p, AddPath %p", as2, as4, upd, ap)
 	}
 	if again, _ := in.Decode(bgp.NewAttrs(raw, bgp.Context{AS4: false, RIB: true, AddPath: true})); again != ap {

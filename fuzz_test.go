@@ -18,8 +18,9 @@ import (
 
 // seedCap bounds each seed so fuzzing stays fast. Every new input the fuzzer
 // keeps is minimized, at a cost that grows with its length: with 64 KiB seeds
-// FuzzRecords spent whole runs minimizing (47 executions in 25 s), with 4 KiB
-// seeds it ran a million. 4 KiB still holds whole records of every kind the
+// FuzzRecords spent whole runs minimizing (77 executions in 15 s,
+// .data/check-v0.2-final.log), with 4 KiB seeds it ran 1,403,198
+// (.data/check-v021.log). 4 KiB still holds whole records of every kind the
 // fixtures have, peer tables and RIB records included.
 const seedCap = 4 << 10
 

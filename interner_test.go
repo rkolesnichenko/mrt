@@ -29,7 +29,7 @@ func TestInternerMatchesDecode(t *testing.T) {
 		want, wantD := a.Decode()
 		for round := range 2 {
 			p, d := in.Decode(a)
-			if strings.HasPrefix(name, "rv6-rib.") {
+			if round == 0 && strings.HasPrefix(name, "rv6-rib.") {
 				if first, ok := firstBlock[p]; !ok {
 					firstBlock[p] = slices.Clone(a.Raw())
 				} else if !bytes.Equal(first, a.Raw()) {

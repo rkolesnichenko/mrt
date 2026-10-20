@@ -17,7 +17,8 @@ import (
 // literal (keyed or positional, also elided inside []Diagnostic{{...}}) whose
 // Code is not an identifier naming a Diag* constant of diag.go. A parameter
 // passed through (a helper's code argument) is followed to every call site of
-// the helper, where it must satisfy the same rule.
+// the helper, where it must satisfy the same rule. Only literals are checked: a
+// Code assigned after construction (d.Code = x) is not seen; none exists.
 func TestDiagnosticCodesAreConstants(t *testing.T) {
 	ents, err := os.ReadDir(".")
 	if err != nil {

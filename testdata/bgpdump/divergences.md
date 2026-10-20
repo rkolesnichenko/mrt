@@ -411,7 +411,8 @@ reports a Warning `bgp/attr-length` (as for S2; RFC 7606's actions are out of
 scope, spec §11). bgpdump prints `AG` for any ATOMIC_AGGREGATE, and mrtdump
 prints the same line (`TestMrtdumpMalformedAttrsPrintAsBgpdump`), so the
 bgpdump golden matches mrtdump. The record's ORIGIN of 7 and its AS_PATH,
-whose segment claims 3 ASNs and holds 1, are malformed too; mrt and
+whose segment claims 3 ASNs with only 2 bytes after its header, are
+malformed too; mrt and
 bgpkit-parser both leave origin and AS path out.
 
 Decides: RFC 7606 section 7.6 (both oracles keep the attribute).
@@ -455,7 +456,11 @@ attributes and gives the route no next hop. mrt reads it as in any RIB entry
 hop 2001:db8::11.
 
 Decides: bgpdump, whose line carries `2001:db8::11` as mrt does (the
-bgpdump golden matches mrtdump).
+bgpdump golden matches mrtdump). RFC 6396 section 4.2 (TABLE_DUMP) does not
+mention MP_REACH_NLRI, so the RFC does not decide; mrt reads a TABLE_DUMP
+entry's attributes as a RIB entry's (Ruling R20). No real TABLE_DUMP file in
+`testdata/mrt` has this form: `rv6-tabledump.20070601.0123` carries no
+MP_REACH_NLRI.
 
 ```pair
 fixture: mrtdump-table-dump

@@ -8,8 +8,8 @@ a minor version may change the API.
 
 ## [Unreleased]
 
-Tests only: no change to the API (`api/` is unchanged) or to what the library
-decodes.
+Tests and internal tools only: no change to the API (`api/` is unchanged) or
+to what the library decodes.
 
 ### Fixed
 
@@ -18,8 +18,8 @@ decodes.
   made that slow: in the v0.2.0 check they ran 77 and 71 executions in 15 s
   (`.data/check-v0.2-final.log`). Seeds are now cut at 4 KiB (still whole
   records of every kind) and `scripts/fuzz.sh` bounds minimization to 2 s
-  (`FUZZMINIMIZETIME`); the same run gave 1,369,559 and 855,449
-  (`.data/fuzz-v021.log`).
+  (`FUZZMINIMIZETIME`). The v0.2.1 check, with the hardened `FuzzRoutes` below,
+  ran 1,403,198 and 342,767 in 15 s (`.data/check-v021.log`).
 - mrtdump's hand-built test inputs are now synthetic fixtures
   (`testdata/synthetic/mrtdump-*.mrt`) with goldens from both oracles, so the
   expected lines are checked against bgpdump and bgpkit-parser. The new
@@ -31,7 +31,8 @@ decodes.
 
 - Tests from the v0.2 reviews: `Path.Clone` is checked by reflection for every
   reference field; the rare part's size is pinned; the interner keeps contexts
-  apart by `AddPath` too and shares paths across RIB blocks on real data;
+  apart by `AddPath` too and shares paths across RIB blocks of the rv6-rib
+  fixture;
   peer-state events are checked field by field, also with an interner in
   `FuzzRoutes`; `Route.Originated` is tested on RIB_GENERIC; the diagnostic-code
   test also rejects any `Diagnostic` whose code is not a `Diag*` constant.

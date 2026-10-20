@@ -28,9 +28,10 @@ func TestPathSize(t *testing.T) {
 // for its computed lines). 64-bit: two ASPaths (24-byte slice header each),
 // three slices (ext communities, cluster list, unknown; 24 each) and one
 // pointer (8) make 128; two ASN/4-byte-array pairs and a 4-byte originator ID
-// (4+4+4) and three bools (3) make 15, padded to 16 for 4-byte alignment: 144.
-// 32-bit (CI runs GOARCH=386), computed from the same layout: slice headers
-// are 12 bytes, the pointer 4: 2*12 + 3*12 + 4 = 64, plus the same 16: 80.
+// (4+4+4) and three bools (3) make 15: 143, rounded up to 144 for 8-byte
+// alignment. 32-bit (CI runs GOARCH=386), from the same layout: slice headers
+// are 12 bytes, the pointer 4: 2*12 + 3*12 + 4 = 64, plus 15 is 79, rounded up
+// to 80 for 4-byte alignment.
 func TestPathRareSize(t *testing.T) {
 	want := uintptr(144)
 	if bits.UintSize == 32 {
