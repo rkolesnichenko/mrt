@@ -243,15 +243,61 @@ func appendKey(dst, raw []byte, as4 bool) []byte {
 	return dst
 }
 
-func heap() uint64 {
+// classes are the allocator's size classes (MemStats.BySize), set by readMem.
+var classes []uint64
+
+// readMem collects garbage twice and returns HeapInuse (spans in use) and
+// HeapAlloc (live bytes).
+func readMem() (inuse, alloc uint64) {
 	runtime.GC()
 	runtime.GC()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	return m.HeapInuse
+	if classes == nil {
+		for _, b := range m.BySize {
+			if b.Size > 0 {
+				classes = append(classes, uint64(b.Size))
+			}
+		}
+	}
+	return m.HeapInuse, m.HeapAlloc
+}
+
+// class is the bytes the allocator spends on an n-byte object: the next size
+// class, or whole 8 KiB pages above the largest class.
+func class(n uint64) uint64 {
+	if n == 0 {
+		return 0
+	}
+	for _, c := range classes {
+		if n <= c {
+			return c
+		}
+	}
+	return (n + 8191) &^ 8191
+}
+
+// measuredClass allocates 1M objects of T, keeps them, and returns the
+// measured live bytes per object, to check class(sizeof T).
+func measuredClass[T any]() float64 {
+	_, before := readMem()
+	keep := make([]*T, 1<<20)
+	for i := range keep {
+		keep[i] = new(T)
+	}
+	_, after := readMem()
+	n := float64(after-before-uint64(len(keep))*8) / float64(len(keep))
+	runtime.KeepAlive(keep)
+	return n
+}
+
+func sliceBytes[T any](s []T) uint64 {
+	var z T
+	return class(uint64(cap(s)) * uint64(unsafe.Sizeof(z)))
 }
 
 func (s *state) report() {
+	readMem() // fills classes
 	distinct := uint64(0)
 	for _, p := range s.paths {
 		if p != nil {
@@ -262,14 +308,19 @@ func (s *state) report() {
 	fmt.Printf("routes: %d\n", s.routes)
 	fmt.Printf("routes skipped (block with Warning/Error): %d, distinct such blocks: %d\n", s.skipped, s.skippedKey)
 	fmt.Printf("distinct paths: %d (map entries incl. skipped: %d)\n", distinct, len(s.paths))
-	fmt.Printf("distinct AS paths (ASPath, ReceivedASPath, AS4Path together): %d\n", len(s.asPaths))
+	fmt.Printf("distinct AS paths, union of the ASPath/ReceivedASPath/AS4Path roles (canonical map size): %d\n", len(s.asPaths))
 	fmt.Printf("distinct community lists: %d, extended: %d, large: %d\n", len(s.comms), len(s.exts), len(s.larges))
 	fmt.Printf("Info-only blocks (distinct): %d\n", s.infoOnly)
-	fmt.Printf("summed key bytes: %d\n", s.keyBytes)
-	fmt.Printf("sizeof bgp.Path: %d, stand-in: %d\n", unsafe.Sizeof(bgp.Path{}), unsafe.Sizeof(standIn{}))
+	fmt.Printf("summed key bytes (raw lengths): %d\n", s.keyBytes)
+	fmt.Printf("sizeof bgp.Path: %d, MPReach: %d, MPUnreach: %d, stand-in: %d\n", unsafe.Sizeof(bgp.Path{}), unsafe.Sizeof(bgp.MPReach{}), unsafe.Sizeof(bgp.MPUnreach{}), unsafe.Sizeof(standIn{}))
+	fmt.Printf("size class of Path: %d (computed), %.1f (measured per object over 1M allocations)\n", class(uint64(unsafe.Sizeof(bgp.Path{}))), measuredClass[bgp.Path]())
 	fmt.Printf("stand-in table bytes (routes*16): %d\n", s.routes*16)
 
-	fmt.Printf("HeapInuse, everything live: %d\n", heap())
+	s.breakdown(distinct)
+
+	_, a1 := readMem()
+	h1, _ := readMem()
+	fmt.Printf("reading 1, everything live: HeapInuse %d, HeapAlloc %d\n", h1, a1)
 
 	// A slice of the distinct paths (8 bytes each) keeps them reachable once the map goes.
 	keep := make([]*bgp.Path, 0, distinct)
@@ -278,22 +329,110 @@ func (s *state) report() {
 			keep = append(keep, p)
 		}
 	}
-	keepBytes := uint64(len(keep)) * 8
-	fmt.Printf("keep slice bytes (subtract below): %d\n", keepBytes)
+	keepBytes := class(uint64(cap(keep)) * 8)
+	fmt.Printf("keep slice bytes (subtracted below): %d\n", keepBytes)
 
-	// Reading 2: table dropped; map, canonical maps and paths remain (what mrt would retain).
 	s.table = nil
-	h2 := heap()
-	fmt.Printf("HeapInuse, stand-in table dropped (shared paths + map + canonical maps, incl. keep slice): %d\n", h2)
+	h2, a2 := readMem()
+	fmt.Printf("reading 2, stand-in table dropped (paths + path map + canonical maps; keep slice subtracted): HeapInuse %d, HeapAlloc %d\n", h2-keepBytes, a2-keepBytes)
 
-	// Reading 3: path map dropped as well; paths and canonical maps remain, held by keep.
 	s.paths = nil
-	h3 := heap()
-	fmt.Printf("HeapInuse, path map dropped (paths + canonical maps, incl. keep slice): %d, without keep slice: %d\n", h3, h3-keepBytes)
+	h3, a3 := readMem()
+	fmt.Printf("reading 3, path map dropped too (paths + canonical maps; keep slice subtracted): HeapInuse %d, HeapAlloc %d\n", h3-keepBytes, a3-keepBytes)
+	fmt.Printf("path map cost, reading 2 minus reading 3: HeapInuse %d, HeapAlloc %d\n", h2-h3, a2-a3)
 
-	// Reading 4: everything dropped; the baseline.
 	runtime.KeepAlive(keep)
 	keep = nil
 	s.asPaths, s.comms, s.exts, s.larges = nil, nil, nil, nil
-	fmt.Printf("HeapInuse, all dropped (baseline): %d\n", heap())
+	h4, a4 := readMem()
+	fmt.Printf("reading 4, all dropped (baseline): HeapInuse %d, HeapAlloc %d\n", h4, a4)
+}
+
+// breakdown prints the computed live bytes of each component of the retained
+// structure (everything but the stand-in table), and their sum.
+func (s *state) breakdown(distinct uint64) {
+	var nMP, nMPU, other uint64
+	roles := map[*bgp.Segment]struct{}{}
+	for _, p := range s.paths {
+		if p == nil {
+			continue
+		}
+		if len(p.ASPath.Segments) > 0 {
+			roles[&p.ASPath.Segments[0]] = struct{}{}
+		}
+		if p.MPReach != nil {
+			nMP++
+			other += sliceBytes(p.MPReach.NLRI) + sliceBytes(p.MPReach.RawNLRI)
+		}
+		if p.MPUnreach != nil {
+			nMPU++
+			other += sliceBytes(p.MPUnreach.Withdrawn) + sliceBytes(p.MPUnreach.RawNLRI)
+		}
+		other += sliceBytes(p.ClusterList) + sliceBytes(p.Unknown)
+		for _, a := range p.Unknown {
+			other += sliceBytes(a.Value)
+		}
+	}
+	fmt.Printf("distinct merged ASPath values (by canonical slice identity): %d\n", len(roles))
+	roles = nil
+
+	pathStructs := distinct * class(uint64(unsafe.Sizeof(bgp.Path{})))
+	mpStructs := nMP*class(uint64(unsafe.Sizeof(bgp.MPReach{}))) + nMPU*class(uint64(unsafe.Sizeof(bgp.MPUnreach{})))
+	var segArrays, asnArrays uint64
+	for k, v := range s.asPaths {
+		_ = k
+		segArrays += sliceBytes(v)
+		for _, g := range v {
+			asnArrays += sliceBytes(g.ASNs)
+		}
+	}
+	var commArrays uint64
+	for _, v := range s.comms {
+		commArrays += sliceBytes(v)
+	}
+	for _, v := range s.exts {
+		commArrays += sliceBytes(v)
+	}
+	for _, v := range s.larges {
+		commArrays += sliceBytes(v)
+	}
+	var pathKeys uint64
+	for k := range s.paths {
+		pathKeys += class(uint64(len(k)))
+	}
+	var canonKeys uint64
+	for k := range s.asPaths {
+		canonKeys += class(uint64(len(k)))
+	}
+	for k := range s.comms {
+		canonKeys += class(uint64(len(k)))
+	}
+	for k := range s.exts {
+		canonKeys += class(uint64(len(k)))
+	}
+	for k := range s.larges {
+		canonKeys += class(uint64(len(k)))
+	}
+	// Map entry overhead estimate: each entry takes a slot of string header
+	// (16) + value + 1 control byte; a Swiss map (Go 1.24+) grows by doubling
+	// and runs between 7/16 and 7/8 full, so slots = entries / 0.66 (the
+	// midpoint). Path map value is 8 (pointer); canonical values are 24
+	// (slice header). The estimate ignores table/group headers.
+	slot := func(n, val uint64) uint64 { return uint64(float64(n*(16+val+1)) / 0.66) }
+	mapOverhead := slot(uint64(len(s.paths)), 8) +
+		slot(uint64(len(s.asPaths)), 24) + slot(uint64(len(s.comms)), 24) +
+		slot(uint64(len(s.exts)), 24) + slot(uint64(len(s.larges)), 24)
+
+	total := pathStructs + mpStructs + other + segArrays + asnArrays + commArrays + pathKeys + canonKeys + mapOverhead
+	fmt.Printf("breakdown (computed live bytes, allocator size classes):\n")
+	fmt.Printf("  Path structs:                        %d\n", pathStructs)
+	fmt.Printf("  MPReach/MPUnreach structs (%d/%d):   %d\n", nMP, nMPU, mpStructs)
+	fmt.Printf("  other per-path arrays (NLRI, Unknown, ClusterList): %d\n", other)
+	fmt.Printf("  canonical []Segment arrays:          %d\n", segArrays)
+	fmt.Printf("  canonical ASN arrays:                %d\n", asnArrays)
+	fmt.Printf("  canonical community/ext/large arrays: %d\n", commArrays)
+	fmt.Printf("  path-map key bytes:                  %d\n", pathKeys)
+	fmt.Printf("  canonical-map key bytes:             %d\n", canonKeys)
+	fmt.Printf("  map entry overhead (estimate):       %d\n", mapOverhead)
+	fmt.Printf("  sum:                                 %d\n", total)
 }
