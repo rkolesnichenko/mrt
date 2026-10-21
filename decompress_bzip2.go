@@ -9,8 +9,8 @@ package mrt
 // is a candidate block start: a copy of the bytes from it goes to a worker,
 // which decodes the block that would start there. When the chain reaches a
 // block, it takes a worker's result only if it started exactly there, with the
-// stream's level, and stayed within its copy; otherwise the chain decodes the
-// block itself, from the window. A candidate the chain never lands on is
+// stream's level, stayed within its copy and gave at most specCap bytes;
+// otherwise the chain decodes the block itself, from the window. A candidate the chain never lands on is
 // discarded for its position, whatever its decode gave. So every byte and every
 // error comes from the chain, in the order the serial reader gives them.
 
@@ -31,6 +31,15 @@ const (
 	// maxSegment is the most compressed input one speculative decode gets.
 	// A block whose end is not within it is decoded by the chain.
 	maxSegment = 8 << 20
+	// segmentBudget is the most the segment copies of outstanding jobs hold in
+	// all. A job that would take them past it waits for results to be taken,
+	// unless none is outstanding (a segment is at most maxSegment).
+	segmentBudget = 32 << 20
+	// specCap is the most output a speculative decode makes. A block that
+	// decodes to more is decoded by the chain. It is at least twice the
+	// largest block of the real files (981,320 bytes, .data/v031-blocks.log),
+	// and at least 2 MiB.
+	specCap = 2 << 20
 	// segmentSlack is how far a segment reaches past the byte of the next
 	// magic the scan found, where the block ends if that magic is real.
 	segmentSlack = 8
@@ -60,12 +69,17 @@ const (
 
 // bzip2Hooks are test hooks (export_test.go). extra returns bit offsets in
 // [lo, hi), ascending, to add to the candidates the scan found there.
-// discarded is called with each candidate the chain never lands on, and took
-// with each block the chain takes and whether a worker decoded it.
+// discarded is called with each candidate the chain never lands on, took
+// with each block the chain takes and whether a worker decoded it, and held
+// after each dispatch with the bytes of segment copies outstanding jobs hold
+// and their count. All of these run in Read's goroutine. started is called by
+// a worker with the job it is about to decode, once it has checked for stop.
 type bzip2Hooks struct {
 	extra     func(lo, hi uint64) []uint64
 	discarded func(bit uint64)
 	took      func(bit uint64, speculative bool)
+	held      func(segBytes int64, outstanding int)
+	started   func(bit uint64)
 }
 
 // A mark is a magic the scan found: a candidate block start, or an end magic,
@@ -91,7 +105,7 @@ type bzip2Result struct {
 	crc   uint32
 	err   error
 	end   uint64 // the bit after the block
-	whole bool   // the decode stayed within its segment
+	whole bool   // the decode stayed within its segment and under specCap
 }
 
 type parallelBzip2 struct {
@@ -114,7 +128,8 @@ type parallelBzip2 struct {
 	// or not a candidate, and none from there on is dispatched. zombies are
 	// dispatched jobs the chain passed, whose results are still to come.
 	// outstanding counts dispatched jobs whose results the chain has not
-	// received: at most 2 × workers.
+	// received: at most 2 × workers. segHeld is the bytes of their segment
+	// copies: at most segmentBudget. quit is closed by stop, before jobs.
 	scanInit    bool
 	scanAt      int64
 	scanLevel   int
@@ -123,7 +138,9 @@ type parallelBzip2 struct {
 	found       []mark // scratch for scan
 	zombies     []*bzip2Job
 	outstanding int
+	segHeld     int64
 	jobs        chan *bzip2Job // nil until the first dispatch
+	quit        chan struct{}
 	wg          sync.WaitGroup
 	stopped     bool
 
@@ -240,15 +257,17 @@ func (z *parallelBzip2) block() {
 }
 
 // speculation returns the worker's result for the block at pos if the chain
-// can use it: it started at pos, with the chain's level, and stayed within its
-// segment, so it read exactly the bits the chain would. Candidates before pos
-// are discarded. If the Context is cancelled while it waits, it sets err.
+// can use it: it started at pos, with the chain's level, stayed within its
+// segment, so it read exactly the bits the chain would, and stayed under
+// specCap. Candidates before pos are discarded. If the Context is cancelled
+// while it waits, it sets err.
 func (z *parallelBzip2) speculation(pos uint64) *bzip2Result {
 	z.passed(pos)
 	if len(z.marks) == 0 || z.marks[0].bit != pos {
 		return nil
 	}
 	m := z.marks[0]
+	z.marks[0] = mark{} // so the array keeps no job's segment
 	z.marks = z.marks[1:]
 	switch {
 	case m.job == nil:
@@ -257,7 +276,7 @@ func (z *parallelBzip2) speculation(pos uint64) *bzip2Result {
 		z.zombies = append(z.zombies, m.job)
 		return nil
 	}
-	z.outstanding--
+	z.taken(m.job)
 	select {
 	case res := <-m.job.res:
 		if !res.whole {
@@ -284,6 +303,7 @@ func (z *parallelBzip2) passed(bit uint64) {
 	for ; i < len(z.marks) && z.marks[i].bit < bit; i++ {
 		z.discard(&z.marks[i])
 	}
+	clear(z.marks[:i]) // so the array keeps no job's segment
 	z.marks = z.marks[i:]
 }
 
@@ -301,14 +321,20 @@ func (z *parallelBzip2) discard(m *mark) {
 
 // pump keeps the workers busy: it scans, dispatches candidates, and reads r
 // while that lets more candidates go, up to 2 × workers outstanding, a lead
-// over the chain of one segment and 1 MiB per outstanding job, and
-// 4 × workers + markSlack marks ahead of the chain.
+// over the chain of one segment and 1 MiB per outstanding job,
+// 4 × workers + markSlack marks ahead of the chain, and the next candidate
+// within segmentBudget.
+//
+// So the speculation holds at most segmentBudget of segment copies, at most
+// 2 × workers results of at most specCap bytes each, and in each worker's
+// decode, besides its Decoder's tables, at most specCap and one chunk before
+// it gives up (v0.3.1 design §5.3). The window and the chain's own decodes
+// are bounded as in v0.3.
 func (z *parallelBzip2) pump() {
 	for {
 		z.scan()
 		z.reap()
-		z.dispatch()
-		if z.outstanding >= 2*z.workers || z.srcErr != nil ||
+		if z.dispatch() || z.outstanding >= 2*z.workers || z.srcErr != nil ||
 			z.winEnd()-z.rpos >= maxSegment+int64(2*z.workers)<<20 ||
 			len(z.marks) > 4*z.workers+markSlack {
 			return
@@ -323,7 +349,7 @@ func (z *parallelBzip2) reap() {
 	for _, j := range z.zombies {
 		select {
 		case <-j.res:
-			z.outstanding--
+			z.taken(j)
 		default:
 			z.zombies[k] = j
 			k++
@@ -333,18 +359,27 @@ func (z *parallelBzip2) reap() {
 	z.zombies = z.zombies[:k]
 }
 
+// taken drops j from the outstanding jobs, once the chain has received its
+// result or is about to.
+func (z *parallelBzip2) taken(j *bzip2Job) {
+	z.outstanding--
+	z.segHeld -= int64(len(j.seg))
+}
+
 // dispatch sends candidates, in order, to the workers. A candidate's segment
 // runs to the next magic found (plus segmentSlack bytes), at most maxSegment
 // bytes, and to the end of the input; a candidate with no magic after it waits
-// until the window holds a whole segment or the input has ended.
-func (z *parallelBzip2) dispatch() {
+// until the window holds a whole segment or the input has ended. A candidate
+// whose segment would take segHeld past segmentBudget waits while any job is
+// outstanding; dispatch then returns true, held.
+func (z *parallelBzip2) dispatch() (held bool) {
 	if z.stopped {
-		return
+		return false
 	}
 	end := z.winEnd()
 	for i := z.undispatched(); i < len(z.marks); i = z.undispatched() {
 		if z.outstanding >= 2*z.workers {
-			return
+			return false
 		}
 		m := &z.marks[i]
 		from := int64(m.bit / 8)
@@ -352,14 +387,18 @@ func (z *parallelBzip2) dispatch() {
 		if i+1 < len(z.marks) {
 			to = min(to, int64(z.marks[i+1].bit/8)+segmentSlack)
 		} else if to > end && z.srcErr == nil {
-			return
+			return false
 		}
 		to = min(to, end)
+		if z.outstanding > 0 && z.segHeld+(to-from) > segmentBudget {
+			return true
+		}
 		if z.jobs == nil {
 			z.jobs = make(chan *bzip2Job, 2*z.workers)
+			z.quit = make(chan struct{})
 			z.wg.Add(z.workers)
 			for range z.workers {
-				go bzip2Worker(z.jobs, z.ctx.Done(), &z.wg)
+				go bzip2Worker(z.jobs, z.quit, z.ctx.Done(), z.hooks.started, &z.wg)
 			}
 		}
 		m.job = &bzip2Job{
@@ -370,8 +409,13 @@ func (z *parallelBzip2) dispatch() {
 		}
 		z.jobs <- m.job // never blocks: at most 2 × workers are outstanding
 		z.outstanding++
+		z.segHeld += to - from
 		z.dispatchAt = m.bit + 1
+		if z.hooks.held != nil {
+			z.hooks.held(z.segHeld, z.outstanding)
+		}
 	}
+	return false
 }
 
 // undispatched returns the index of the first candidate not dispatched, or
@@ -390,8 +434,11 @@ func (z *parallelBzip2) undispatched() int {
 }
 
 // bzip2Worker decodes jobs with one Decoder, which keeps its buffers between
-// blocks, until jobs is closed or done is.
-func bzip2Worker(jobs <-chan *bzip2Job, done <-chan struct{}, wg *sync.WaitGroup) {
+// blocks, until jobs is closed or done is. Having taken a job, it returns
+// without decoding it if quit or done is closed, so no job starts after stop
+// or a cancel. A decode gives up past specCap of output or past its segment:
+// the chain never takes such a result, and decodes the block itself.
+func bzip2Worker(jobs <-chan *bzip2Job, quit, done <-chan struct{}, started func(bit uint64), wg *sync.WaitGroup) {
 	defer wg.Done()
 	var d bzip2.Decoder
 	for {
@@ -402,16 +449,29 @@ func bzip2Worker(jobs <-chan *bzip2Job, done <-chan struct{}, wg *sync.WaitGroup
 			if !ok {
 				return
 			}
+			select {
+			case <-quit:
+				return
+			case <-done:
+				return
+			default:
+			}
+			if started != nil {
+				started(j.bit)
+			}
 			br := bzip2.NewBitReader(bytes.NewReader(j.seg))
 			br.ReadBits(uint(j.bit % 8))
-			data, crc, err := d.Block(br, j.level)
-			j.res <- bzip2Result{data: data, crc: crc, err: err, end: j.bit/8*8 + br.Offset(), whole: br.Err() == nil}
+			data, crc, err := d.SpeculativeBlock(br, j.level, specCap)
+			whole := br.Err() == nil && err != bzip2.ErrOverCap
+			j.res <- bzip2Result{data: data, crc: crc, err: err, end: j.bit/8*8 + br.Offset(), whole: whole}
 		}
 	}
 }
 
-// stop ends the speculation: it discards the marks and waits for every worker
-// to exit. The chain is done with the input when it is called.
+// stop ends the speculation: it discards the marks, closes quit and then jobs,
+// drains the jobs no worker has taken, and waits for every worker to exit.
+// So no job starts after stop is called, and each worker finishes at most the
+// block it is decoding. The chain is done with the input when it is called.
 func (z *parallelBzip2) stop() {
 	if z.stopped {
 		return
@@ -423,7 +483,10 @@ func (z *parallelBzip2) stop() {
 	z.marks, z.found, z.zombies, z.win = nil, nil, nil, nil
 	z.d = bzip2.Decoder{}
 	if z.jobs != nil {
+		close(z.quit)
 		close(z.jobs)
+		for range z.jobs {
+		}
 		z.wg.Wait()
 	}
 }
