@@ -29,8 +29,10 @@
     sha256 e0c6e49113f153edb51973b7abee6d51ed567688639d752188724d033e7bac30).
   - `zeros-1.bz2`: `head -c 60000000 /dev/zero | bzip2 -1 > bzip2/zeros-1.bz2`
     (made 2026-10-21), 388 bytes, 12 level-1 blocks of zeros (11 of 5,099,235
-    bytes, one of 3,908,415), for the speculative-cap tests; only
-    `internal/bzip2`'s tests decode it (the other tests glob `[^z]*.bz2`);
+    bytes, one of 3,908,415), for the speculative-cap tests. The tests that
+    loop over every bzip2 fixture glob `[^z]*.bz2`, which leaves it out; the
+    cap and bound tests of `internal/bzip2` and of `DecompressWith` read it
+    by name.
   - `zeros-9.bz2`: `head -c 465000000 /dev/zero | bzip2 -9 > bzip2/zeros-9.bz2`
     (made 2026-10-21), 369 bytes, 11 level-9 blocks of zeros (the largest
     45,899,235 bytes), for the v0.3.1 memory gate only; no `go test` decodes it.

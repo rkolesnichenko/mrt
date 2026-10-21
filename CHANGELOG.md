@@ -16,17 +16,22 @@ estimates, and a short peak can be missed. The API (`api/`) is unchanged.
 
 ### Changed
 
-- Speculative decodes stop filling output at `specCap`, 2 MiB. A block whose
+- Speculative decodes stop filling output at a 2 MiB cap. A block whose
   output passes the cap is not kept; the reader decodes it itself when it
   reaches it. The cap is the smallest power of two that is at least twice
   the largest decoded block in the six real bzip2 files (981,320 bytes in
   rv2-updates.20261020.0845; `.data/v031-blocks.log`, `cap: 2097152`).
 - The copies of compressed segments that jobs hold are limited to 32 MiB in
   all. A job that would pass it waits.
+- The reader drops a block's bytes once `Read` has returned them all, so they
+  are not live while the next block is decoded.
 - The bound on what the bzip2 reader holds live is about `32 MiB + 16 MiB +
-  93 MB + Workers × (3.6 MB + 4 × 2 MiB + 5 MiB)`: about 143 MB plus 17 MB per
-  worker, 212.3 MB at 4 workers and 384.6 MB at 14. It is arithmetic
-  (`.data/v031-gate-mem.log`), and is documented on `DecompressWith`.
+  97.4 MB + Workers × (3.6 MB + 4 × 2 MiB + 5 MiB)`: about 148 MB plus 17 MB
+  per worker, 216.7 MB at 4 workers and 389.0 MB at 14. The 97.4 MB is the
+  reader's own decode of a hostile level-9 block (46.6 MB): 45 chunks of
+  1 MiB, the exact-size copy and its 3.6 MB block table. It is arithmetic
+  (`.data/v031-gate-mem.log`, section FINAL FIX), and is documented on
+  `DecompressWith`.
 - `DecompressWith` documents that it reads the first bytes of `r` and, for
   gzip, the whole header before it returns.
 
@@ -38,32 +43,34 @@ estimates, and a short peak can be missed. The API (`api/`) is unchanged.
 
 ### Measured
 
-- Memory, `testdata/bzip2/zeros-9.bz2` (465 MB out, 11 blocks per `.data/zeros-blocks-probe.log`), growth of
-  the heap over its baseline (`.data/v031-gate-mem.log`, section FIX ROUND 1
-  for GOGC=10):
+- Memory, `testdata/bzip2/zeros-9.bz2` (465 MB out, 11 blocks per
+  `.data/zeros-blocks-probe.log`), growth of the heap over its baseline
+  (`.data/v031-gate-mem.log`: v0.3.1 in section FINAL FIX, v0.3.0 GOGC=10 in
+  FIX ROUND 1, v0.3.0 default GC in the first section):
 
   | workers | bound | v0.3.1 GOGC=10 | v0.3.0 GOGC=10 | v0.3.1 default GC | v0.3.0 default GC |
   |---|---|---|---|---|---|
-  | 4 | 212.3 MB | 180.2 MB | 344.1 MB | 344.4 MB | 534.2 MB |
-  | 14 | 384.6 MB | 224.3 MB | 634.7 MB | 395.8 MB | 818.0 MB |
+  | 4 | 216.7 MB | 130.1 MB | 344.1 MB | 233.7 MB | 534.2 MB |
+  | 14 | 389.0 MB | 174.2 MB | 634.7 MB | 286.2 MB | 818.0 MB |
 
   GOGC=10 is the gate: an upper-bound estimate of the live bytes, which v0.3.1
   holds under the bound. At the default GC the peak includes garbage not yet
-  collected (about 1.9 times the live figure at 4 workers), so it exceeds the
-  bound at both counts, 344.4 vs 212.3 MB and 395.8 vs 384.6 MB. The bound is
-  on live bytes, not a cap on heap size. v0.3.0 has no bound; zeros-9 has 11 blocks, so its
-  held bytes here are limited by the fixture. (A file with more blocks would
-  hold more: arithmetic from the design, not measured.)
+  collected (about 1.8 times the GOGC=10 figure at 4 workers and 1.6 at 14),
+  so it exceeds the bound at 4 workers, 233.7 vs 216.7 MB. The bound is on
+  live bytes, not a cap on heap size. v0.3.0's bound grows with `Workers`
+  (v0.3 design §6.2); zeros-9 has 11 blocks, so its held bytes here are
+  limited by the fixture. (A file with more blocks would hold more:
+  arithmetic from the design, not measured.)
 - Crafted inputs (an end-magic flood and sparse block magics, 4 and 14
-  workers, GOGC=10): v0.3.1 stays under the bound on all of them, at most
-  70.5 MB; at the default GC the largest was 83.9 MB
-  (`.data/v031-gate-mem.log`).
+  workers): v0.3.1 stays under the bound on all of them, at most 75.9 MB at
+  GOGC=10 and 74.2 MB at the default GC (`.data/v031-gate-mem.log`, section
+  FINAL FIX).
 - Speed, `DecompressWith` bzip2, `Workers` 4 and 14 under `GOMAXPROCS=4`, one
   run each (`.data/v031-gate-speed.log`): rv2-rib 5.42 s to 5.52 s at 4
   (+1.8%) and 5.55 s to 5.66 s at 14 (+2.0%); rv6-rib 1.88 s to 1.91 s (+1.6%)
   and 1.93 s to 1.99 s (+3.1%). v0.3.1 is 1.6-3.1% slower than v0.3.0 in all
   four pairs, inside the 5% gate. The output hashes are identical.
-- Blocks of zeros are slower by design: on zeros-9 v0.3.1 took about 1.85 s
+- Blocks of zeros are slower by design: on zeros-9 v0.3.1 took about 1.8 s
   and v0.3.0 0.60 s at 4 workers, because every zero block is over the cap and
   is decoded serially (`.data/v031-gate-mem.log`).
 - `mrtcut -count` on rrc00-bview.20261020.0800.gz, mean of 4 alternating runs:
@@ -83,7 +90,12 @@ estimates, and a short peak can be missed. The API (`api/`) is unchanged.
 
 Resident memory (RSS), other machines, worker counts other than 4 and 14,
 speed with 14 cores (the 14-worker runs used `GOMAXPROCS=4`), and v0.3.0 on
-the crafted inputs (those runs last 0.01 s or less).
+the crafted inputs (those runs last 0.01 s or less). No measured input loads
+the segment-budget or results terms of the bound: zeros-9 loads the reader's
+own decode and the per-worker decodes, and the crafted inputs end at their
+first block. `Decompress` (and the serial reader in `internal/bzip2`) still
+keeps a block's bytes live while it decodes the next one, up to 46.6 MB more
+than its own decode (arithmetic, not measured); it is left as it is.
 
 ## [0.3.0] - 2026-10-21
 

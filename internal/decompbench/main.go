@@ -24,19 +24,19 @@
 //
 //	go run ./internal/decompbench -mem [-crafted] -workers N FILE...
 //
-// With -mem it reads each file once with DecompressWith into io.Discard while
-// a goroutine samples the runtime/metrics value /memory/classes/heap/objects:bytes
-// every 2 ms. It prints the heap before the read (after a GC) as "baseline", the
-// highest sample as "peak" and the growth over the baseline, in bytes. With
-// -crafted it adds two inputs built in memory, the same as decompress_with_test.go
-// builds them: "end-magic-flood" (BZh9 and then end magics, past the look-ahead
-// of the given workers) and "sparse-block-magics" (32 MiB, a block magic and
-// 200 KiB of zeros repeated). A read error on a crafted input is reported, not
-// a failure. It exits 1 if a FILE fails to open. The peak is the largest of the
-// samples, so a short peak between two samples can be missed. With the default
-// GC the figure includes garbage not yet collected; the v0.3.1 gate runs it
-// under GOGC=10, as an upper-bound estimate of live bytes
-// (.data/v031-gate-mem.log).
+// With -mem it reads each file once with DecompressWith into io.Discard while a
+// goroutine samples the runtime/metrics value
+// /memory/classes/heap/objects:bytes every 2 ms. It prints the heap before the
+// read (after a GC) as "baseline", the highest sample as "peak" and the growth
+// over the baseline, in bytes. With -crafted it adds two inputs built in
+// memory, the same as decompress_with_test.go builds them: "end-magic-flood"
+// (BZh9 and then end magics, past the look-ahead of the given workers) and
+// "sparse-block-magics" (32 MiB, a block magic and 200 KiB of zeros repeated).
+// A read error on a crafted input is reported, not a failure. It exits 1 if a
+// FILE fails to open. The peak is the largest of the samples, so a short peak
+// between two samples can be missed. With the default GC the figure includes
+// garbage not yet collected; the v0.3.1 gate runs it under GOGC=10, as an
+// upper-bound estimate of live bytes (.data/v031-gate-mem.log).
 package main
 
 import (
