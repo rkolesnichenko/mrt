@@ -11,8 +11,9 @@ a minor version may change the API.
 ## [0.3.2] - 2026-10-21
 
 v0.3.2 closes the items v0.3.1 left open: the `mrtcut` slowdown on gzip, the
-parts of the bzip2 bound that were arithmetic only, and two wrong statements
-in the v0.3.1 entry (corrected in place below). The API (`api/`) is
+parts of the bzip2 bound that were arithmetic only, and four statements in
+the v0.3.1 entry that were wrong or did not reproduce (corrected in place
+below, each marked "corrected in 0.3.2"). The API (`api/`) is
 unchanged. Figures come from commands run on 2026-10-21 with Go 1.27.2 on an
 Apple M3 Max, `GOMAXPROCS=4`, and name their log under `.data/` (git-ignored).
 Heap figures are sampled every 2 ms, so they are estimates. Default-GC heap
