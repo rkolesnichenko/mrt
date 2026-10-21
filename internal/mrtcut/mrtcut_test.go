@@ -172,3 +172,18 @@ func TestCountCutMessages(t *testing.T) {
 		t.Errorf("count:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestCPUProfile(t *testing.T) {
+	in := filepath.Join("..", "..", "testdata", "synthetic", "addpath-updates.mrt")
+	p := filepath.Join(t.TempDir(), "cpu.prof")
+	if st := run([]string{"-cpuprofile", p, "-count", in}, nil, io.Discard, io.Discard); st != 0 {
+		t.Fatal(st)
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() == 0 {
+		t.Error("profile is empty")
+	}
+}

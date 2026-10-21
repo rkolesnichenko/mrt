@@ -30,6 +30,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,10 +74,24 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	skip := fs.Int("skip", 0, "drop the first `K` records")
 	first := fs.Int("first", 0, "keep the first `N` records (after -skip)")
 	count := fs.Bool("count", false, "count records by type/subtype instead of cutting")
+	cpuprofile := fs.String("cpuprofile", "", "write a CPU profile of the whole run to `FILE`")
 	also := alsoFlag{}
 	fs.Var(also, "also", "also keep the first M records of `TYPE/SUBTYPE=M` after the first N (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fmt.Fprintf(stderr, "mrtcut: %v\n", err)
+			return 1
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(stderr, "mrtcut: %v\n", err)
+			return 1
+		}
+		defer pprof.StopCPUProfile()
 	}
 	if *count {
 		if fs.NArg() == 0 {
