@@ -9,10 +9,10 @@ a minor version may change the API.
 ## [Unreleased]
 
 v0.3.1 bounds the memory of `DecompressWith`'s parallel bzip2 reader. Figures
-come from commands run on 2026-10-21 with Go 1.27.2 on an Apple M3 Max,
-`GOMAXPROCS=4`, and name their log. Heap figures are sampled every 2 ms from
-`/memory/classes/heap/objects:bytes`, so they are estimates, and a short peak
-can be missed. The API (`api/`) is unchanged.
+come from commands run on 2026-10-21 with Go 1.27.2 on an Apple M3 Max
+(`.data/machine-v0.2.log`), `GOMAXPROCS=4`, and name their log. Heap figures
+are sampled every 2 ms from `/memory/classes/heap/objects:bytes`, so they are
+estimates, and a short peak can be missed. The API (`api/`) is unchanged.
 
 ### Changed
 
@@ -38,7 +38,7 @@ can be missed. The API (`api/`) is unchanged.
 
 ### Measured
 
-- Memory, `testdata/bzip2/zeros-9.bz2` (465 MB out, 11 blocks), growth of
+- Memory, `testdata/bzip2/zeros-9.bz2` (465 MB out, 11 blocks per `.data/zeros-blocks-probe.log`), growth of
   the heap over its baseline (`.data/v031-gate-mem.log`, section FIX ROUND 1
   for GOGC=10):
 
@@ -49,13 +49,15 @@ can be missed. The API (`api/`) is unchanged.
 
   GOGC=10 is the gate: an upper-bound estimate of the live bytes, which v0.3.1
   holds under the bound. At the default GC the peak includes garbage not yet
-  collected (about 1.9 times the live figure at 4 workers), and passes the
-  bound at neither count. v0.3.0 has no bound; zeros-9 has 11 blocks, so its
+  collected (about 1.9 times the live figure at 4 workers), so it exceeds the
+  bound at both counts, 344.4 vs 212.3 MB and 395.8 vs 384.6 MB. The bound is
+  on live bytes, not a cap on heap size. v0.3.0 has no bound; zeros-9 has 11 blocks, so its
   held bytes here are limited by the fixture. (A file with more blocks would
   hold more: arithmetic from the design, not measured.)
 - Crafted inputs (an end-magic flood and sparse block magics, 4 and 14
   workers, GOGC=10): v0.3.1 stays under the bound on all of them, at most
-  70.5 MB (`.data/v031-gate-mem.log`).
+  70.5 MB; at the default GC the largest was 83.9 MB
+  (`.data/v031-gate-mem.log`).
 - Speed, `DecompressWith` bzip2, `Workers` 4 and 14 under `GOMAXPROCS=4`, one
   run each (`.data/v031-gate-speed.log`): rv2-rib 5.42 s to 5.52 s at 4
   (+1.8%) and 5.55 s to 5.66 s at 14 (+2.0%); rv6-rib 1.88 s to 1.91 s (+1.6%)
@@ -72,7 +74,10 @@ can be missed. The API (`api/`) is unchanged.
   check in `mrtcut`, or `WriteTo` on the gzip readahead.
 - Equivalence on real data: `DecompressWith` and `Decompress` give identical
   bytes on all 19 files (`.data/realdata-decompress-v031.log`).
-- Consumer: routecheck (pins mrt v0.1.0) fails to build the same four errors in `observe/session.go` and the same vet errors against this branch and against v0.2.1 (`.data/consumer-v031.log`): the two error sets are identical, so v0.3.1 adds none.
+- Consumer: routecheck (pins mrt v0.1.0) fails to build with the same four
+  errors in `observe/session.go`, and the same vet errors, against this branch
+  and against v0.2.1 (`.data/consumer-v031.log`). The two error sets are
+  identical, so v0.3.1 adds none.
 
 ### Not measured
 

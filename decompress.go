@@ -71,7 +71,8 @@ var (
 // With Workers > 0 the bzip2 reader holds at most about 32 MiB + 16 MiB +
 // 93 MB + Workers × (3.6 MB + 4 × 2 MiB + 5 MiB) live: about 143 MB plus
 // 17 MB per worker. The Go heap adds GC headroom: at the default GOGC the
-// measured peak was about 1.9 times that (v0.3.1 changelog).
+// measured heap peak was about 1.9 times the live peak at 4 workers
+// (.data/v031-gate-mem.log).
 //
 // r is read by the returned reader: for gzip by its goroutine, for bzip2
 // only by its Read. So r must not be read by anything else once
