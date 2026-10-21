@@ -32,8 +32,11 @@
 // builds them: "end-magic-flood" (BZh9 and then end magics, past the look-ahead
 // of the given workers) and "sparse-block-magics" (32 MiB, a block magic and
 // 200 KiB of zeros repeated). A read error on a crafted input is reported, not
-// a failure. It exits 1 if a FILE fails to open. The sampled peak is a lower
-// bound of the true peak (a 2 ms grid).
+// a failure. It exits 1 if a FILE fails to open. The peak is the largest of the
+// samples, so a short peak between two samples can be missed. With the default
+// GC the figure includes garbage not yet collected; the v0.3.1 gate runs it
+// under GOGC=10, as an upper-bound estimate of live bytes
+// (.data/v031-gate-mem.log).
 package main
 
 import (
@@ -63,12 +66,12 @@ func main() {
 	memMode := flag.Bool("mem", false, "sample the heap while reading each file once with DecompressWith")
 	crafted := flag.Bool("crafted", false, "with -mem: add the end-magic flood and sparse block magics")
 	flag.Parse()
+	if flag.NArg() == 0 || *workers < 1 {
+		fmt.Fprintln(os.Stderr, "usage: decompbench -workers N FILE... | decompbench -blocks FILE... | decompbench -mem [-crafted] -workers N FILE...")
+		os.Exit(2)
+	}
 	if *memMode {
 		os.Exit(memRun(flag.Args(), *workers, *crafted))
-	}
-	if flag.NArg() == 0 || *workers < 1 {
-		fmt.Fprintln(os.Stderr, "usage: decompbench -workers N FILE... | decompbench -blocks FILE...")
-		os.Exit(2)
 	}
 	if *blocks {
 		os.Exit(blockSizes(flag.Args()))
@@ -318,6 +321,10 @@ func memOne(name string, in io.Reader, workers int) {
 	}
 	cancel()
 	took := time.Since(start)
+	last := heapSample(s)
+	mu.Lock()
+	peak = max(peak, last)
+	mu.Unlock()
 	close(stop)
 	<-done
 	mu.Lock()
