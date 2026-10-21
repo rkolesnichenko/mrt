@@ -1020,6 +1020,41 @@ func TestDecompressWithWindowCounted(t *testing.T) {
 	}
 }
 
+// TestDecompressWithWindowCapBounded: the window's capacity, which is what it
+// holds, never exceeds WindowBound. The input is level1.bz2 with its block
+// padded to 2 MiB, 19 times (38 MiB): at Workers 4 the 2 × 4 jobs outstanding
+// cover the 16 MiB lead, and the chain moves 2 MiB at a time, so the window
+// grows to about 30 MiB before it compacts. append's growth (1.25 times)
+// carried its capacity past the bound there (34,709,504 bytes against
+// 33,620,000). The output is Decompress's.
+func TestDecompressWithWindowCapBounded(t *testing.T) {
+	stream, err := os.ReadFile("testdata/bzip2/level1.bz2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := bzcraft.Repeated(stream, 2<<20, 19)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, wantErr := decompressed(bytes.NewReader(in), 0, false)
+	const workers = 4
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	peak := 0
+	r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: workers, Context: ctx},
+		mrt.Bzip2Hooks{Window: func(n int) { peak = max(peak, n) }}) // in this goroutine, which reads
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, gotErr := io.ReadAll(r)
+	checkSame(t, "workers 4", got, gotErr, want, wantErr)
+	bound := mrt.WindowBound(workers)
+	t.Logf("window capacity up to %d bytes, bound %d", peak, bound)
+	if peak > bound {
+		t.Errorf("window capacity up to %d bytes, over %d", peak, bound)
+	}
+}
+
 // TestDecompressWithNoHooksNoCount: a reader from DecompressWith has no
 // results counter, nor one with hooks other than Results; one with Results
 // set has one. No reader is read, so none starts a worker.

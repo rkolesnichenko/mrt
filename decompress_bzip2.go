@@ -75,7 +75,7 @@ const (
 // discarded is called with each candidate the chain never lands on, took
 // with each block the chain takes and whether a worker decoded it, held
 // after each dispatch with the bytes of segment copies outstanding jobs hold
-// and their count, and window with len(win) after each fill and compact. All
+// and their count, and window with cap(win) after each fill and compact. All
 // of these run in Read's goroutine. started is called by a worker with the job
 // it is about to decode, once it has checked for stop. results is called with
 // the bytes of the results workers have sent and the chain has not received,
@@ -545,11 +545,11 @@ func (z *parallelBzip2) winEnd() int64 { return z.winOff + int64(len(z.win)) }
 // io.ErrNoProgress at bufio's limit.
 func (z *parallelBzip2) fill() {
 	z.compact()
-	z.win = slices.Grow(z.win, fillSize)
+	z.grow()
 	n, err := z.src.Read(z.win[len(z.win) : len(z.win)+fillSize])
 	z.win = z.win[:len(z.win)+n]
 	if z.hooks.window != nil {
-		z.hooks.window(len(z.win))
+		z.hooks.window(cap(z.win))
 	}
 	switch {
 	case err != nil:
@@ -562,6 +562,32 @@ func (z *parallelBzip2) fill() {
 			z.srcErr = io.ErrNoProgress
 		}
 	}
+}
+
+// grow makes room in the window for one read of r. Its capacity doubles, but
+// never past windowBound, which the window never needs: append's own growth
+// would carry it up to a quarter past what it needs, and so past the bound.
+func (z *parallelBzip2) grow() {
+	need := len(z.win) + fillSize
+	if need <= cap(z.win) {
+		return
+	}
+	c := min(max(2*cap(z.win), need), max(windowBound(z.workers), need))
+	win := make([]byte, len(z.win), c)
+	copy(win, z.win)
+	z.win = win
+}
+
+// windowBound is the most bytes the window needs at the given Workers, from
+// pump, fill and compact. fill reads r from pump only while the window holds
+// less than the lead, maxSegment + 2 × Workers MiB, past the chain's read
+// position, and from the chain only when it holds nothing past it. compact
+// keeps chainSlack bytes behind that position and moves the window down once
+// the bytes before them are at least compactMin and half the window, so the
+// window is then under twice what it keeps, or compactMin more: under
+// 2 × (lead + chainSlack). One read then adds at most fillSize.
+func windowBound(workers int) int {
+	return 2*(maxSegment+workers<<21+chainSlack) + fillSize
 }
 
 // compact drops the window's bytes that nothing needs: those behind the chain,
@@ -582,7 +608,7 @@ func (z *parallelBzip2) compact() {
 		z.winOff = keep
 	}
 	if z.hooks.window != nil {
-		z.hooks.window(len(z.win))
+		z.hooks.window(cap(z.win))
 	}
 }
 

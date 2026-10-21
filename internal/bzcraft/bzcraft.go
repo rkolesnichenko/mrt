@@ -132,6 +132,29 @@ var segmentLoad = sync.OnceValues(func() ([]byte, error) {
 	return padBlocks(in, segmentBlockBytes)
 })
 
+// Repeated returns n copies of stream, a bzip2 stream of one block, with the
+// block padded (as SegmentLoad's are) so that each copy is unit bytes, or one
+// less. Each copy is a stream of its own, so the result is a valid
+// multi-stream input that decodes to n copies of stream's plaintext, with a
+// block every unit bytes.
+func Repeated(stream []byte, unit, n int) ([]byte, error) {
+	starts, _, _, err := Blocks(stream)
+	if err != nil {
+		return nil, err
+	}
+	if len(starts) != 1 {
+		return nil, fmt.Errorf("bzcraft: %d blocks, want 1", len(starts))
+	}
+	if pad := (unit - len(stream)) &^ 1; pad > 0 {
+		at, err := basePoint(stream, starts[0])
+		if err != nil {
+			return nil, err
+		}
+		stream = insertPad(stream, at, pad)
+	}
+	return bytes.Repeat(stream, n), nil
+}
+
 // compress returns src compressed by bzip2 -9.
 func compress(src io.Reader) ([]byte, error) {
 	if _, err := exec.LookPath("bzip2"); err != nil {

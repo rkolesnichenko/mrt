@@ -12,10 +12,10 @@ import "io"
 // is about to decode, once it has checked for stop; it runs in the worker's
 // goroutine. Results is called with the bytes of the results workers have
 // sent and the chain has not received, after every change, from any
-// goroutine, and not once the reader has stopped. Window is called with the window's
-// length after every fill and compact, in the goroutine that calls Read. Any
-// of them may be nil. SegmentBudget, if not 0, replaces the 32 MiB budget of
-// segment copies.
+// goroutine, and not once the reader has stopped. Window is called with the
+// window's capacity after every fill and compact, in the goroutine that calls
+// Read. Any of them may be nil. SegmentBudget, if not 0, replaces the 32 MiB
+// budget of segment copies.
 type Bzip2Hooks struct {
 	Extra         func(lo, hi uint64) []uint64
 	Discarded     func(bit uint64)
@@ -60,17 +60,9 @@ func CountsResults(r io.Reader) bool {
 	return ok && z.results != nil
 }
 
-// WindowBound is the most bytes the window holds (its length) at the given
-// Workers, from pump, fill and compact. fill reads r from pump only while the
-// window holds less than the lead, maxSegment + 2 × Workers MiB, past the
-// chain's read position, and from the chain only when it holds nothing past
-// it. compact keeps chainSlack bytes behind that position and moves the
-// window down once the bytes before them are at least 1 MiB and half the
-// window, so the window is then under twice what it keeps, or 1 MiB more:
-// under 2 × (lead + chainSlack). One read then adds at most fillSize.
-func WindowBound(workers int) int {
-	return 2*(maxSegment+workers<<21+chainSlack) + fillSize
-}
+// WindowBound is the most the window's capacity reaches at the given Workers
+// (windowBound).
+func WindowBound(workers int) int { return windowBound(workers) }
 
 // RaceEnabled reports whether the race detector is on, for tests that cut
 // their work under it.

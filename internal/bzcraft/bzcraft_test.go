@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"math/rand/v2"
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -91,6 +92,44 @@ func runBlocks(t *testing.T, sizes []int, min int) {
 		if n > SpecCap || (n < min && i < len(sizes)-1) {
 			t.Errorf("block %d of %d: %d bytes, want %d to %d", i, len(sizes), n, min, SpecCap)
 		}
+	}
+}
+
+// TestRepeated pads level1.bz2's one block to 64 KiB, three times: it decodes
+// through compress/bzip2 to three copies of level1's plaintext, each copy is
+// 64 KiB, or one byte less, and each has its block where level1 has it.
+func TestRepeated(t *testing.T) {
+	stream, err := os.ReadFile("../../testdata/bzip2/level1.bz2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := io.ReadAll(bzip2.NewReader(bytes.NewReader(stream)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const unit = 64 << 10
+	in, err := Repeated(stream, unit, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(bzip2.NewReader(bytes.NewReader(in)))
+	if err != nil || !bytes.Equal(got, bytes.Repeat(plain, 3)) {
+		t.Fatalf("%d bytes, error %v; want 3 copies of level1's %d", len(got), err, len(plain))
+	}
+	if n := len(in) / 3; len(in)%3 != 0 || n < unit-1 || n > unit {
+		t.Errorf("%d bytes, want 3 copies of %d or %d", len(in), unit-1, unit)
+	}
+	starts, _, _, err := Blocks(in)
+	if err != nil || len(starts) != 3 {
+		t.Fatalf("blocks at %v, error %v; want 3", starts, err)
+	}
+	for i, s := range starts {
+		if want := uint64(i*len(in)/3*8 + 32); s != want {
+			t.Errorf("block %d at bit %d, want %d", i, s, want)
+		}
+	}
+	if _, err := Repeated(append(bytes.Clone(stream), stream...), unit, 1); err == nil {
+		t.Error("two streams: no error")
 	}
 }
 
