@@ -47,6 +47,7 @@ var ErrMalformed = errors.New(…)
 var ErrTooLarge = errors.New(…)
 var ErrTruncated = errors.New(…)
 func Decompress(r io.Reader) (io.Reader, error)
+func DecompressWith(r io.Reader, opts DecompressOptions) (io.Reader, error)
 func Records(r io.Reader) iter.Seq2[Record, error]
 func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error]
 func Routes(records iter.Seq2[Record, error]) iter.Seq2[Route, error]
@@ -72,6 +73,9 @@ type BGP4MPStateChange struct
 	AS4 bool
 	Old State
 	New State
+type DecompressOptions struct
+	Workers int
+	Context context.Context
 type Header struct
 	Time time.Time
 	Type Type

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -55,6 +56,53 @@ func TestRealData(t *testing.T) {
 			realDataFile(t, bgpdump, path)
 		})
 	}
+	// decompress-with/<file>: DecompressWith (4 workers) yields the bytes
+	// Decompress does. One file at a time: -run 'TestRealData/decompress-with'.
+	t.Run("decompress-with", func(t *testing.T) {
+		for _, f := range files {
+			t.Run(f.name, func(t *testing.T) {
+				path := filepath.Join(dir, f.name)
+				if err := checkPinned(path, f); err != nil {
+					t.Fatalf("%v (rerun scripts/fetch-mrt.sh)", err)
+				}
+				want, wn := decompressedSum(t, path, false)
+				got, gn := decompressedSum(t, path, true)
+				if got != want || gn != wn {
+					t.Errorf("DecompressWith: %d bytes, sha256 %x; Decompress: %d bytes, sha256 %x", gn, got, wn, want)
+				}
+			})
+		}
+	})
+}
+
+// decompressedSum returns the SHA-256 and length of the decompressed file,
+// through DecompressWith (4 workers) when with is set, else Decompress.
+func decompressedSum(t *testing.T, path string, with bool) ([sha256.Size]byte, int64) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var r io.Reader
+	if with {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		r, err = mrt.DecompressWith(f, mrt.DecompressOptions{Workers: 4, Context: ctx})
+	} else {
+		r, err = mrt.Decompress(f)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, r)
+	if err != nil {
+		t.Fatalf("reading %s (with=%v): %v", path, with, err)
+	}
+	var sum [sha256.Size]byte
+	copy(sum[:], h.Sum(nil))
+	return sum, n
 }
 
 // manifestFile is one line of MANIFEST: name, URL, size, sha256.

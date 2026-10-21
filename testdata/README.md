@@ -17,6 +17,16 @@
   committed fixture is bzip2; its decompressed bytes are the fixture's (slice
   sha256 8b74dfbdc55bfbead57e7fde987de4a575cf08a74f5556c977e69e8dc9d9e5ef),
   which the benchmark checks.
+- `bzip2/`: inputs for `internal/bzip2`'s tests and `FuzzBzip2`, made on
+  2026-10-20 with the `bzip2` command (bzip2 1.0.8), run from `testdata/`:
+  - `one-byte.bz2`: `printf A | bzip2 -9 > bzip2/one-byte.bz2`, the single
+    byte `A` (sha256 559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd);
+  - `level1.bz2`: `bzip2 -1 -c synthetic/state-changes.mrt > bzip2/level1.bz2`,
+    one level-1 block; its decompressed bytes are `state-changes.mrt` as it
+    was then (sha256 283d19fb5ad018596120cfdea3d831f513c31db929890c931f83d41c99a55e7f);
+  - `multi-stream.bz2`: `cat bzip2/level1.bz2 bzip2/one-byte.bz2 >
+    bzip2/multi-stream.bz2`, two streams, of levels 1 and 9 (decompressed
+    sha256 e0c6e49113f153edb51973b7abee6d51ed567688639d752188724d033e7bac30).
 
 ## Real fixtures
 

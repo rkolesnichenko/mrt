@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -465,12 +466,12 @@ func (failWriter) Write([]byte) (int, error) { return 0, errors.New("disk full")
 // countReader counts the bytes read through it.
 type countReader struct {
 	r io.Reader
-	n int
+	n atomic.Int64
 }
 
 func (c *countReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
-	c.n += n
+	c.n.Add(int64(n))
 	return n, err
 }
 
@@ -487,7 +488,7 @@ func TestMrtdumpWriteErrorStops(t *testing.T) {
 	if code != exitRead || strings.Count(errb.String(), "writing output: disk full") != 1 {
 		t.Errorf("exit %d, stderr %q; want %d and one write error", code, errb.String(), exitRead)
 	}
-	if cr.n > len(in)/2 {
-		t.Errorf("read %d of %d input bytes after the first failed write", cr.n, len(in))
+	if cr.n.Load() > int64(len(in)/2) {
+		t.Errorf("read %d of %d input bytes after the first failed write", cr.n.Load(), len(in))
 	}
 }

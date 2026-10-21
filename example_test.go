@@ -1,6 +1,7 @@
 package mrt_test
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/netip"
@@ -9,6 +10,34 @@ import (
 	"github.com/rkolesnichenko/mrt"
 	"github.com/rkolesnichenko/mrt/bgp"
 )
+
+// ExampleDecompressWith reads a bzip2 file with two decompression goroutines.
+// Workers > 0 needs a Context, and cancelling it on return releases the
+// goroutines if the loop stops before the end. The records are the ones
+// Decompress gives.
+func ExampleDecompressWith() {
+	f, err := os.Open("testdata/bzip2/level1.bz2")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r, err := mrt.DecompressWith(f, mrt.DecompressOptions{Workers: 2, Context: ctx})
+	if err != nil {
+		log.Fatal(err)
+	}
+	n := 0
+	for _, err := range mrt.Records(r) {
+		if err != nil {
+			log.Fatal(err)
+		}
+		n++
+	}
+	fmt.Println(n, "records")
+	// Output: 8 records
+}
 
 // ExampleRoutes reads a bzip2-compressed RouteViews updates file and prints
 // the first announcement and a count of the routes. The same code reads a RIB

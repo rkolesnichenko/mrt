@@ -11,9 +11,11 @@ package mrt_test
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -136,5 +138,50 @@ func BenchmarkBzip2(b *testing.B) {
 		if _, err := io.Copy(io.Discard, r); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// BenchmarkDecompressWith: DecompressWith (GOMAXPROCS workers) of the same
+// bzip2 file to io.Discard; compare with BenchmarkBzip2.
+func BenchmarkDecompressWith(b *testing.B) {
+	const path = "testdata/bench/rv2-updates-et.20261015.1200.bz2"
+	compressed, err := os.ReadFile(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	zf, err := os.Open("testdata/mrt/rv2-updates-et.20261015.1200.gz")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer zf.Close()
+	zr, err := gzip.NewReader(zf)
+	if err != nil {
+		b.Fatal(err)
+	}
+	want, err := io.ReadAll(zr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	run := func(w io.Writer) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		r, err := mrt.DecompressWith(bytes.NewReader(compressed), mrt.DecompressOptions{Workers: runtime.GOMAXPROCS(0), Context: ctx})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := io.Copy(w, r); err != nil {
+			b.Fatal(err)
+		}
+	}
+	var got bytes.Buffer
+	run(&got)
+	if !bytes.Equal(got.Bytes(), want) {
+		b.Fatalf("%s does not decompress to the gzip fixture's bytes", path)
+	}
+	b.SetBytes(int64(len(want)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		run(io.Discard)
 	}
 }

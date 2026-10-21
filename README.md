@@ -153,6 +153,35 @@ package decodes UPDATE messages and path attributes on their own
 (`bgp.ParseUpdate`, `bgp.Attrs.Decode`), for a later BMP or RIS Live reader to
 reuse. The exported API is listed in [api/](api/).
 
+## Faster decompression
+
+bzip2 decompression is most of a full pass over a RouteViews file, and the
+standard library's decoder is single-threaded. `mrt.DecompressWith` decodes a
+bzip2 input block by block on `Workers` goroutines and runs gzip one goroutine
+ahead of the reader; the bytes it returns are the bytes `Decompress` returns.
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel() // required if you stop reading early
+r, err := mrt.DecompressWith(f, mrt.DecompressOptions{Workers: 4, Context: ctx})
+if err != nil {
+	log.Fatal(err)
+}
+for route, err := range mrt.Routes(mrt.Records(r)) {
+	// ...
+}
+```
+
+`Context` is required when `Workers > 0`; cancel it when you stop before the
+end, or the goroutines stay until you do. On the machine below (Apple M3 Max,
+Go 1.27.2, `GOMAXPROCS=4`, `Workers: 4`) bzip2 decompression of route-views2's
+RIB took 20.59 s with `Decompress` and 5.39 s with `DecompressWith` (3.82x;
+`.data/decompress-v03-gate-bzip2-fix.log`). gzip is a smaller gain: a full
+`Routes` pass over RIPE's rrc00 bview took 13.94 s and 9.51 s (1.47x), while
+copying the bytes alone got slower, 5.68 s and 6.81 s (0.83x;
+`.data/decompress-v03-gate-gzip.log`). Other `Workers`, other machines and
+resident memory are not measured. `mrtdump` uses it.
+
 ## mrtdump
 
 `mrtdump [-m | -M] [-l] [-u] FILE...` prints what `bgpdump -m -l -u` prints,
@@ -221,3 +250,7 @@ is attributed in [testdata/README.md](testdata/README.md). RIPE RIS files are
 not redistributed: RIPE NCC's terms do not permit it, so no RIS bytes are in
 the repository. RIS files are read only by the opt-in real-data run, which
 downloads them at test time.
+
+`internal/bzip2` is a copy of Go 1.27.2's `compress/bzip2` (BSD-3, The Go
+Authors) with block-level entry points added; its licence is in
+[internal/bzip2/LICENSE](internal/bzip2/LICENSE).
