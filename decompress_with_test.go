@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/rkolesnichenko/mrt"
+	"github.com/rkolesnichenko/mrt/internal/bzcraft"
 	"github.com/rkolesnichenko/mrt/internal/bzip2"
 )
 
@@ -567,7 +568,7 @@ func TestDecompressWithFalseCandidates(t *testing.T) {
 // TotalAlloc and time.
 func TestDecompressWithEndMagicFlood(t *testing.T) {
 	const workers = 4
-	in := endMagicFlood(workers)
+	in := bzcraft.EndMagicFlood(workers)
 	want, wantErr := decompressed(bytes.NewReader(in), 0, false)
 	if wantErr == nil || !strings.Contains(wantErr.Error(), "file checksum mismatch") {
 		t.Fatalf("Decompress: %d bytes, error %v; want a file checksum mismatch", len(want), wantErr)
@@ -596,13 +597,6 @@ func TestDecompressWithEndMagicFlood(t *testing.T) {
 	if took >= 2*time.Second {
 		t.Errorf("took %v, want less than 2 s", took)
 	}
-}
-
-// endMagicFlood is "BZh9" and then end magics, past the look-ahead of the
-// given Workers: one 8 MiB segment and 1 MiB per job outstanding, plus 1 MiB.
-func endMagicFlood(workers int) []byte {
-	end := []byte{0x17, 0x72, 0x45, 0x38, 0x50, 0x90} // the end magic's 48 bits
-	return append([]byte("BZh9"), bytes.Repeat(end, (8+2*workers+1)<<20/6)...)
 }
 
 // goroutineBaseline is the goroutine count once the runtime has settled
@@ -832,18 +826,6 @@ const zeros1 = "testdata/bzip2/zeros/zeros-1.bz2"
 // zeros1Blocks are the decoded sizes of zeros1's blocks, in order.
 var zeros1Blocks = append(slices.Repeat([]int{5_099_235}, 11), 3_908_415)
 
-// sparseBlockMagics is "BZh9" and then, to 32 MiB, a block magic followed by
-// 200 KiB of zeros, repeated: candidates whose segments are 200 KiB each.
-func sparseBlockMagics() []byte {
-	magic := []byte{0x31, 0x41, 0x59, 0x26, 0x53, 0x59} // the block magic's 48 bits
-	unit := append(magic, make([]byte, 200<<10)...)
-	in := []byte("BZh9")
-	for len(in) < 32<<20 {
-		in = append(in, unit...)
-	}
-	return in[:32<<20]
-}
-
 // TestDecompressWithBounds is v0.3.1 design §5.3 on what the speculation
 // holds: after every dispatch, the segment copies of the outstanding jobs are
 // at most 32 MiB in all, and at most 2 × Workers jobs are outstanding. The
@@ -861,7 +843,7 @@ func TestDecompressWithBounds(t *testing.T) {
 	if mrt.RaceEnabled {
 		workers = []int{1, 4}
 	}
-	inputs := map[string][]byte{"end-magic-flood": endMagicFlood(4), "sparse-block-magics": sparseBlockMagics()}
+	inputs := map[string][]byte{"end-magic-flood": bzcraft.EndMagicFlood(4), "sparse-block-magics": bzcraft.SparseBlockMagics()}
 	for _, p := range []string{zeros1, benchBz2, "testdata/bzip2/level1.bz2", "testdata/bzip2/multi-stream.bz2"} {
 		b, err := os.ReadFile(p)
 		if err != nil {
@@ -943,6 +925,133 @@ func TestDecompressWithHeldBudget(t *testing.T) {
 	}
 	if calls < 2 {
 		t.Errorf("%d dispatches, want at least 2", calls)
+	}
+}
+
+// TestDecompressWithResultsCounted reads the bench file at Workers 4 with the
+// Results hook, which counts the bytes of results workers have sent and the
+// chain has not received: some call is over 0, none under 0, and the last,
+// after EOF, is 0. The count is not kept after stop, so a zombie's result
+// would be left in it; the bench file has none (no candidate is discarded),
+// which the test checks first. Not parallel: it counts hook calls across
+// goroutines.
+func TestDecompressWithResultsCounted(t *testing.T) {
+	in, err := os.ReadFile(benchBz2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, wantErr := decompressed(bytes.NewReader(in), 0, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var calls, over, under int
+	var last, peak int64
+	results := func(held int64) { // in any goroutine
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		last, peak = held, max(peak, held)
+		switch {
+		case held > 0:
+			over++
+		case held < 0:
+			under++
+		}
+	}
+	discarded := 0
+	r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: 4, Context: ctx},
+		mrt.Bzip2Hooks{Results: results, Discarded: func(uint64) { discarded++ }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, gotErr := io.ReadAll(r)
+	checkSame(t, "workers 4", got, gotErr, want, wantErr)
+	if discarded != 0 {
+		t.Fatalf("%d candidates discarded; the last count is 0 only without zombies", discarded)
+	}
+	mu.Lock() // the workers have exited: EOF stopped them
+	defer mu.Unlock()
+	t.Logf("%d calls, peak %d bytes", calls, peak)
+	if over == 0 {
+		t.Errorf("%d calls, none with results held", calls)
+	}
+	if under != 0 {
+		t.Errorf("%d of %d calls under 0", under, calls)
+	}
+	if last != 0 {
+		t.Errorf("last call %d bytes after EOF, want 0", last)
+	}
+}
+
+// TestDecompressWithWindowCounted reads the bench file and zeros1 at
+// Workers 4 with the Window hook: it is called, and the window is never over
+// what fill and compact allow (WindowBound).
+func TestDecompressWithWindowCounted(t *testing.T) {
+	for _, p := range []string{benchBz2, zeros1} {
+		in, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const workers = 4
+		ctx, cancel := context.WithCancel(context.Background())
+		calls, peak := 0, 0
+		window := func(n int) { // in this goroutine, which reads
+			calls++
+			peak = max(peak, n)
+		}
+		r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: workers, Context: ctx},
+			mrt.Bzip2Hooks{Window: window})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = io.ReadAll(r)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := filepath.Base(p)
+		t.Logf("%s: %d calls, peak %d bytes", name, calls, peak)
+		if calls == 0 {
+			t.Errorf("%s: Window never called", name)
+		}
+		if bound := mrt.WindowBound(workers); peak > bound {
+			t.Errorf("%s: window up to %d bytes, over %d", name, peak, bound)
+		}
+	}
+}
+
+// TestDecompressWithNoHooksNoCount: a reader from DecompressWith has no
+// results counter, nor one with hooks other than Results; one with Results
+// set has one. No reader is read, so none starts a worker.
+func TestDecompressWithNoHooksNoCount(t *testing.T) {
+	in, err := os.ReadFile("testdata/bzip2/level1.bz2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opts := mrt.DecompressOptions{Workers: 2, Context: ctx}
+	for _, c := range []struct {
+		name  string
+		hooks *mrt.Bzip2Hooks
+		want  bool
+	}{
+		{"no hooks", nil, false},
+		{"Window and Held", &mrt.Bzip2Hooks{Window: func(int) {}, Held: func(int64, int) {}}, false},
+		{"Results", &mrt.Bzip2Hooks{Results: func(int64) {}}, true},
+	} {
+		var r io.Reader
+		if c.hooks == nil {
+			r, err = mrt.DecompressWith(bytes.NewReader(in), opts)
+		} else {
+			r, err = mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), opts, *c.hooks)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := mrt.CountsResults(r); got != c.want {
+			t.Errorf("%s: counts results %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 
@@ -1037,13 +1146,50 @@ func TestDecompressWithCappedDamaged(t *testing.T) {
 // TestDecompressWithCancelStartsNoJob is v0.3.1 design §5.4: no worker starts
 // a job after a cancel. zeros1 at Workers 2 queues jobs behind the first two,
 // whose starts are held until after the cancel. Then the read fails with
-// context.Canceled, no third job has started, and every goroutine ends. Not
-// parallel: it counts goroutines.
+// context.Canceled, no third job has started, and every goroutine ends. The
+// bzcraft inputs that load the bound's terms (skipped without the bzip2
+// command) are read likewise: ResultsLoad and UnderCapBlocks at Workers 2,
+// SegmentLoad at Workers 4, whose lead over the chain holds both its 7.4 MB
+// segments (at Workers 2 only the first is dispatched before the chain waits
+// on it). Not parallel: it counts goroutines.
 func TestDecompressWithCancelStartsNoJob(t *testing.T) {
-	in, err := os.ReadFile(zeros1)
+	t.Run("zeros-1", func(t *testing.T) {
+		in, err := os.ReadFile(zeros1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cancelStartsNoJob(t, in, 2)
+	})
+	for _, c := range []struct {
+		name    string
+		build   func() ([]byte, error)
+		workers int
+	}{
+		{"results-load", bzcraft.ResultsLoad, 2},
+		{"under-cap-blocks", bzcraft.UnderCapBlocks, 2},
+		{"segment-load", bzcraft.SegmentLoad, 4},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cancelStartsNoJob(t, craftedInput(t, c.build), c.workers)
+		})
+	}
+}
+
+// craftedInput returns the bzcraft input build makes, skipping the test
+// without the bzip2 command.
+func craftedInput(t testing.TB, build func() ([]byte, error)) []byte {
+	t.Helper()
+	in, err := build()
+	if errors.Is(err, bzcraft.ErrNoBzip2) {
+		t.Skip(err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
+	return in
+}
+
+func cancelStartsNoJob(t *testing.T, in []byte, workers int) {
 	base := goroutineBaseline()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1059,7 +1205,7 @@ func TestDecompressWithCancelStartsNoJob(t *testing.T) {
 			<-gate
 		}
 	}
-	r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: 2, Context: ctx},
+	r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: workers, Context: ctx},
 		mrt.Bzip2Hooks{Started: started})
 	if err != nil {
 		t.Fatal(err)

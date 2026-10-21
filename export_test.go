@@ -10,14 +10,20 @@ import "io"
 // segment copies the outstanding jobs hold and their count. These run in the
 // goroutine that calls Read. Started is called by a worker with the block it
 // is about to decode, once it has checked for stop; it runs in the worker's
-// goroutine. Any of them may be nil. SegmentBudget, if not 0, replaces the
-// 32 MiB budget of segment copies.
+// goroutine. Results is called with the bytes of the results workers have
+// sent and the chain has not received, after every change, from any
+// goroutine, and not once the reader has stopped. Window is called with the window's
+// length after every fill and compact, in the goroutine that calls Read. Any
+// of them may be nil. SegmentBudget, if not 0, replaces the 32 MiB budget of
+// segment copies.
 type Bzip2Hooks struct {
 	Extra         func(lo, hi uint64) []uint64
 	Discarded     func(bit uint64)
 	Took          func(bit uint64, speculative bool)
 	Held          func(segBytes int64, outstanding int)
 	Started       func(bit uint64)
+	Results       func(held int64)
+	Window        func(bytes int)
 	SegmentBudget int64
 }
 
@@ -26,7 +32,7 @@ type Bzip2Hooks struct {
 func DecompressWithBzip2Hooks(r io.Reader, opts DecompressOptions, h Bzip2Hooks) (io.Reader, error) {
 	return decompressWith(r, opts, &bzip2Hooks{
 		extra: h.Extra, discarded: h.Discarded, took: h.Took, held: h.Held, started: h.Started,
-		budget: h.SegmentBudget,
+		results: h.Results, window: h.Window, budget: h.SegmentBudget,
 	})
 }
 
@@ -45,6 +51,25 @@ const SpecCap = specCap
 func HoldsDrainedBlock(r io.Reader) bool {
 	z, ok := r.(*parallelBzip2)
 	return ok && len(z.data) == 0 && z.data != nil
+}
+
+// CountsResults reports whether r, a parallel bzip2 reader, counts the bytes
+// of results held (only with the Results hook set).
+func CountsResults(r io.Reader) bool {
+	z, ok := r.(*parallelBzip2)
+	return ok && z.results != nil
+}
+
+// WindowBound is the most bytes the window holds (its length) at the given
+// Workers, from pump, fill and compact. fill reads r from pump only while the
+// window holds less than the lead, maxSegment + 2 × Workers MiB, past the
+// chain's read position, and from the chain only when it holds nothing past
+// it. compact keeps chainSlack bytes behind that position and moves the
+// window down once the bytes before them are at least 1 MiB and half the
+// window, so the window is then under twice what it keeps, or 1 MiB more:
+// under 2 × (lead + chainSlack). One read then adds at most fillSize.
+func WindowBound(workers int) int {
+	return 2*(maxSegment+workers<<21+chainSlack) + fillSize
 }
 
 // RaceEnabled reports whether the race detector is on, for tests that cut
