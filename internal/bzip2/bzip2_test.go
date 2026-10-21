@@ -473,15 +473,20 @@ func TestSpeculativeBlockCap(t *testing.T) {
 			t.Errorf("block %d at cap 4 MiB: %d bytes, error %v; want %d bytes", i, len(data), err, lastBlock)
 		}
 		// The call above has allocated the Decoder's block buffer. A capped
-		// call holds the cap plus one chunk at most, and the Decoder keeps
-		// two chunks, so a warm one allocates under 4 MiB + 1 MiB.
+		// call stops filling chunks at the one that passes the cap, and the
+		// Decoder keeps two chunks, so a warm call allocates under the cap
+		// plus one chunk. At 2 MiB that is one new chunk (a call that filled
+		// the block's five chunks first would allocate three): this pins that
+		// the stop is inside the loop.
 		if i < 11 {
-			var before, after runtime.MemStats
-			runtime.ReadMemStats(&before)
-			d.SpeculativeBlock(at(i), level, cap4)
-			runtime.ReadMemStats(&after)
-			if alloc := after.TotalAlloc - before.TotalAlloc; alloc >= cap4+1<<20 {
-				t.Errorf("block %d: a capped call allocated %d bytes, want under %d", i, alloc, cap4+1<<20)
+			for _, c := range []struct{ maxOut, limit uint64 }{{cap4, cap4 + 1<<20}, {2 << 20, 2 << 20}} {
+				var before, after runtime.MemStats
+				runtime.ReadMemStats(&before)
+				d.SpeculativeBlock(at(i), level, int(c.maxOut))
+				runtime.ReadMemStats(&after)
+				if alloc := after.TotalAlloc - before.TotalAlloc; alloc >= c.limit {
+					t.Errorf("block %d: a call capped at %d allocated %d bytes, want under %d", i, c.maxOut, alloc, c.limit)
+				}
 			}
 		}
 
