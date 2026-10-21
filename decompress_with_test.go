@@ -926,6 +926,38 @@ func TestDecompressWithHeldBudget(t *testing.T) {
 	}
 }
 
+// TestDecompressWithDropsDrainedBlock: once a Read has returned all of a
+// block, the reader no longer refers to its bytes, so they are not live while
+// the next block is decoded. The bench file's first block is taken from a
+// worker, zeros1's is decoded by the chain; a Read with a buffer larger than
+// the block returns it all.
+func TestDecompressWithDropsDrainedBlock(t *testing.T) {
+	t.Parallel()
+	for _, p := range []string{benchBz2, zeros1} {
+		t.Run(filepath.Base(p), func(t *testing.T) {
+			in, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			r, err := mrt.DecompressWith(bytes.NewReader(in), mrt.DecompressOptions{Workers: 2, Context: ctx})
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, err := r.Read(make([]byte, 8<<20))
+			if err != nil || n == 0 {
+				t.Fatalf("first Read: %d bytes, error %v", n, err)
+			}
+			if mrt.HoldsDrainedBlock(r) {
+				t.Errorf("after a Read returned the first block's %d bytes, the reader still holds them", n)
+			}
+			cancel()
+			r.Read(nil) // returns Context.Err() once the workers have exited
+		})
+	}
+}
+
 // TestDecompressWithCapsZeroBlocks reads zeros1 at Workers 4: a block that
 // decodes to more than the speculative cap is decoded by the chain, not
 // taken from a worker, and the output is whole.

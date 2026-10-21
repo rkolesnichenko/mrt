@@ -40,6 +40,13 @@ func DecompressWithHooks(r io.Reader, opts DecompressOptions,
 // SpecCap is the most output a speculative decode makes.
 const SpecCap = specCap
 
+// HoldsDrainedBlock reports whether r, a parallel bzip2 reader, still refers
+// to the array of a block whose bytes Read has all returned.
+func HoldsDrainedBlock(r io.Reader) bool {
+	z, ok := r.(*parallelBzip2)
+	return ok && len(z.data) == 0 && z.data != nil
+}
+
 // RaceEnabled reports whether the race detector is on, for tests that cut
 // their work under it.
 const RaceEnabled = raceEnabled

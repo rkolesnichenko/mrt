@@ -190,6 +190,9 @@ func (z *parallelBzip2) Read(buf []byte) (int, error) {
 		if len(z.data) > 0 {
 			n := copy(buf, z.data)
 			z.data = z.data[n:]
+			if len(z.data) == 0 {
+				z.data = nil // so the block is not live while the next is decoded
+			}
 			if z.errNow {
 				z.data = nil
 				return n, z.err
