@@ -1032,7 +1032,11 @@ func TestDecompressWithWindowCapBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in, err := bzcraft.Repeated(stream, 2<<20, 19)
+	copies := 19
+	if mrt.RaceEnabled {
+		copies = 5 // 19 copies take 19 s under -race; the bound holds for any
+	}
+	in, err := bzcraft.Repeated(stream, 2<<20, copies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1205,6 +1209,9 @@ func TestDecompressWithCancelStartsNoJob(t *testing.T) {
 		{"segment-load", bzcraft.SegmentLoad, 4},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			if mrt.RaceEnabled && c.name != "under-cap-blocks" {
+				t.Skip("the large crafted input takes 4 s under -race; the other runs keep it")
+			}
 			cancelStartsNoJob(t, craftedInput(t, c.build), c.workers)
 		})
 	}

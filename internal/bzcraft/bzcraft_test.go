@@ -66,9 +66,13 @@ func TestBuilt(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			in := built(t, c.build)
-			n, err := io.Copy(io.Discard, bzip2.NewReader(bytes.NewReader(in)))
-			if err != nil || n != int64(c.size) {
-				t.Fatalf("compress/bzip2: %d bytes, error %v; want %d", n, err, c.size)
+			n := int64(c.size)
+			if !raceEnabled { // the decode is 214 MB in all, 57 s under -race
+				var err error
+				n, err = io.Copy(io.Discard, bzip2.NewReader(bytes.NewReader(in)))
+				if err != nil || n != int64(c.size) {
+					t.Fatalf("compress/bzip2: %d bytes, error %v; want %d", n, err, c.size)
+				}
 			}
 			if len(in) >= 15_000_000 {
 				t.Errorf("%d bytes, want under 15 MB", len(in))
