@@ -1034,7 +1034,7 @@ func TestDecompressWithWindowCapBounded(t *testing.T) {
 	}
 	copies := 19
 	if mrt.RaceEnabled {
-		copies = 5 // 19 copies take 19 s under -race; the bound holds for any
+		copies = 5 // 19 copies take 19 s under -race; at 5 it checks the hook path, not the bound
 	}
 	in, err := bzcraft.Repeated(stream, 2<<20, copies)
 	if err != nil {
@@ -1432,8 +1432,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // decompressed is measured by what it has taken from r: Decompress of those
 // input bytes gives at least the bytes Read returned plus a full queue, and,
 // without the up to 4 KiB DecompressWith's bufio.Reader holds unread, at most
-// that plus one chunk (or flate's 32 KiB window, which it decodes ahead of
-// what it returns, where that is larger). It is checked after 200 ms with no
+// that plus flate's 32 KiB window, which it decodes ahead of what it returns. It is checked after 200 ms with no
 // Read, and again after reading 512 KiB. With no Read, the readahead has also
 // taken at most half of the input, which TestMrtdumpWriteErrorStops needs.
 // Not parallel: it times.
@@ -1470,7 +1469,7 @@ func TestDecompressWithGzipBounded(t *testing.T) {
 			t.Errorf("%s: %d input bytes taken, which decode to %d bytes; want a full queue ahead, at least %d",
 				what, n, got, want)
 		}
-		ahead := mrt.GzipQueueBytes + max(mrt.GzipChunkBytes, window)
+		ahead := mrt.GzipQueueBytes + window
 		if got := decodable(n - bufioSize); got > returned+ahead {
 			t.Errorf("%s: %d input bytes taken, of which the first %d decode to %d bytes; want at most %d",
 				what, n, n-bufioSize, got, returned+ahead)

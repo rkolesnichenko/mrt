@@ -75,8 +75,9 @@ var (
 // 97.4 MB + Workers × (3.6 MB + 4 × 2 MiB + 5 MiB) live: about 148 MB plus
 // 17 MB per worker. The Go heap adds GC headroom on top: at the default
 // GOGC, roughly twice the live bytes. While the compressed window grows, the
-// old array is live until the copy ends: both arrays hold 142.7 MB at 14
-// workers, measured in its last growth step (CHANGELOG.md, v0.3.2).
+// old array is live until the copy ends, beyond the figure above: 67.1 MB at
+// 14 workers, 142.7 MB for both arrays in the last growth step, measured
+// (CHANGELOG.md, v0.3.2).
 //
 // r is read by the returned reader: for gzip by its goroutine, for bzip2
 // only by its Read. So r must not be read by anything else once

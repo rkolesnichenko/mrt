@@ -35,7 +35,7 @@
     `internal/bzip2` and of `DecompressWith` read zeros-1 by name.
   - `zeros/zeros-9.bz2`: `head -c 465000000 /dev/zero | bzip2 -9 > bzip2/zeros/zeros-9.bz2`
     (made 2026-10-21), 369 bytes, 11 level-9 blocks of zeros (the largest
-    45,899,235 bytes), for the v0.3.1 memory gate only; no `go test` decodes it.
+    45,899,235 bytes), for the v0.3.1 memory gate only; no default `go test` decodes it.
 
 ## Real fixtures
 
