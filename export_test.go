@@ -64,6 +64,23 @@ func CountsResults(r io.Reader) bool {
 // (windowBound).
 func WindowBound(workers int) int { return windowBound(workers) }
 
+// WindowGrowBound is the most the window's two arrays hold while grow copies
+// the window into a larger one at the given Workers: the largest capacity
+// grow reaches below windowBound, plus windowBound. It runs grow itself, from
+// an empty window, each time one byte short of room for a read, as fill
+// finds it when it grows (a read adds at most fillSize), so the chain is the
+// one grow makes.
+func WindowGrowBound(workers int) int {
+	z := &parallelBzip2{workers: workers}
+	bound, prev := windowBound(workers), 0
+	for cap(z.win) < bound {
+		prev = cap(z.win)
+		z.win = z.win[:max(cap(z.win)-fillSize+1, 0)]
+		z.grow()
+	}
+	return prev + cap(z.win)
+}
+
 // RaceEnabled reports whether the race detector is on, for tests that cut
 // their work under it.
 const RaceEnabled = raceEnabled
