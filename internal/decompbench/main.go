@@ -21,10 +21,24 @@
 // that is at least twice the largest block over all files and at least 2 MiB
 // (the v0.3.1 design §5.1 sizes the parallel reader's speculative cap from
 // it). It exits 1 if a file fails to read.
+//
+//	go run ./internal/decompbench -mem [-crafted] -workers N FILE...
+//
+// With -mem it reads each file once with DecompressWith into io.Discard while
+// a goroutine samples the runtime/metrics value /memory/classes/heap/objects:bytes
+// every 2 ms. It prints the heap before the read (after a GC) as "baseline", the
+// highest sample as "peak" and the growth over the baseline, in bytes. With
+// -crafted it adds two inputs built in memory, the same as decompress_with_test.go
+// builds them: "end-magic-flood" (BZh9 and then end magics, past the look-ahead
+// of the given workers) and "sparse-block-magics" (32 MiB, a block magic and
+// 200 KiB of zeros repeated). A read error on a crafted input is reported, not
+// a failure. It exits 1 if a FILE fails to open. The sampled peak is a lower
+// bound of the true peak (a 2 ms grid).
 package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -35,6 +49,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"runtime/metrics"
+	"sync"
 	"time"
 
 	"github.com/rkolesnichenko/mrt"
@@ -44,7 +60,12 @@ import (
 func main() {
 	workers := flag.Int("workers", runtime.GOMAXPROCS(0), "DecompressWith's Workers")
 	blocks := flag.Bool("blocks", false, "print the decoded block sizes of each file, and the speculative cap")
+	memMode := flag.Bool("mem", false, "sample the heap while reading each file once with DecompressWith")
+	crafted := flag.Bool("crafted", false, "with -mem: add the end-magic flood and sparse block magics")
 	flag.Parse()
+	if *memMode {
+		os.Exit(memRun(flag.Args(), *workers, *crafted))
+	}
 	if flag.NArg() == 0 || *workers < 1 {
 		fmt.Fprintln(os.Stderr, "usage: decompbench -workers N FILE... | decompbench -blocks FILE...")
 		os.Exit(2)
@@ -232,3 +253,98 @@ func bench(p string, workers int) error {
 }
 
 func mbps(n int64, d time.Duration) float64 { return float64(n) / 1e6 / d.Seconds() }
+
+// memRun is the -mem mode (see the package comment). It returns the exit
+// status.
+func memRun(paths []string, workers int, crafted bool) int {
+	fmt.Printf("go %s GOMAXPROCS %d NumCPU %d GOMEMLIMIT %d workers %d\n",
+		runtime.Version(), runtime.GOMAXPROCS(0), runtime.NumCPU(), debug.SetMemoryLimit(-1), workers)
+	status := 0
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			fmt.Printf("%s: FAIL: %v\n", filepath.Base(p), err)
+			status = 1
+			continue
+		}
+		memOne(filepath.Base(p), f, workers)
+		f.Close()
+	}
+	if crafted {
+		memOne("end-magic-flood", bytes.NewReader(endMagicFlood(workers)), workers)
+		memOne("sparse-block-magics", bytes.NewReader(sparseBlockMagics()), workers)
+	}
+	return status
+}
+
+// heapSample reads /memory/classes/heap/objects:bytes.
+func heapSample(s []metrics.Sample) uint64 {
+	metrics.Read(s)
+	return s[0].Value.Uint64()
+}
+
+// memOne reads in once with DecompressWith into io.Discard, sampling the heap
+// every 2 ms, and prints the baseline and the peak.
+func memOne(name string, in io.Reader, workers int) {
+	s := []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}}
+	runtime.GC()
+	base := heapSample(s)
+	var peak uint64
+	stop, done := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	go func() {
+		defer close(done)
+		sm := []metrics.Sample{{Name: s[0].Name}}
+		t := time.NewTicker(2 * time.Millisecond)
+		defer t.Stop()
+		for {
+			v := heapSample(sm)
+			mu.Lock()
+			peak = max(peak, v)
+			mu.Unlock()
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	start := time.Now()
+	var n int64
+	r, err := mrt.DecompressWith(in, mrt.DecompressOptions{Workers: workers, Context: ctx})
+	if err == nil {
+		n, err = io.Copy(io.Discard, r)
+	}
+	cancel()
+	took := time.Since(start)
+	close(stop)
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	res := "ok"
+	if err != nil {
+		res = "error: " + err.Error()
+	}
+	fmt.Printf("%s workers %d out %d took %.2fs baseline %d peak %d growth %d (%.1f MB) result %s\n",
+		name, workers, n, took.Seconds(), base, peak, int64(peak)-int64(base), float64(int64(peak)-int64(base))/1e6, res)
+}
+
+// endMagicFlood is "BZh9" and then end magics, past the look-ahead of the
+// given workers (the same as decompress_with_test.go's input).
+func endMagicFlood(workers int) []byte {
+	end := []byte{0x17, 0x72, 0x45, 0x38, 0x50, 0x90} // the end magic's 48 bits
+	return append([]byte("BZh9"), bytes.Repeat(end, (8+2*workers+1)<<20/6)...)
+}
+
+// sparseBlockMagics is "BZh9" and then, to 32 MiB, a block magic followed by
+// 200 KiB of zeros, repeated (the same as decompress_with_test.go's input).
+func sparseBlockMagics() []byte {
+	magic := []byte{0x31, 0x41, 0x59, 0x26, 0x53, 0x59} // the block magic's 48 bits
+	unit := append(magic, make([]byte, 200<<10)...)
+	in := []byte("BZh9")
+	for len(in) < 32<<20 {
+		in = append(in, unit...)
+	}
+	return in[:32<<20]
+}
