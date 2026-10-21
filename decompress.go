@@ -46,8 +46,11 @@ const (
 	// gzipQueueBytes is the most decompressed output the gzip readahead
 	// holds that Read has not returned (v0.3 design §6.3).
 	gzipQueueBytes = 256 << 10
-	// gzipChunkBytes is the size of one chunk of the queue.
-	gzipChunkBytes = 32 << 10
+	// gzipChunkBytes is the size of one chunk of the queue. Handing a chunk
+	// to a Read that waits for it wakes a thread, so the chunks are large and
+	// few: two. With 32 KiB chunks a reader that does little per byte was
+	// about 9% slower than Decompress (v0.3.2, .data/v032-diagnosis.md).
+	gzipChunkBytes = 128 << 10
 )
 
 var (

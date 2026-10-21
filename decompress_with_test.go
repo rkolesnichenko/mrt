@@ -1298,6 +1298,28 @@ func TestDecompressWithGzipBounded(t *testing.T) {
 	check("after reading 512 KiB", 512<<10)
 }
 
+// TestDecompressWithGzipQueue pins the readahead's queue: 256 KiB in
+// GzipQueueBytes/GzipChunkBytes chunks of GzipChunkBytes, which are all the
+// memory it holds, so the output not yet returned is at most 256 KiB. The
+// chunks are 128 KiB: each one costs a goroutine wake-up, and at 32 KiB those
+// made mrtcut -count 9.5% slower than Decompress on a 4 GB bview
+// (.data/v032-diagnosis.md). At least two, so the goroutine fills one while
+// Read returns the other.
+func TestDecompressWithGzipQueue(t *testing.T) {
+	if mrt.GzipQueueBytes != 256<<10 {
+		t.Errorf("queue of %d bytes, want 256 KiB", mrt.GzipQueueBytes)
+	}
+	if mrt.GzipChunkBytes != 128<<10 {
+		t.Errorf("chunks of %d bytes, want 128 KiB", mrt.GzipChunkBytes)
+	}
+	if mrt.GzipQueueBytes%mrt.GzipChunkBytes != 0 {
+		t.Errorf("queue of %d bytes is not a whole number of %d-byte chunks", mrt.GzipQueueBytes, mrt.GzipChunkBytes)
+	}
+	if chunks := mrt.GzipQueueBytes / mrt.GzipChunkBytes; chunks < 2 {
+		t.Errorf("%d chunks, want at least 2", chunks)
+	}
+}
+
 // TestDecompressWithGzipStops is stopsEarly and noGoroutineAfterEOF on
 // gzipFixture, whose output is more than the queue and a chunk, so the
 // readahead goroutine is still running after 10 records. Not parallel: it
