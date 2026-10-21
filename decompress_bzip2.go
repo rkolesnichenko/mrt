@@ -480,7 +480,8 @@ func bzip2Worker(jobs <-chan *bzip2Job, quit, done <-chan struct{}, started func
 // stop ends the speculation: it discards the marks, closes quit and then jobs,
 // drains the jobs no worker has taken, and waits for every worker to exit.
 // So no job a worker takes after stop is called starts, and each worker
-// finishes at most the block it is decoding. The chain is done with the input when it is called.
+// finishes at most the block it is decoding. The chain is done with the input
+// when it is called.
 func (z *parallelBzip2) stop() {
 	if z.stopped {
 		return

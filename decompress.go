@@ -65,6 +65,14 @@ var (
 // goroutine starts. Workers < 0, or Workers > 0 with a nil Context, is an
 // error.
 //
+// Before it returns, DecompressWith reads the first bytes of r and, for gzip,
+// the whole gzip header, so r must be ready to be read.
+//
+// With Workers > 0 the bzip2 reader holds at most about 32 MiB + 16 MiB +
+// 93 MB + Workers × (3.6 MB + 4 × 2 MiB + 5 MiB) live: about 143 MB plus
+// 17 MB per worker. The Go heap adds GC headroom: at the default GOGC the
+// measured peak was about 1.9 times that (v0.3.1 changelog).
+//
 // r is read by the returned reader: for gzip by its goroutine, for bzip2
 // only by its Read. So r must not be read by anything else once
 // DecompressWith has returned. Every goroutine DecompressWith starts has

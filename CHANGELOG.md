@@ -8,6 +8,78 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+v0.3.1 bounds the memory of `DecompressWith`'s parallel bzip2 reader. Figures
+come from commands run on 2026-10-21 with Go 1.27.2 on an Apple M3 Max,
+`GOMAXPROCS=4`, and name their log. Heap figures are sampled every 2 ms from
+`/memory/classes/heap/objects:bytes`, so they are estimates, and a short peak
+can be missed. The API (`api/`) is unchanged.
+
+### Changed
+
+- Speculative decodes stop filling output at `specCap`, 2 MiB. A block whose
+  output passes the cap is not kept; the reader decodes it itself when it
+  reaches it. The cap is the smallest power of two that is at least twice
+  the largest decoded block in the six real bzip2 files (981,320 bytes in
+  rv2-updates.20261020.0845; `.data/v031-blocks.log`, `cap: 2097152`).
+- The copies of compressed segments that jobs hold are limited to 32 MiB in
+  all. A job that would pass it waits.
+- The bound on what the bzip2 reader holds live is about `32 MiB + 16 MiB +
+  93 MB + Workers × (3.6 MB + 4 × 2 MiB + 5 MiB)`: about 143 MB plus 17 MB per
+  worker, 212.3 MB at 4 workers and 384.6 MB at 14. It is arithmetic
+  (`.data/v031-gate-mem.log`), and is documented on `DecompressWith`.
+- `DecompressWith` documents that it reads the first bytes of `r` and, for
+  gzip, the whole header before it returns.
+
+### Fixed
+
+- Cancelling the `Context` no longer starts a job that was queued: a worker
+  finishes at most the block it is decoding, so a cancel takes effect after
+  that block.
+
+### Measured
+
+- Memory, `testdata/bzip2/zeros-9.bz2` (465 MB out, 11 blocks), growth of
+  the heap over its baseline (`.data/v031-gate-mem.log`, section FIX ROUND 1
+  for GOGC=10):
+
+  | workers | bound | v0.3.1 GOGC=10 | v0.3.0 GOGC=10 | v0.3.1 default GC | v0.3.0 default GC |
+  |---|---|---|---|---|---|
+  | 4 | 212.3 MB | 180.2 MB | 344.1 MB | 344.4 MB | 534.2 MB |
+  | 14 | 384.6 MB | 224.3 MB | 634.7 MB | 395.8 MB | 818.0 MB |
+
+  GOGC=10 is the gate: an upper-bound estimate of the live bytes, which v0.3.1
+  holds under the bound. At the default GC the peak includes garbage not yet
+  collected (about 1.9 times the live figure at 4 workers), and passes the
+  bound at neither count. v0.3.0 has no bound; zeros-9 has 11 blocks, so its
+  held bytes here are limited by the fixture. (A file with more blocks would
+  hold more: arithmetic from the design, not measured.)
+- Crafted inputs (an end-magic flood and sparse block magics, 4 and 14
+  workers, GOGC=10): v0.3.1 stays under the bound on all of them, at most
+  70.5 MB (`.data/v031-gate-mem.log`).
+- Speed, `DecompressWith` bzip2, `Workers` 4 and 14 under `GOMAXPROCS=4`, one
+  run each (`.data/v031-gate-speed.log`): rv2-rib 5.42 s to 5.52 s at 4
+  (+1.8%) and 5.55 s to 5.66 s at 14 (+2.0%); rv6-rib 1.88 s to 1.91 s (+1.6%)
+  and 1.93 s to 1.99 s (+3.1%). v0.3.1 is 1.6-3.1% slower than v0.3.0 in all
+  four pairs, inside the 5% gate. The output hashes are identical.
+- Blocks of zeros are slower by design: on zeros-9 v0.3.1 took about 1.85 s
+  and v0.3.0 0.60 s at 4 workers, because every zero block is over the cap and
+  is decoded serially (`.data/v031-gate-mem.log`).
+- `mrtcut -count` on rrc00-bview.20261020.0800.gz, mean of 4 alternating runs:
+  v0.2.1 7.253 s, v0.3.1 7.778 s (+7.2%; `.data/v031-mrtcut-gz.log`). The
+  v0.3.1 runs alternate between about 8.3 s and 7.26 s. The outputs are
+  identical. Nothing changed in this release (the gzip readahead is
+  `DecompressWith`'s, and `mrtcut` uses it). The fix is left open: a format
+  check in `mrtcut`, or `WriteTo` on the gzip readahead.
+- Equivalence on real data: `DecompressWith` and `Decompress` give identical
+  bytes on all 19 files (`.data/realdata-decompress-v031.log`).
+- Consumer: routecheck (pins mrt v0.1.0) fails to build the same four errors in `observe/session.go` and the same vet errors against this branch and against v0.2.1 (`.data/consumer-v031.log`): the two error sets are identical, so v0.3.1 adds none.
+
+### Not measured
+
+Resident memory (RSS), other machines, worker counts other than 4 and 14,
+speed with 14 cores (the 14-worker runs used `GOMAXPROCS=4`), and v0.3.0 on
+the crafted inputs (those runs last 0.01 s or less).
+
 ## [0.3.0] - 2026-10-21
 
 Faster decompression. Every figure below comes from a command run on
