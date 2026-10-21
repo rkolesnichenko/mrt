@@ -25,6 +25,7 @@ import (
 	"io"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/rkolesnichenko/mrt/internal/bzip2"
 )
@@ -72,18 +73,41 @@ const (
 // bzip2Hooks are test hooks (export_test.go). extra returns bit offsets in
 // [lo, hi), ascending, to add to the candidates the scan found there.
 // discarded is called with each candidate the chain never lands on, took
-// with each block the chain takes and whether a worker decoded it, and held
+// with each block the chain takes and whether a worker decoded it, held
 // after each dispatch with the bytes of segment copies outstanding jobs hold
-// and their count. All of these run in Read's goroutine. started is called by
-// a worker with the job it is about to decode, once it has checked for stop.
-// budget, if not 0, replaces segmentBudget.
+// and their count, and window with cap(win) after each fill and compact. All
+// of these run in Read's goroutine. started is called by a worker with the job
+// it is about to decode, once it has checked for stop. results is called with
+// the bytes of the results workers have sent and the chain has not received,
+// after every change, from any goroutine: a worker adds a result's bytes
+// before it sends it, the chain subtracts them when it receives it. The count
+// is not kept past stop: a result no one receives is never subtracted, and
+// once stop has returned (every worker has exited) results is not called
+// again. Without it nothing is counted. budget, if not 0, replaces
+// segmentBudget.
 type bzip2Hooks struct {
 	extra     func(lo, hi uint64) []uint64
 	discarded func(bit uint64)
 	took      func(bit uint64, speculative bool)
 	held      func(segBytes int64, outstanding int)
 	started   func(bit uint64)
+	results   func(held int64)
+	window    func(bytes int)
 	budget    int64
+}
+
+// resultBytes counts, for the results hook, the bytes of the results workers
+// have sent and the chain has not received.
+type resultBytes struct {
+	n    atomic.Int64
+	hook func(held int64)
+}
+
+// add adds n bytes and calls the hook with the sum. A nil c counts nothing.
+func (c *resultBytes) add(n int) {
+	if c != nil && n != 0 {
+		c.hook(c.n.Add(int64(n)))
+	}
 }
 
 // A mark is a magic the scan found: a candidate block start, or an end magic,
@@ -117,6 +141,7 @@ type parallelBzip2 struct {
 	workers int
 	budget  int64 // segmentBudget, or the test hook's
 	hooks   bzip2Hooks
+	results *resultBytes // nil unless hooks.results is set
 
 	// The input: win holds r's bytes from offset winOff; srcErr is the error
 	// r returned (io.EOF at its end), kept, after which r is not read again.
@@ -167,6 +192,9 @@ func newParallelBzip2(src *bufio.Reader, opts DecompressOptions, hooks *bzip2Hoo
 		z.hooks = *hooks
 		if hooks.budget != 0 {
 			z.budget = hooks.budget
+		}
+		if hooks.results != nil {
+			z.results = &resultBytes{hook: hooks.results}
 		}
 	}
 	return z
@@ -290,6 +318,7 @@ func (z *parallelBzip2) speculation(pos uint64) *bzip2Result {
 	z.taken(m.job)
 	select {
 	case res := <-m.job.res:
+		z.results.add(-len(res.data))
 		if !res.whole {
 			return nil
 		}
@@ -359,7 +388,8 @@ func (z *parallelBzip2) reap() {
 	k := 0
 	for _, j := range z.zombies {
 		select {
-		case <-j.res:
+		case res := <-j.res:
+			z.results.add(-len(res.data))
 			z.taken(j)
 		default:
 			z.zombies[k] = j
@@ -409,7 +439,7 @@ func (z *parallelBzip2) dispatch() (held bool) {
 			z.quit = make(chan struct{})
 			z.wg.Add(z.workers)
 			for range z.workers {
-				go bzip2Worker(z.jobs, z.quit, z.ctx.Done(), z.hooks.started, &z.wg)
+				go bzip2Worker(z.jobs, z.quit, z.ctx.Done(), z.hooks.started, z.results, &z.wg)
 			}
 		}
 		m.job = &bzip2Job{
@@ -449,8 +479,11 @@ func (z *parallelBzip2) undispatched() int {
 // without decoding it if quit or done is closed, so no job a worker takes
 // after stop or a cancel starts, and each worker finishes at most the block
 // it is decoding. A decode gives up past specCap of output or past its segment:
-// the chain never takes such a result, and decodes the block itself.
-func bzip2Worker(jobs <-chan *bzip2Job, quit, done <-chan struct{}, started func(bit uint64), wg *sync.WaitGroup) {
+// the chain never takes such a result, and decodes the block itself. results,
+// if not nil, counts each result's bytes before it is sent.
+func bzip2Worker(jobs <-chan *bzip2Job, quit, done <-chan struct{}, started func(bit uint64), results *resultBytes,
+	wg *sync.WaitGroup,
+) {
 	defer wg.Done()
 	var d bzip2.Decoder
 	for {
@@ -475,6 +508,7 @@ func bzip2Worker(jobs <-chan *bzip2Job, quit, done <-chan struct{}, started func
 			br.ReadBits(uint(j.bit % 8))
 			data, crc, err := d.SpeculativeBlock(br, j.level, specCap)
 			whole := br.Err() == nil && !errors.Is(err, bzip2.ErrOverCap)
+			results.add(len(data))
 			j.res <- bzip2Result{data: data, crc: crc, err: err, end: j.bit/8*8 + br.Offset(), whole: whole}
 		}
 	}
@@ -511,9 +545,12 @@ func (z *parallelBzip2) winEnd() int64 { return z.winOff + int64(len(z.win)) }
 // io.ErrNoProgress at bufio's limit.
 func (z *parallelBzip2) fill() {
 	z.compact()
-	z.win = slices.Grow(z.win, fillSize)
+	z.grow()
 	n, err := z.src.Read(z.win[len(z.win) : len(z.win)+fillSize])
 	z.win = z.win[:len(z.win)+n]
+	if z.hooks.window != nil {
+		z.hooks.window(cap(z.win))
+	}
 	switch {
 	case err != nil:
 		z.srcErr = err
@@ -525,6 +562,32 @@ func (z *parallelBzip2) fill() {
 			z.srcErr = io.ErrNoProgress
 		}
 	}
+}
+
+// grow makes room in the window for one read of r. Its capacity doubles, but
+// never past windowBound, which the window never needs: append's own growth
+// would carry it up to a quarter past what it needs, and so past the bound.
+func (z *parallelBzip2) grow() {
+	need := len(z.win) + fillSize
+	if need <= cap(z.win) {
+		return
+	}
+	c := min(max(2*cap(z.win), need), max(windowBound(z.workers), need))
+	win := make([]byte, len(z.win), c)
+	copy(win, z.win)
+	z.win = win
+}
+
+// windowBound is the most bytes the window needs at the given Workers, from
+// pump, fill and compact. fill reads r from pump only while the window holds
+// less than the lead, maxSegment + 2 × Workers MiB, past the chain's read
+// position, and from the chain only when it holds nothing past it. compact
+// keeps chainSlack bytes behind that position and moves the window down once
+// the bytes before them are at least compactMin and half the window, so the
+// window is then under twice what it keeps, or compactMin more: under
+// 2 × (lead + chainSlack). One read then adds at most fillSize.
+func windowBound(workers int) int {
+	return 2*(maxSegment+workers<<21+chainSlack) + fillSize
 }
 
 // compact drops the window's bytes that nothing needs: those behind the chain,
@@ -543,6 +606,9 @@ func (z *parallelBzip2) compact() {
 	if dead := keep - z.winOff; dead >= compactMin && dead >= int64(len(z.win))/2 {
 		z.win = z.win[:copy(z.win, z.win[dead:])]
 		z.winOff = keep
+	}
+	if z.hooks.window != nil {
+		z.hooks.window(cap(z.win))
 	}
 }
 

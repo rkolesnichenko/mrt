@@ -8,6 +8,132 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-21
+
+v0.3.2 closes the items v0.3.1 left open: the `mrtcut` slowdown on gzip, the
+parts of the bzip2 bound that were arithmetic only, and four statements in
+the v0.3.1 entry that were wrong or did not reproduce (corrected in place
+below, each marked "corrected in 0.3.2"). The API (`api/`) is
+unchanged. Figures come from commands run on 2026-10-21 with Go 1.27.2 on an
+Apple M3 Max, `GOMAXPROCS=4`, and name their log under `.data/` (git-ignored).
+Heap figures are sampled every 2 ms, so they are estimates. Default-GC heap
+figures vary between sessions; the GOGC=10 figures are the gate.
+
+### Fixed
+
+- `mrtcut -count` on a gzip file was 9.48% slower than with v0.2.1 (mean of
+  10 alternating pairs, 6.400 s to 7.007 s; `.data/v032-diagnosis.md`).
+  `mrtdump` on the same file was 8.24% faster. The reading, not a proven
+  cause: the gzip readahead handed 32 KiB chunks between goroutines, about
+  124,000 hand-offs for 4.07 GB (arithmetic: 4,065,645,452 / 32,768 =
+  124,073.7), each waking a thread, and `mrtcut -count`
+  does too little per record to hide it. The chunk is now 128 KiB (the
+  queue stays 256 KiB, two chunks). After the change, `mrtcut` is 0.46%
+  slower than v0.2.1 (6.304 s to 6.333 s, 10 pairs;
+  `.data/v032-mrtcut-after.log`, lines 372-373) and `mrtdump` is 10.79%
+  faster (47.113 s to 42.030 s, 3 pairs; `.data/v032-mrtdump-after.log`,
+  line 53). `DecompressWith` plus `Routes` on the same file is 2.28% faster
+  than v0.3.1 (9.647 s to 9.427 s, 3 pairs; `.data/v032-gate-gzip.log`), and
+  the decompress-only `DecompressWith` takes 6.12 s against v0.3.1's 6.88 s
+  (means of 3 runs; `Decompress` 5.69 s against 5.71 s, so the ratio goes
+  from 0.83 to 0.93). v0.3.1's 8.3 s / 7.26 s alternation was most likely
+  memguard's 1 s wall-time resolution; v0.3.1 was not re-measured.
+- The bzip2 reader's compressed window could run past its bound, because
+  `slices.Grow` chose its capacity. It is now grown explicitly, and the
+  bound holds because `fill` never needs more (the derivation in
+  `windowBound`). Before the fix a 38 MiB input at 4 workers took its capacity to
+  34,709,504 bytes against a bound of 33,620,000
+  (`.data/v032-window-cap-scan.log`, line 11).
+
+### Changed
+
+- The window term of the bound is 65,568 bytes more than the `2L` of the
+  v0.3.1 arithmetic (the code's bound includes a 64 KiB read slack). The
+  totals still round to 216.7 MB at 4 workers and 389.0 MB at 14 (arithmetic:
+  216,663,520 + 65,568 = 216,729,088 and 388,978,400 + 65,568 = 389,043,968
+  bytes). The `DecompressWith` doc now says that while the window grows, the
+  old array is live until the copy ends, beyond the headline figure: 67.1 MB at
+  14 workers (142,671,904 - 75,563,040), 142.7 MB for both arrays in the last
+  growth step.
+  The headline bound is unchanged.
+- Housekeeping: `zeros-1.bz2` and `zeros-9.bz2` moved to
+  `testdata/bzip2/zeros/`; `TestDecompressWithCancelDuringSerialBlock` is
+  `TestDecompressWithCancelBetweenCappedReads` (it also passes on v0.3.0);
+  the tests of `SpeculativeBlock` cover its check before any output and the
+  dropped chunks; `decompbench -blocks` prints no cap when every file failed
+  and `decompbench -mem -crafted` runs without a FILE; `mrtcut` has
+  `-cpuprofile`; the large crafted inputs are cut under `-race`.
+
+### Measured
+
+- The bound, term by term, each on an input that loads it, from the opt-in
+  `MRT_BOUNDGATE=1 go test -run 'TestBoundTerms$' .` (final code,
+  `.data/v032-bound-terms.log`, lines 101-144). `bound-load` is a 100 MiB
+  input of 25 streams padded to 4 MiB; all inputs but `zeros-9` are
+  bzip2-built (internal/bzcraft):
+
+  | term | workers | bound | measured peak | input |
+  |---|---|---|---|---|
+  | segment copies | 4 | 33,554,432 | 16,777,184 (50.0%) | bound-load |
+  | segment copies | 14 | 33,554,432 | 33,554,368 (100.0%) | bound-load |
+  | results not yet taken | 4 | 16,777,216 | 14,489,758 (86.4%) | results-load |
+  | results not yet taken | 14 | 58,720,256 | 55,889,068 (95.2%) | results-load |
+  | window (capacity) | 4 | 33,620,000 | 33,554,432 (99.8%) | bound-load |
+  | window (capacity) | 14 | 75,563,040 | 75,563,040 (100.0%) | bound-load |
+  | window, old and new array while it grows | 4 | 67,174,432 | 50,331,648 (74.9%) | bound-load |
+  | window, old and new array while it grows | 14 | 142,671,904 | 142,671,904 (100.0%) | bound-load |
+
+  The W4 ceilings have reasons, and the bound keeps its figures. The
+  segments are limited by the lead (16 MiB at 4 workers), not by the budget;
+  the window stops at its last doubling step (33,554,432), and the step to
+  the bound is never taken at 4 workers. The 32 MiB budget is a hard
+  guarantee and the lead an input-dependent ceiling; segments of jobs the
+  chain has passed can be held outside the lead (a reading of the code, not
+  measured).
+- The terms the counters do not see are measured by the heap, with
+  `GOGC=10`, in `decompbench -mem -crafted` (`.data/v032-gate-mem.log`):
+  the chain's serial decode and the workers' decodes on `zeros-9` (about
+  42 MB per block, not a full 46.6 MB hostile block) grow the heap by
+  130.2 MB at 4 workers (line 80) and 174.3 MB at 14 (line 92); the exact-size
+  copies of `under-cap-blocks` by 48.6 MB and 143.1 MB (lines 85, 97).
+- Heap growth, `GOGC=10`, the largest over all inputs: 146.4 MB at 4 workers
+  (results-load, bound 216.7 MB) and 307.9 MB at 14 (bound-load; 303.7 to
+  307.9 MB over four runs, lines 98, 166, 201, 224; bound 389.0 MB). Every
+  input is under its bound. `results-load` at 14 workers ranged from 213.4 to
+  260.5 MB over eight runs of two builds (lines 26 to 221): run-to-run
+  variance, all under 389.0 MB.
+- Default GC, `zeros-9` at 14 workers: 338.4 MB, in two runs of v0.3.1's own
+  binary and two of this branch's (`.data/v032-gate-mem.log`, lines 132-155).
+  v0.3.1's logged 286.2 MB did not reproduce (corrected below).
+- Speed, `DecompressWith` bzip2 decompress-only, v0.3.1 and this branch
+  measured in the same run, `Workers` 4 and 14 under `GOMAXPROCS=4`, one run
+  each (`.data/v032-gate-speed.log`): rv2-rib 5.42 s to 5.37 s at 4 (-0.9%)
+  and 5.59 s to 5.56 s at 14 (-0.5%); rv6-rib 1.90 s to 1.89 s (-0.5%) and
+  1.92 s to 1.92 s (0.0%). All four are inside the 5% gate, and the output
+  hashes and route counts are identical. v0.3.1 for this run was a worktree
+  of its tag with this branch's `decompbench` and `bzcraft` copied in.
+- Equivalence on real data: `DecompressWith` and `Decompress` give identical
+  bytes on all 19 files (`.data/realdata-decompress-v032.log`).
+- Checks: `scripts/check.sh` with `FUZZTIME=15s` ends `check: ok`, SUCCESS
+  (`.data/check-v032.log`); `api/` is unchanged and `apisurface -check`
+  passes.
+- Consumer: routecheck (pins mrt v0.1.0) still fails to build with the same
+  four errors in `observe/session.go`, and the same vet errors, against this
+  branch and against v0.2.1 (`.data/consumer-v032.log`). The two error sets
+  are identical, so v0.3.2 adds none.
+
+### Not measured
+
+Resident memory (RSS), other machines, worker counts other than 4 and 14,
+speed with 14 cores (the 14-worker runs used `GOMAXPROCS=4`), `mrtcut` on
+files other than the rrc00 bview gzip, `mrtcut` and `mrtdump` on bzip2 files,
+and v0.3.1's `mrtcut` (not re-measured). The cause of the `mrtcut` slowdown
+is a reading from the profile and the chunk-size screen (32 KiB 7.41 s, 64 KiB
+6.88 s, 128 KiB 6.51 s, v0.2.1 6.40 s; one run each,
+`.data/v032-mrtcut-after.log`), not a proof. No input loads the segment term
+or the window at their bound at 4 workers (see above), and the full hostile
+46.6 MB block is arithmetic.
+
 ## [0.3.1] - 2026-10-21
 
 v0.3.1 bounds the memory of `DecompressWith`'s parallel bzip2 reader. Figures
@@ -53,16 +179,21 @@ estimates, and a short peak can be missed. The API (`api/`) is unchanged.
   | workers | bound | v0.3.1 GOGC=10 | v0.3.0 GOGC=10 | v0.3.1 default GC | v0.3.0 default GC |
   |---|---|---|---|---|---|
   | 4 | 216.7 MB | 130.1 MB | 344.1 MB | 233.7 MB | 534.2 MB |
-  | 14 | 389.0 MB | 174.2 MB | 634.7 MB | 286.2 MB | 818.0 MB |
+  | 14 | 389.0 MB | 174.2 MB | 634.7 MB | 286.2 MB (corrected in 0.3.2: 338.4 MB) | 818.0 MB |
 
   GOGC=10 is the gate: an upper-bound estimate of the live bytes, which v0.3.1
   holds under the bound. At the default GC the peak includes garbage not yet
-  collected (about 1.8 times the GOGC=10 figure at 4 workers and 1.6 at 14),
+  collected (about 1.8 times the GOGC=10 figure at 4 workers and 1.6 at 14;
+  corrected in 0.3.2: 1.9 at 14),
   so it exceeds the bound at 4 workers, 233.7 vs 216.7 MB. The bound is on
   live bytes, not a cap on heap size. v0.3.0's bound grows with `Workers`
   (v0.3 design §6.2); zeros-9 has 11 blocks, so its held bytes here are
   limited by the fixture. (A file with more blocks would hold more:
   arithmetic from the design, not measured.)
+  (Corrected in 0.3.2: the 286.2 MB default-GC figure at 14 workers did not
+  reproduce. v0.3.1's own binary measured 338.4 MB in two runs, the same as
+  the v0.3.2 branch's two (`.data/v032-gate-mem.log`, "Ruling 8" section).
+  Default-GC figures vary between sessions; the GOGC=10 column is the gate.)
 - Crafted inputs (an end-magic flood and sparse block magics, 4 and 14
   workers): v0.3.1 stays under the bound on all of them, at most 75.9 MB at
   GOGC=10 and 74.2 MB at the default GC (`.data/v031-gate-mem.log`, section
@@ -77,10 +208,15 @@ estimates, and a short peak can be missed. The API (`api/`) is unchanged.
   is decoded serially (`.data/v031-gate-mem.log`).
 - `mrtcut -count` on rrc00-bview.20261020.0800.gz, mean of 4 alternating runs:
   v0.2.1 7.253 s, v0.3.1 7.778 s (+7.2%; `.data/v031-mrtcut-gz.log`). The
-  v0.3.1 runs alternate between about 8.3 s and 7.26 s. The outputs are
+  v0.3.1 runs alternate between about 8.3 s and 7.26 s (corrected in 0.3.2:
+  that alternation is most likely memguard's 1 s wall-time resolution, not
+  the tool's speed; v0.3.1 was not re-measured). The outputs are
   identical. Nothing changed in this release (the gzip readahead is
   `DecompressWith`'s, and `mrtcut` uses it). The fix is left open: a format
-  check in `mrtcut`, or `WriteTo` on the gzip readahead.
+  check in `mrtcut`, or `WriteTo` on the gzip readahead (corrected in 0.3.2:
+  `WriteTo` would not affect `mrtcut`, which reads through `Records`, and
+  `Records` reads its input in 4 KiB calls through a `bufio.Reader`; v0.3.2
+  fixes the slowdown in the readahead's chunk size, see 0.3.2 above).
 - Equivalence on real data: `DecompressWith` and `Decompress` give identical
   bytes on all 19 files (`.data/realdata-decompress-v031.log`).
 - Consumer: routecheck (pins mrt v0.1.0) fails to build with the same four
@@ -95,9 +231,10 @@ speed with 14 cores (the 14-worker runs used `GOMAXPROCS=4`), and v0.3.0 on
 the crafted inputs (those runs last 0.01 s or less). No measured input loads
 the segment-budget or results terms of the bound: zeros-9 loads the reader's
 own decode and the per-worker decodes, and the crafted inputs end at their
-first block. `Decompress` (and the serial reader in `internal/bzip2`) still
-keeps a block's bytes live while it decodes the next one, up to 46.6 MB more
-than its own decode (arithmetic, not measured); it is left as it is.
+first block. (Corrected in 0.3.2: `Decompress` uses the standard library's
+`compress/bzip2`, which holds no decoded block. Only `internal/bzip2`'s
+test-only serial reader has the pattern of keeping a block's bytes live while
+it decodes the next one.)
 
 ## [0.3.0] - 2026-10-21
 
@@ -445,7 +582,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/rkolesnichenko/mrt/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/rkolesnichenko/mrt/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rkolesnichenko/mrt/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/rkolesnichenko/mrt/compare/v0.2.0...v0.2.1

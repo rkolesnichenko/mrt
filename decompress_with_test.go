@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/rkolesnichenko/mrt"
+	"github.com/rkolesnichenko/mrt/internal/bzcraft"
 	"github.com/rkolesnichenko/mrt/internal/bzip2"
 )
 
@@ -82,11 +83,31 @@ func matchesDecompress(t testing.TB, in []byte, oneByte bool, workers []int) {
 	}
 }
 
-// bzip2Inputs returns every testdata/bzip2 file but the zeros-* ones (see
+// TestBzip2FixtureGlobs pins the layout the fixture loops rely on: the
+// bzip2 files they loop over are in testdata/bzip2, the zero fixtures, which
+// they must leave out, in testdata/bzip2/zeros.
+func TestBzip2FixtureGlobs(t *testing.T) {
+	for glob, want := range map[string]int{"testdata/bzip2/*.bz2": 3, "testdata/bzip2/zeros/*.bz2": 2} {
+		paths, err := filepath.Glob(glob)
+		if err != nil || len(paths) != want {
+			t.Errorf("%s: %v, error %v; want %d paths", glob, paths, err, want)
+		}
+	}
+	paths, _ := filepath.Glob("testdata/bzip2/*.bz2")
+	var names []string
+	for _, p := range paths {
+		names = append(names, filepath.Base(p))
+	}
+	if want := []string{"level1.bz2", "multi-stream.bz2", "one-byte.bz2"}; !slices.Equal(names, want) {
+		t.Errorf("testdata/bzip2/*.bz2 is %v, want %v", names, want)
+	}
+}
+
+// bzip2Inputs returns every testdata/bzip2 file (not the zeros/ ones, see
 // internal/bzip2's tests) and the bench file, by name.
 func bzip2Inputs(t testing.TB) map[string][]byte {
 	t.Helper()
-	paths, err := filepath.Glob("testdata/bzip2/[^z]*.bz2")
+	paths, err := filepath.Glob("testdata/bzip2/*.bz2")
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no testdata/bzip2 files: %v", err)
 	}
@@ -547,7 +568,7 @@ func TestDecompressWithFalseCandidates(t *testing.T) {
 // TotalAlloc and time.
 func TestDecompressWithEndMagicFlood(t *testing.T) {
 	const workers = 4
-	in := endMagicFlood(workers)
+	in := bzcraft.EndMagicFlood(workers)
 	want, wantErr := decompressed(bytes.NewReader(in), 0, false)
 	if wantErr == nil || !strings.Contains(wantErr.Error(), "file checksum mismatch") {
 		t.Fatalf("Decompress: %d bytes, error %v; want a file checksum mismatch", len(want), wantErr)
@@ -576,13 +597,6 @@ func TestDecompressWithEndMagicFlood(t *testing.T) {
 	if took >= 2*time.Second {
 		t.Errorf("took %v, want less than 2 s", took)
 	}
-}
-
-// endMagicFlood is "BZh9" and then end magics, past the look-ahead of the
-// given Workers: one 8 MiB segment and 1 MiB per job outstanding, plus 1 MiB.
-func endMagicFlood(workers int) []byte {
-	end := []byte{0x17, 0x72, 0x45, 0x38, 0x50, 0x90} // the end magic's 48 bits
-	return append([]byte("BZh9"), bytes.Repeat(end, (8+2*workers+1)<<20/6)...)
 }
 
 // goroutineBaseline is the goroutine count once the runtime has settled
@@ -807,22 +821,10 @@ func TestDecompressWithPipe(t *testing.T) {
 
 // zeros1 is 60,000,000 zero bytes through bzip2 -1: blocks that decode to
 // more than the speculative cap (zeros1Blocks) from a few bytes each.
-const zeros1 = "testdata/bzip2/zeros-1.bz2"
+const zeros1 = "testdata/bzip2/zeros/zeros-1.bz2"
 
 // zeros1Blocks are the decoded sizes of zeros1's blocks, in order.
 var zeros1Blocks = append(slices.Repeat([]int{5_099_235}, 11), 3_908_415)
-
-// sparseBlockMagics is "BZh9" and then, to 32 MiB, a block magic followed by
-// 200 KiB of zeros, repeated: candidates whose segments are 200 KiB each.
-func sparseBlockMagics() []byte {
-	magic := []byte{0x31, 0x41, 0x59, 0x26, 0x53, 0x59} // the block magic's 48 bits
-	unit := append(magic, make([]byte, 200<<10)...)
-	in := []byte("BZh9")
-	for len(in) < 32<<20 {
-		in = append(in, unit...)
-	}
-	return in[:32<<20]
-}
 
 // TestDecompressWithBounds is v0.3.1 design §5.3 on what the speculation
 // holds: after every dispatch, the segment copies of the outstanding jobs are
@@ -841,7 +843,7 @@ func TestDecompressWithBounds(t *testing.T) {
 	if mrt.RaceEnabled {
 		workers = []int{1, 4}
 	}
-	inputs := map[string][]byte{"end-magic-flood": endMagicFlood(4), "sparse-block-magics": sparseBlockMagics()}
+	inputs := map[string][]byte{"end-magic-flood": bzcraft.EndMagicFlood(4), "sparse-block-magics": bzcraft.SparseBlockMagics()}
 	for _, p := range []string{zeros1, benchBz2, "testdata/bzip2/level1.bz2", "testdata/bzip2/multi-stream.bz2"} {
 		b, err := os.ReadFile(p)
 		if err != nil {
@@ -926,6 +928,172 @@ func TestDecompressWithHeldBudget(t *testing.T) {
 	}
 }
 
+// TestDecompressWithResultsCounted reads the bench file at Workers 4 with the
+// Results hook, which counts the bytes of results workers have sent and the
+// chain has not received: some call is over 0, none under 0, and the last,
+// after EOF, is 0. The count is not kept after stop, so a zombie's result
+// would be left in it; the bench file has none (no candidate is discarded),
+// which the test checks first. Not parallel: it counts hook calls across
+// goroutines.
+func TestDecompressWithResultsCounted(t *testing.T) {
+	in, err := os.ReadFile(benchBz2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, wantErr := decompressed(bytes.NewReader(in), 0, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var calls, over, under int
+	var last, peak int64
+	results := func(held int64) { // in any goroutine
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		last, peak = held, max(peak, held)
+		switch {
+		case held > 0:
+			over++
+		case held < 0:
+			under++
+		}
+	}
+	discarded := 0
+	r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: 4, Context: ctx},
+		mrt.Bzip2Hooks{Results: results, Discarded: func(uint64) { discarded++ }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, gotErr := io.ReadAll(r)
+	checkSame(t, "workers 4", got, gotErr, want, wantErr)
+	if discarded != 0 {
+		t.Fatalf("%d candidates discarded; the last count is 0 only without zombies", discarded)
+	}
+	mu.Lock() // the workers have exited: EOF stopped them
+	defer mu.Unlock()
+	t.Logf("%d calls, peak %d bytes", calls, peak)
+	if over == 0 {
+		t.Errorf("%d calls, none with results held", calls)
+	}
+	if under != 0 {
+		t.Errorf("%d of %d calls under 0", under, calls)
+	}
+	if last != 0 {
+		t.Errorf("last call %d bytes after EOF, want 0", last)
+	}
+}
+
+// TestDecompressWithWindowCounted reads the bench file and zeros1 at
+// Workers 4 with the Window hook: it is called, and the window is never over
+// what fill and compact allow (WindowBound).
+func TestDecompressWithWindowCounted(t *testing.T) {
+	for _, p := range []string{benchBz2, zeros1} {
+		in, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const workers = 4
+		ctx, cancel := context.WithCancel(context.Background())
+		calls, peak := 0, 0
+		window := func(n int) { // in this goroutine, which reads
+			calls++
+			peak = max(peak, n)
+		}
+		r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: workers, Context: ctx},
+			mrt.Bzip2Hooks{Window: window})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = io.ReadAll(r)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := filepath.Base(p)
+		t.Logf("%s: %d calls, peak %d bytes", name, calls, peak)
+		if calls == 0 {
+			t.Errorf("%s: Window never called", name)
+		}
+		if bound := mrt.WindowBound(workers); peak > bound {
+			t.Errorf("%s: window up to %d bytes, over %d", name, peak, bound)
+		}
+	}
+}
+
+// TestDecompressWithWindowCapBounded: the window's capacity, which is what it
+// holds, never exceeds WindowBound. The input is level1.bz2 with its block
+// padded to 2 MiB, 19 times (38 MiB): at Workers 4 the 2 × 4 jobs outstanding
+// cover the 16 MiB lead, and the chain moves 2 MiB at a time, so the window
+// grows to about 30 MiB before it compacts. append's growth (1.25 times)
+// carried its capacity past the bound there (34,709,504 bytes against
+// 33,620,000). The output is Decompress's.
+func TestDecompressWithWindowCapBounded(t *testing.T) {
+	stream, err := os.ReadFile("testdata/bzip2/level1.bz2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copies := 19
+	if mrt.RaceEnabled {
+		copies = 5 // 19 copies take 19 s under -race; at 5 it checks the hook path, not the bound
+	}
+	in, err := bzcraft.Repeated(stream, 2<<20, copies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, wantErr := decompressed(bytes.NewReader(in), 0, false)
+	const workers = 4
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	peak := 0
+	r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: workers, Context: ctx},
+		mrt.Bzip2Hooks{Window: func(n int) { peak = max(peak, n) }}) // in this goroutine, which reads
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, gotErr := io.ReadAll(r)
+	checkSame(t, "workers 4", got, gotErr, want, wantErr)
+	bound := mrt.WindowBound(workers)
+	t.Logf("window capacity up to %d bytes, bound %d", peak, bound)
+	if peak > bound {
+		t.Errorf("window capacity up to %d bytes, over %d", peak, bound)
+	}
+}
+
+// TestDecompressWithNoHooksNoCount: a reader from DecompressWith has no
+// results counter, nor one with hooks other than Results; one with Results
+// set has one. No reader is read, so none starts a worker.
+func TestDecompressWithNoHooksNoCount(t *testing.T) {
+	in, err := os.ReadFile("testdata/bzip2/level1.bz2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opts := mrt.DecompressOptions{Workers: 2, Context: ctx}
+	for _, c := range []struct {
+		name  string
+		hooks *mrt.Bzip2Hooks
+		want  bool
+	}{
+		{"no hooks", nil, false},
+		{"Window and Held", &mrt.Bzip2Hooks{Window: func(int) {}, Held: func(int64, int) {}}, false},
+		{"Results", &mrt.Bzip2Hooks{Results: func(int64) {}}, true},
+	} {
+		var r io.Reader
+		if c.hooks == nil {
+			r, err = mrt.DecompressWith(bytes.NewReader(in), opts)
+		} else {
+			r, err = mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), opts, *c.hooks)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := mrt.CountsResults(r); got != c.want {
+			t.Errorf("%s: counts results %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // TestDecompressWithDropsDrainedBlock: once a Read has returned all of a
 // block, the reader no longer refers to its bytes, so they are not live while
 // the next block is decoded. The bench file's first block is taken from a
@@ -993,7 +1161,7 @@ func TestDecompressWithCapsZeroBlocks(t *testing.T) {
 }
 
 // TestDecompressWithCappedDamaged is spec §6.4 on zeros1 with one byte
-// flipped at 10 offsets (5 under -race) from byte 4 to the end, at Workers 4:
+// flipped at 10 offsets (3 under -race) from byte 4 to the end, at Workers 4:
 // damaged blocks over the cap fail, or decode, as Decompress does.
 func TestDecompressWithCappedDamaged(t *testing.T) {
 	in, err := os.ReadFile(zeros1)
@@ -1002,7 +1170,7 @@ func TestDecompressWithCappedDamaged(t *testing.T) {
 	}
 	n := 10
 	if mrt.RaceEnabled {
-		n = 5
+		n = 3
 	}
 	for k := 0; k < n; k++ {
 		off := 4 + k*(len(in)-5)/(n-1)
@@ -1017,13 +1185,53 @@ func TestDecompressWithCappedDamaged(t *testing.T) {
 // TestDecompressWithCancelStartsNoJob is v0.3.1 design §5.4: no worker starts
 // a job after a cancel. zeros1 at Workers 2 queues jobs behind the first two,
 // whose starts are held until after the cancel. Then the read fails with
-// context.Canceled, no third job has started, and every goroutine ends. Not
-// parallel: it counts goroutines.
+// context.Canceled, no third job has started, and every goroutine ends. The
+// bzcraft inputs that load the bound's terms (skipped without the bzip2
+// command) are read likewise: ResultsLoad and UnderCapBlocks at Workers 2,
+// SegmentLoad at Workers 4, whose lead over the chain holds both its 7.4 MB
+// segments (at Workers 2 only the first is dispatched before the chain waits
+// on it). Not parallel: it counts goroutines.
 func TestDecompressWithCancelStartsNoJob(t *testing.T) {
-	in, err := os.ReadFile(zeros1)
+	t.Run("zeros-1", func(t *testing.T) {
+		in, err := os.ReadFile(zeros1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cancelStartsNoJob(t, in, 2)
+	})
+	for _, c := range []struct {
+		name    string
+		build   func() ([]byte, error)
+		workers int
+	}{
+		{"results-load", bzcraft.ResultsLoad, 2},
+		{"under-cap-blocks", bzcraft.UnderCapBlocks, 2},
+		{"segment-load", bzcraft.SegmentLoad, 4},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if mrt.RaceEnabled && c.name != "under-cap-blocks" {
+				t.Skip("the large crafted input takes 4 s under -race; the other runs keep it")
+			}
+			cancelStartsNoJob(t, craftedInput(t, c.build), c.workers)
+		})
+	}
+}
+
+// craftedInput returns the bzcraft input build makes, skipping the test
+// without the bzip2 command.
+func craftedInput(t testing.TB, build func() ([]byte, error)) []byte {
+	t.Helper()
+	in, err := build()
+	if errors.Is(err, bzcraft.ErrNoBzip2) {
+		t.Skip(err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
+	return in
+}
+
+func cancelStartsNoJob(t *testing.T, in []byte, workers int) {
 	base := goroutineBaseline()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1039,7 +1247,7 @@ func TestDecompressWithCancelStartsNoJob(t *testing.T) {
 			<-gate
 		}
 	}
-	r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: 2, Context: ctx},
+	r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: workers, Context: ctx},
 		mrt.Bzip2Hooks{Started: started})
 	if err != nil {
 		t.Fatal(err)
@@ -1072,11 +1280,13 @@ func TestDecompressWithCancelStartsNoJob(t *testing.T) {
 	}
 }
 
-// TestDecompressWithCancelDuringSerialBlock cancels zeros1 at Workers 4
+// TestDecompressWithCancelBetweenCappedReads cancels zeros1 at Workers 4
 // after 1 MiB of output, inside the first block, which the chain decoded:
 // the next Read returns context.Canceled within 2 s, and every goroutine
-// ends. Not parallel: it times and counts goroutines.
-func TestDecompressWithCancelDuringSerialBlock(t *testing.T) {
+// ends. It is a regression test that also passes on v0.3.0;
+// TestDecompressWithCancelStartsNoJob pins the v0.3.1 fix. Not parallel: it
+// times and counts goroutines.
+func TestDecompressWithCancelBetweenCappedReads(t *testing.T) {
 	in, err := os.ReadFile(zeros1)
 	if err != nil {
 		t.Fatal(err)
@@ -1222,8 +1432,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // decompressed is measured by what it has taken from r: Decompress of those
 // input bytes gives at least the bytes Read returned plus a full queue, and,
 // without the up to 4 KiB DecompressWith's bufio.Reader holds unread, at most
-// that plus one chunk (or flate's 32 KiB window, which it decodes ahead of
-// what it returns, where that is larger). It is checked after 200 ms with no
+// that plus flate's 32 KiB window, which it decodes ahead of what it returns. It is checked after 200 ms with no
 // Read, and again after reading 512 KiB. With no Read, the readahead has also
 // taken at most half of the input, which TestMrtdumpWriteErrorStops needs.
 // Not parallel: it times.
@@ -1260,7 +1469,7 @@ func TestDecompressWithGzipBounded(t *testing.T) {
 			t.Errorf("%s: %d input bytes taken, which decode to %d bytes; want a full queue ahead, at least %d",
 				what, n, got, want)
 		}
-		ahead := mrt.GzipQueueBytes + max(mrt.GzipChunkBytes, window)
+		ahead := mrt.GzipQueueBytes + window
 		if got := decodable(n - bufioSize); got > returned+ahead {
 			t.Errorf("%s: %d input bytes taken, of which the first %d decode to %d bytes; want at most %d",
 				what, n, n-bufioSize, got, returned+ahead)
@@ -1274,6 +1483,28 @@ func TestDecompressWithGzipBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("after reading 512 KiB", 512<<10)
+}
+
+// TestDecompressWithGzipQueue pins the readahead's queue: 256 KiB in
+// GzipQueueBytes/GzipChunkBytes chunks of GzipChunkBytes, which are all the
+// memory it holds, so the output not yet returned is at most 256 KiB. The
+// chunks are 128 KiB: each one costs a goroutine wake-up, and at 32 KiB those
+// made mrtcut -count 9.5% slower than Decompress on a 4 GB bview
+// (.data/v032-diagnosis.md). At least two, so the goroutine fills one while
+// Read returns the other.
+func TestDecompressWithGzipQueue(t *testing.T) {
+	if mrt.GzipQueueBytes != 256<<10 {
+		t.Errorf("queue of %d bytes, want 256 KiB", mrt.GzipQueueBytes)
+	}
+	if mrt.GzipChunkBytes != 128<<10 {
+		t.Errorf("chunks of %d bytes, want 128 KiB", mrt.GzipChunkBytes)
+	}
+	if mrt.GzipQueueBytes%mrt.GzipChunkBytes != 0 {
+		t.Errorf("queue of %d bytes is not a whole number of %d-byte chunks", mrt.GzipQueueBytes, mrt.GzipChunkBytes)
+	}
+	if chunks := mrt.GzipQueueBytes / mrt.GzipChunkBytes; chunks < 2 {
+		t.Errorf("%d chunks, want at least 2", chunks)
+	}
 }
 
 // TestDecompressWithGzipStops is stopsEarly and noGoroutineAfterEOF on

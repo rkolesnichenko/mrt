@@ -46,8 +46,11 @@ const (
 	// gzipQueueBytes is the most decompressed output the gzip readahead
 	// holds that Read has not returned (v0.3 design §6.3).
 	gzipQueueBytes = 256 << 10
-	// gzipChunkBytes is the size of one chunk of the queue.
-	gzipChunkBytes = 32 << 10
+	// gzipChunkBytes is the size of one chunk of the queue. Handing a chunk
+	// to a Read that waits for it wakes a thread, so the chunks are large and
+	// few: two. With 32 KiB chunks a reader that does little per byte was
+	// about 9% slower than Decompress (v0.3.2, .data/v032-diagnosis.md).
+	gzipChunkBytes = 128 << 10
 )
 
 var (
@@ -71,7 +74,10 @@ var (
 // With Workers > 0 the bzip2 reader holds at most about 32 MiB + 16 MiB +
 // 97.4 MB + Workers × (3.6 MB + 4 × 2 MiB + 5 MiB) live: about 148 MB plus
 // 17 MB per worker. The Go heap adds GC headroom on top: at the default
-// GOGC, roughly twice the live bytes (CHANGELOG.md, v0.3.1).
+// GOGC, roughly twice the live bytes. While the compressed window grows, the
+// old array is live until the copy ends, beyond the figure above: 67.1 MB at
+// 14 workers, 142.7 MB for both arrays in the last growth step, measured
+// (CHANGELOG.md, v0.3.2).
 //
 // r is read by the returned reader: for gzip by its goroutine, for bzip2
 // only by its Read. So r must not be read by anything else once

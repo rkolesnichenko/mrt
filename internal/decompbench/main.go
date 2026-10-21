@@ -20,7 +20,8 @@
 // block size in bytes, and last a line "cap: N", the smallest power of two
 // that is at least twice the largest block over all files and at least 2 MiB
 // (the v0.3.1 design §5.1 sizes the parallel reader's speculative cap from
-// it). It exits 1 if a file fails to read.
+// it). It exits 1 if a file fails to read, and when every file failed it
+// prints no "cap:" line.
 //
 //	go run ./internal/decompbench -mem [-crafted] -workers N FILE...
 //
@@ -28,12 +29,22 @@
 // goroutine samples the runtime/metrics value
 // /memory/classes/heap/objects:bytes every 2 ms. It prints the heap before the
 // read (after a GC) as "baseline", the highest sample as "peak" and the growth
-// over the baseline, in bytes. With -crafted it adds two inputs built in
-// memory, the same as decompress_with_test.go builds them: "end-magic-flood"
-// (BZh9 and then end magics, past the look-ahead of the given workers) and
-// "sparse-block-magics" (32 MiB, a block magic and 200 KiB of zeros repeated).
-// A read error on a crafted input is reported, not a failure. It exits 1 if a
-// FILE fails to open. The peak is the largest of the samples, so a short peak
+// over the baseline, in bytes. With -crafted it adds the inputs of
+// internal/bzcraft, built in memory, the same as the tests use them:
+// "end-magic-flood" (BZh9 and then end magics, past the look-ahead of the
+// given workers), "sparse-block-magics" (32 MiB, a block magic and 200 KiB of
+// zeros repeated), and, built with the system bzip2, "results-load" (a block
+// of zeros over the speculative cap, then blocks just under it),
+// "segment-load" (two blocks padded to 7.4 MB compressed),
+// "under-cap-blocks" (blocks just under the cap) and "bound-load" (100 MiB,
+// 25 streams padded to 4 MiB: segment copies to the 32 MiB budget and the
+// window to its bound at 14 workers). Each is built before its baseline is
+// read, so the input itself is in the baseline. Without the bzip2 command the
+// last four are reported as skipped. A read error on a crafted
+// input is reported, not a failure. With -crafted and no FILE it runs the
+// crafted inputs only (-mem alone needs a FILE). It exits 1 if a FILE fails
+// to open or a bzip2-built input fails to build for a reason other than a
+// missing bzip2. The peak is the largest of the samples, so a short peak
 // between two samples can be missed. With the default GC the figure includes
 // garbage not yet collected; the v0.3.1 gate runs it under GOGC=10, as an
 // upper-bound estimate of live bytes (.data/v031-gate-mem.log).
@@ -45,6 +56,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -57,6 +69,7 @@ import (
 	"time"
 
 	"github.com/rkolesnichenko/mrt"
+	"github.com/rkolesnichenko/mrt/internal/bzcraft"
 	"github.com/rkolesnichenko/mrt/internal/bzip2"
 )
 
@@ -64,10 +77,11 @@ func main() {
 	workers := flag.Int("workers", runtime.GOMAXPROCS(0), "DecompressWith's Workers")
 	blocks := flag.Bool("blocks", false, "print the decoded block sizes of each file, and the speculative cap")
 	memMode := flag.Bool("mem", false, "sample the heap while reading each file once with DecompressWith")
-	crafted := flag.Bool("crafted", false, "with -mem: add the end-magic flood and sparse block magics")
+	crafted := flag.Bool("crafted", false, "with -mem: add the internal/bzcraft inputs")
 	flag.Parse()
-	if flag.NArg() == 0 || *workers < 1 {
-		fmt.Fprintln(os.Stderr, "usage: decompbench -workers N FILE... | decompbench -blocks FILE... | decompbench -mem [-crafted] -workers N FILE...")
+	// -mem -crafted needs no FILE: it runs the crafted inputs only.
+	if (flag.NArg() == 0 && !(*memMode && *crafted)) || *workers < 1 {
+		fmt.Fprintln(os.Stderr, "usage: decompbench -workers N FILE... | decompbench -blocks FILE... | decompbench -mem [-crafted] -workers N FILE... | decompbench -mem -crafted -workers N")
 		os.Exit(2)
 	}
 	if *memMode {
@@ -94,7 +108,7 @@ func main() {
 // and the cap for all of them (see the package comment). It returns the exit
 // status.
 func blockSizes(paths []string) int {
-	status, largest := 0, 0
+	status, largest, read := 0, 0, 0
 	for _, p := range paths {
 		sizes, err := walkBlocks(p)
 		if err != nil {
@@ -109,6 +123,10 @@ func blockSizes(paths []string) int {
 		}
 		fmt.Printf("%s blocks %d largest %d mean %d\n", filepath.Base(p), len(sizes), maxSize, sum/max(len(sizes), 1))
 		largest = max(largest, maxSize)
+		read++
+	}
+	if read == 0 {
+		return 1 // every file failed: a cap from no block would be a made-up figure
 	}
 	capBytes := 2 << 20
 	for capBytes < 2*largest {
@@ -274,8 +292,28 @@ func memRun(paths []string, workers int, crafted bool) int {
 		f.Close()
 	}
 	if crafted {
-		memOne("end-magic-flood", bytes.NewReader(endMagicFlood(workers)), workers)
-		memOne("sparse-block-magics", bytes.NewReader(sparseBlockMagics()), workers)
+		memOne("end-magic-flood", bytes.NewReader(bzcraft.EndMagicFlood(workers)), workers)
+		memOne("sparse-block-magics", bytes.NewReader(bzcraft.SparseBlockMagics()), workers)
+		for _, c := range []struct {
+			name  string
+			build func() ([]byte, error)
+		}{
+			{"results-load", bzcraft.ResultsLoad},
+			{"segment-load", bzcraft.SegmentLoad},
+			{"under-cap-blocks", bzcraft.UnderCapBlocks},
+			{"bound-load", bzcraft.BoundLoad},
+		} {
+			in, err := c.build()
+			switch {
+			case errors.Is(err, bzcraft.ErrNoBzip2):
+				fmt.Printf("%s: skipped: %v\n", c.name, err)
+			case err != nil:
+				fmt.Printf("%s: FAIL: %v\n", c.name, err)
+				status = 1
+			default:
+				memOne(c.name, bytes.NewReader(in), workers)
+			}
+		}
 	}
 	return status
 }
@@ -335,23 +373,4 @@ func memOne(name string, in io.Reader, workers int) {
 	}
 	fmt.Printf("%s workers %d out %d took %.2fs baseline %d peak %d growth %d (%.1f MB) result %s\n",
 		name, workers, n, took.Seconds(), base, peak, int64(peak)-int64(base), float64(int64(peak)-int64(base))/1e6, res)
-}
-
-// endMagicFlood is "BZh9" and then end magics, past the look-ahead of the
-// given workers (the same as decompress_with_test.go's input).
-func endMagicFlood(workers int) []byte {
-	end := []byte{0x17, 0x72, 0x45, 0x38, 0x50, 0x90} // the end magic's 48 bits
-	return append([]byte("BZh9"), bytes.Repeat(end, (8+2*workers+1)<<20/6)...)
-}
-
-// sparseBlockMagics is "BZh9" and then, to 32 MiB, a block magic followed by
-// 200 KiB of zeros, repeated (the same as decompress_with_test.go's input).
-func sparseBlockMagics() []byte {
-	magic := []byte{0x31, 0x41, 0x59, 0x26, 0x53, 0x59} // the block magic's 48 bits
-	unit := append(magic, make([]byte, 200<<10)...)
-	in := []byte("BZh9")
-	for len(in) < 32<<20 {
-		in = append(in, unit...)
-	}
-	return in[:32<<20]
 }
