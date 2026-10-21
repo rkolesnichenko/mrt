@@ -8,6 +8,8 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-21
+
 Faster decompression. Every figure below comes from a command run on
 2026-10-20 or 2026-10-21 with Go 1.27.2 on an Apple M3 Max, `GOMAXPROCS=4`,
 and names its log; the first line of the baseline and gate logs
@@ -352,7 +354,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/rkolesnichenko/mrt/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/rkolesnichenko/mrt/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/rkolesnichenko/mrt/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/rkolesnichenko/mrt/compare/v0.1.0...v0.1.1
