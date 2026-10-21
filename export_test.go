@@ -10,13 +10,15 @@ import "io"
 // segment copies the outstanding jobs hold and their count. These run in the
 // goroutine that calls Read. Started is called by a worker with the block it
 // is about to decode, once it has checked for stop; it runs in the worker's
-// goroutine. Any of them may be nil.
+// goroutine. Any of them may be nil. SegmentBudget, if not 0, replaces the
+// 32 MiB budget of segment copies.
 type Bzip2Hooks struct {
-	Extra     func(lo, hi uint64) []uint64
-	Discarded func(bit uint64)
-	Took      func(bit uint64, speculative bool)
-	Held      func(segBytes int64, outstanding int)
-	Started   func(bit uint64)
+	Extra         func(lo, hi uint64) []uint64
+	Discarded     func(bit uint64)
+	Took          func(bit uint64, speculative bool)
+	Held          func(segBytes int64, outstanding int)
+	Started       func(bit uint64)
+	SegmentBudget int64
 }
 
 // DecompressWithBzip2Hooks is DecompressWith with the parallel bzip2 reader's
@@ -24,6 +26,7 @@ type Bzip2Hooks struct {
 func DecompressWithBzip2Hooks(r io.Reader, opts DecompressOptions, h Bzip2Hooks) (io.Reader, error) {
 	return decompressWith(r, opts, &bzip2Hooks{
 		extra: h.Extra, discarded: h.Discarded, took: h.Took, held: h.Held, started: h.Started,
+		budget: h.SegmentBudget,
 	})
 }
 

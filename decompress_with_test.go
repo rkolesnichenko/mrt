@@ -829,7 +829,13 @@ func sparseBlockMagics() []byte {
 // at most 32 MiB in all, and at most 2 × Workers jobs are outstanding. The
 // output is Decompress's. Inputs: zeros1, the bench file, level1.bz2,
 // multi-stream.bz2, the end-magic flood, sparse block magics and the bench
-// file padded past 8 MiB; Workers 1, 3, 4 and 16, under -race 1 and 4.
+// file padded past 8 MiB; Workers 1, 3, 4 and 16. On the padded file at
+// Workers 4 and up, its 8 MiB segment is outstanding beside another job.
+//
+// Under -race, which makes decoding about ten times slower, the workers are
+// 1 and 4, and the padded block is left to TestDecompressWithSpeculates.
+// Not parallel: it holds over 50 MiB of inputs and decodes 60 MB per read of
+// zeros1, so it should not run beside the parallel tests.
 func TestDecompressWithBounds(t *testing.T) {
 	workers := []int{1, 3, 4, 16}
 	if mrt.RaceEnabled {
@@ -843,11 +849,14 @@ func TestDecompressWithBounds(t *testing.T) {
 		}
 		inputs[filepath.Base(p)] = b
 	}
-	padded, err := paddedBench()
-	if err != nil {
-		t.Fatal(err)
+	const paddedName = "bench-padded-past-8MiB"
+	if !mrt.RaceEnabled {
+		padded, err := paddedBench()
+		if err != nil {
+			t.Fatal(err)
+		}
+		inputs[paddedName] = padded
 	}
-	inputs["bench-padded-past-8MiB"] = padded
 	for name, in := range inputs {
 		t.Run(name, func(t *testing.T) {
 			want, wantErr := decompressed(bytes.NewReader(in), 0, false)
@@ -874,8 +883,46 @@ func TestDecompressWithBounds(t *testing.T) {
 				if calls == 0 && name != "end-magic-flood" { // the flood has no candidate
 					t.Errorf("%s: no dispatch", what)
 				}
+				if name == paddedName && w >= 4 && (maxSeg < 8<<20 || maxOut < 2) {
+					t.Errorf("%s: up to %d bytes of segments and %d jobs outstanding; want the 8 MiB segment beside another job",
+						what, maxSeg, maxOut)
+				}
 			}
 		})
+	}
+}
+
+// TestDecompressWithHeldBudget reads the bench file at Workers 4 with a
+// segment budget of 1 byte, so dispatch holds every candidate while a job is
+// outstanding: one job at a time, never more, and a second dispatch after the
+// first job's result was taken shows that dispatch resumes. The output is
+// Decompress's. Not parallel: a stall in the held path shows as the test
+// timeout, which then names this test alone.
+func TestDecompressWithHeldBudget(t *testing.T) {
+	in, err := os.ReadFile(benchBz2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, wantErr := decompressed(bytes.NewReader(in), 0, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls, maxOut := 0, 0
+	held := func(_ int64, outstanding int) { // in this goroutine, which reads
+		calls++
+		maxOut = max(maxOut, outstanding)
+	}
+	r, err := mrt.DecompressWithBzip2Hooks(bytes.NewReader(in), mrt.DecompressOptions{Workers: 4, Context: ctx},
+		mrt.Bzip2Hooks{Held: held, SegmentBudget: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, gotErr := io.ReadAll(r)
+	checkSame(t, "workers 4, budget 1", got, gotErr, want, wantErr)
+	if maxOut != 1 {
+		t.Errorf("up to %d jobs outstanding, want 1", maxOut)
+	}
+	if calls < 2 {
+		t.Errorf("%d dispatches, want at least 2", calls)
 	}
 }
 
@@ -903,8 +950,11 @@ func TestDecompressWithCapsZeroBlocks(t *testing.T) {
 	if len(took) != len(zeros1Blocks) {
 		t.Fatalf("the chain took %d blocks, want %d", len(took), len(zeros1Blocks))
 	}
+	if smallest := slices.Min(zeros1Blocks); mrt.SpecCap >= smallest {
+		t.Fatalf("cap %d, not under zeros1's smallest block, %d bytes", mrt.SpecCap, smallest)
+	}
 	for i, speculative := range took {
-		if zeros1Blocks[i] > mrt.SpecCap && speculative {
+		if speculative {
 			t.Errorf("block %d, of %d bytes, over the %d-byte cap, taken from a worker", i, zeros1Blocks[i], mrt.SpecCap)
 		}
 	}

@@ -10,9 +10,10 @@ package mrt
 // which decodes the block that would start there. When the chain reaches a
 // block, it takes a worker's result only if it started exactly there, with the
 // stream's level, stayed within its copy and gave at most specCap bytes;
-// otherwise the chain decodes the block itself, from the window. A candidate the chain never lands on is
-// discarded for its position, whatever its decode gave. So every byte and every
-// error comes from the chain, in the order the serial reader gives them.
+// otherwise the chain decodes the block itself, from the window. A candidate
+// the chain never lands on is discarded for its position, whatever its decode
+// gave. So every byte and every error comes from the chain, in the order the
+// serial reader gives them.
 
 import (
 	"bufio"
@@ -20,6 +21,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"slices"
 	"sync"
@@ -74,12 +76,14 @@ const (
 // after each dispatch with the bytes of segment copies outstanding jobs hold
 // and their count. All of these run in Read's goroutine. started is called by
 // a worker with the job it is about to decode, once it has checked for stop.
+// budget, if not 0, replaces segmentBudget.
 type bzip2Hooks struct {
 	extra     func(lo, hi uint64) []uint64
 	discarded func(bit uint64)
 	took      func(bit uint64, speculative bool)
 	held      func(segBytes int64, outstanding int)
 	started   func(bit uint64)
+	budget    int64
 }
 
 // A mark is a magic the scan found: a candidate block start, or an end magic,
@@ -111,6 +115,7 @@ type bzip2Result struct {
 type parallelBzip2 struct {
 	ctx     context.Context
 	workers int
+	budget  int64 // segmentBudget, or the test hook's
 	hooks   bzip2Hooks
 
 	// The input: win holds r's bytes from offset winOff; srcErr is the error
@@ -157,9 +162,12 @@ type parallelBzip2 struct {
 }
 
 func newParallelBzip2(src *bufio.Reader, opts DecompressOptions, hooks *bzip2Hooks) *parallelBzip2 {
-	z := &parallelBzip2{src: src, ctx: opts.Context, workers: opts.Workers}
+	z := &parallelBzip2{src: src, ctx: opts.Context, workers: opts.Workers, budget: segmentBudget}
 	if hooks != nil {
 		z.hooks = *hooks
+		if hooks.budget != 0 {
+			z.budget = hooks.budget
+		}
 	}
 	return z
 }
@@ -390,7 +398,7 @@ func (z *parallelBzip2) dispatch() (held bool) {
 			return false
 		}
 		to = min(to, end)
-		if z.outstanding > 0 && z.segHeld+(to-from) > segmentBudget {
+		if z.outstanding > 0 && z.segHeld+(to-from) > z.budget {
 			return true
 		}
 		if z.jobs == nil {
@@ -435,8 +443,9 @@ func (z *parallelBzip2) undispatched() int {
 
 // bzip2Worker decodes jobs with one Decoder, which keeps its buffers between
 // blocks, until jobs is closed or done is. Having taken a job, it returns
-// without decoding it if quit or done is closed, so no job starts after stop
-// or a cancel. A decode gives up past specCap of output or past its segment:
+// without decoding it if quit or done is closed, so no job a worker takes
+// after stop or a cancel starts, and each worker finishes at most the block
+// it is decoding. A decode gives up past specCap of output or past its segment:
 // the chain never takes such a result, and decodes the block itself.
 func bzip2Worker(jobs <-chan *bzip2Job, quit, done <-chan struct{}, started func(bit uint64), wg *sync.WaitGroup) {
 	defer wg.Done()
@@ -462,7 +471,7 @@ func bzip2Worker(jobs <-chan *bzip2Job, quit, done <-chan struct{}, started func
 			br := bzip2.NewBitReader(bytes.NewReader(j.seg))
 			br.ReadBits(uint(j.bit % 8))
 			data, crc, err := d.SpeculativeBlock(br, j.level, specCap)
-			whole := br.Err() == nil && err != bzip2.ErrOverCap
+			whole := br.Err() == nil && !errors.Is(err, bzip2.ErrOverCap)
 			j.res <- bzip2Result{data: data, crc: crc, err: err, end: j.bit/8*8 + br.Offset(), whole: whole}
 		}
 	}
@@ -470,8 +479,8 @@ func bzip2Worker(jobs <-chan *bzip2Job, quit, done <-chan struct{}, started func
 
 // stop ends the speculation: it discards the marks, closes quit and then jobs,
 // drains the jobs no worker has taken, and waits for every worker to exit.
-// So no job starts after stop is called, and each worker finishes at most the
-// block it is decoding. The chain is done with the input when it is called.
+// So no job a worker takes after stop is called starts, and each worker
+// finishes at most the block it is decoding. The chain is done with the input when it is called.
 func (z *parallelBzip2) stop() {
 	if z.stopped {
 		return
