@@ -4,11 +4,12 @@
 // test-only and deterministic, and nothing it builds is committed.
 //
 // EndMagicFlood and SparseBlockMagics are bytes that only look like bzip2.
-// ResultsLoad, SegmentLoad and UnderCapBlocks are real bzip2: they compress
-// generated plaintext with the system bzip2 (bzip2 -9 -c), and return an
-// error wrapping ErrNoBzip2 when it is missing, so callers can skip. Each is
-// built once per process and is under 15 MB; the slice returned is shared, so
-// callers must not modify it.
+// ResultsLoad, SegmentLoad, UnderCapBlocks and BoundLoad are real bzip2: they
+// compress generated plaintext with the system bzip2 (bzip2 -9 -c), and
+// return an error wrapping ErrNoBzip2 when it is missing, so callers can skip.
+// Each is built once per process; the slice returned is shared, so callers
+// must not modify it. The first three are under 15 MB, for the unit tests;
+// BoundLoad is 100 MiB, for the opt-in gate only.
 //
 // The sizes follow from bzip2 -9's block: 899,981 bytes after bzip2's first
 // run-length encoding, which writes a run of 4 to 255 equal bytes as 5 (the
@@ -154,6 +155,30 @@ func Repeated(stream []byte, unit, n int) ([]byte, error) {
 	}
 	return bytes.Repeat(stream, n), nil
 }
+
+// boundUnit and boundCopies are BoundLoad's streams: 4 MiB each, 25 of them.
+const (
+	boundUnit   = 4 << 20
+	boundCopies = 25
+	boundRuns   = 100 // each stream's plaintext: 1,150 bytes of runs
+)
+
+// BoundLoad is 25 bzip2 -9 streams, each one block of 1,150 bytes of runs
+// padded to 4 MiB (Repeated): 100 MiB, built in memory for TestBoundTerms
+// and decompbench, far too large to commit, unlike the other inputs. Its
+// blocks are segments of just under 4 MiB, so at Workers 14 eight of them
+// fill the 32 MiB budget of segment copies, and the 2 × 14 jobs' lead lets
+// the window grow to its bound; at Workers 4 four of them fill the 16 MiB
+// lead. Its plaintext is 28,750 bytes.
+func BoundLoad() ([]byte, error) { return boundLoad() }
+
+var boundLoad = sync.OnceValues(func() ([]byte, error) {
+	stream, err := compress(newRuns(boundRuns))
+	if err != nil {
+		return nil, err
+	}
+	return Repeated(stream, boundUnit, boundCopies)
+})
 
 // compress returns src compressed by bzip2 -9.
 func compress(src io.Reader) ([]byte, error) {

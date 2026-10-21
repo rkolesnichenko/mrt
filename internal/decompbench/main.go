@@ -35,10 +35,12 @@
 // given workers), "sparse-block-magics" (32 MiB, a block magic and 200 KiB of
 // zeros repeated), and, built with the system bzip2, "results-load" (a block
 // of zeros over the speculative cap, then blocks just under it),
-// "segment-load" (two blocks padded to 7.4 MB compressed) and
-// "under-cap-blocks" (blocks just under the cap). Each is built before its
-// baseline is read, so the input itself is in the baseline. Without the bzip2
-// command the last three are reported as skipped. A read error on a crafted
+// "segment-load" (two blocks padded to 7.4 MB compressed),
+// "under-cap-blocks" (blocks just under the cap) and "bound-load" (100 MiB,
+// 25 streams padded to 4 MiB: segment copies to the 32 MiB budget and the
+// window to its bound at 14 workers). Each is built before its baseline is
+// read, so the input itself is in the baseline. Without the bzip2 command the
+// last four are reported as skipped. A read error on a crafted
 // input is reported, not a failure. With -crafted and no FILE it runs the
 // crafted inputs only (-mem alone needs a FILE). It exits 1 if a FILE fails
 // to open or a bzip2-built input fails to build for a reason other than a
@@ -299,6 +301,7 @@ func memRun(paths []string, workers int, crafted bool) int {
 			{"results-load", bzcraft.ResultsLoad},
 			{"segment-load", bzcraft.SegmentLoad},
 			{"under-cap-blocks", bzcraft.UnderCapBlocks},
+			{"bound-load", bzcraft.BoundLoad},
 		} {
 			in, err := c.build()
 			switch {

@@ -3,6 +3,7 @@ package mrt_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"io"
 	"os"
 	"strconv"
@@ -16,17 +17,18 @@ import (
 // TestBoundTerms is the v0.3.2 design §5.2 gate on the terms of
 // DecompressWith's bound that the parallel bzip2 reader can count, through its
 // test hooks. It runs only with MRT_BOUNDGATE=1, alone (it holds hundreds of
-// MB): zeros-9 and the bzcraft inputs that load the terms (skipped without the
-// bzip2 command), each read whole into io.Discard at Workers 4 and 14. It logs
-// one row per input, Workers and term: the term's bound, its peak and the
-// share of the bound reached. It fails if a peak is over its bound:
+// MB): zeros-9 and the bzcraft inputs that load the terms, BoundLoad's 100 MiB
+// among them (skipped without the bzip2 command), each read whole into
+// io.Discard at Workers 4 and 14, and its output checked against
+// Decompress's. It logs one row per input, Workers and term: the term's
+// bound, its peak and the share of the bound reached. It fails if a peak is
+// over its bound:
 //
 //   - segment copies (Held): 32 MiB, segmentBudget;
 //   - results sent and not received (Results): 2 × Workers × SpecCap;
-//   - the window (Window): WindowBound, what fill and compact allow,
-//     2 × (8 MiB + 2 × Workers MiB + 16) + 64 KiB. The row also gives
-//     2 × (8 MiB + 2 × Workers MiB), the v0.3.1 design's figure, which a
-//     read of r can pass by up to 64 KiB + 32 bytes.
+//   - the window's capacity (Window): WindowBound,
+//     2 × (8 MiB + 2 × Workers MiB + 16) + 64 KiB. The row also gives 2L,
+//     2 × (8 MiB + 2 × Workers MiB), the v0.3.1 design's figure.
 //
 // The heap terms the reader cannot count (each worker's decode, the chain's
 // serial decode) are decompbench -mem's (v0.3.2 design §5.2).
@@ -42,20 +44,34 @@ func TestBoundTerms(t *testing.T) {
 		{"results-load", bzcraft.ResultsLoad},
 		{"segment-load", bzcraft.SegmentLoad},
 		{"under-cap-blocks", bzcraft.UnderCapBlocks},
+		{"bound-load", bzcraft.BoundLoad},
 	}
 	for _, c := range inputs {
 		t.Run(c.name, func(t *testing.T) {
 			in := craftedInput(t, c.build)
+			want := sha256.New()
+			if _, err := io.Copy(want, mustDecompress(t, in)); err != nil {
+				t.Fatalf("Decompress: %v", err)
+			}
 			for _, w := range []int{4, 14} {
-				boundTerms(t, c.name, in, w)
+				boundTerms(t, c.name, in, w, want.Sum(nil))
 			}
 		})
 	}
 }
 
-// boundTerms reads in at the given Workers and checks each counted term's peak
-// against its bound.
-func boundTerms(t *testing.T, name string, in []byte, workers int) {
+func mustDecompress(t *testing.T, in []byte) io.Reader {
+	t.Helper()
+	r, err := mrt.Decompress(bytes.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// boundTerms reads in at the given Workers, checks that the output's SHA-256
+// is want, and checks each counted term's peak against its bound.
+func boundTerms(t *testing.T, name string, in []byte, workers int, want []byte) {
 	var mu sync.Mutex // Results is called from any goroutine
 	var segPeak, resPeak int64
 	var winPeak int
@@ -82,9 +98,13 @@ func boundTerms(t *testing.T, name string, in []byte, workers int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := io.Copy(io.Discard, r)
+	h := sha256.New()
+	n, err := io.Copy(h, r)
 	if err != nil {
 		t.Fatalf("workers %d: %d bytes, error %v", workers, n, err)
+	}
+	if !bytes.Equal(h.Sum(nil), want) {
+		t.Errorf("workers %d: %d bytes, not Decompress's", workers, n)
 	}
 	mu.Lock() // EOF stopped the workers
 	defer mu.Unlock()
