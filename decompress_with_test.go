@@ -710,27 +710,49 @@ func TestDecompressWithNoGoroutineAfterEOF(t *testing.T) {
 }
 
 // noGoroutineAfterEOF reads in whole and cut in half: the Read that returns
-// EOF or an error has waited for every goroutine, so none is left, with no
-// wait.
+// EOF or an error has waited for every goroutine, so nothing reads the input
+// after it, and none is left once the runtime has torn them down. A
+// goroutine that has run its last statement can still be counted for a
+// moment (its close or Done is deferred), so the count is polled, without
+// cancelling first.
 func noGoroutineAfterEOF(t *testing.T, in []byte) {
 	t.Helper()
 	for name, in := range map[string][]byte{"whole": in, "cut": in[:len(in)/2]} {
 		base := goroutineBaseline()
 		ctx, cancel := context.WithCancel(context.Background())
-		r, err := mrt.DecompressWith(bytes.NewReader(in), mrt.DecompressOptions{Workers: 4, Context: ctx})
+		src := &lateReadCounter{r: bytes.NewReader(in)}
+		r, err := mrt.DecompressWith(src, mrt.DecompressOptions{Workers: 4, Context: ctx})
 		if err != nil {
 			t.Fatal(err)
 		}
 		_, err = io.ReadAll(r)
-		n := runtime.NumGoroutine()
+		src.returned.Store(true)
+		n := waitGoroutines(base)
 		cancel()
 		if (err != nil) != (name == "cut") {
 			t.Errorf("%s: error %v", name, err)
 		}
+		if k := src.late.Load(); k != 0 {
+			t.Errorf("%s: the input was read %d times after the read returned", name, k)
+		}
 		if n != base {
-			t.Errorf("%s: %d goroutines right after the read returned, %d before", name, n, base)
+			t.Errorf("%s: %d goroutines 2 s after the read returned, %d before", name, n, base)
 		}
 	}
+}
+
+// lateReadCounter counts the Reads of r made once returned is set.
+type lateReadCounter struct {
+	r        io.Reader
+	returned atomic.Bool
+	late     atomic.Int64
+}
+
+func (c *lateReadCounter) Read(p []byte) (int, error) {
+	if c.returned.Load() {
+		c.late.Add(1)
+	}
+	return c.r.Read(p)
 }
 
 // TestDecompressWithPipe feeds the bench file through an io.Pipe, 512 bytes
