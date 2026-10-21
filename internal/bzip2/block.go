@@ -2,10 +2,12 @@ package bzip2
 
 // This file is not from the Go source. It adds what the copy is for: decoding
 // one block from a bit offset and knowing exactly where it ended
-// (Decoder.Block), and the standard stream handling as entry points of their
+// (Decoder.Block, and Decoder.SpeculativeBlock beside it), and the standard stream handling as entry points of their
 // own (Decoder.Header, Decoder.StreamEnd), so that a reader built on them
 // needs none of its own. NewReader is rebuilt on them, so the copy's serial
-// reader runs that code. The decoding itself (readBlock, readFromBlock, setup,
+// reader runs that code. SpeculativeBlock is Block for a caller that is not
+// sure the block is one: it bounds the output and refuses a block whose input
+// ended. The decoding itself (readBlock, readFromBlock, setup,
 // the Huffman, move-to-front and CRC code) is the standard code, unchanged.
 
 import (

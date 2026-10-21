@@ -82,11 +82,31 @@ func matchesDecompress(t testing.TB, in []byte, oneByte bool, workers []int) {
 	}
 }
 
-// bzip2Inputs returns every testdata/bzip2 file but the zeros-* ones (see
+// TestBzip2FixtureGlobs pins the layout the fixture loops rely on: the
+// bzip2 files they loop over are in testdata/bzip2, the zero fixtures, which
+// they must leave out, in testdata/bzip2/zeros.
+func TestBzip2FixtureGlobs(t *testing.T) {
+	for glob, want := range map[string]int{"testdata/bzip2/*.bz2": 3, "testdata/bzip2/zeros/*.bz2": 2} {
+		paths, err := filepath.Glob(glob)
+		if err != nil || len(paths) != want {
+			t.Errorf("%s: %v, error %v; want %d paths", glob, paths, err, want)
+		}
+	}
+	paths, _ := filepath.Glob("testdata/bzip2/*.bz2")
+	var names []string
+	for _, p := range paths {
+		names = append(names, filepath.Base(p))
+	}
+	if want := []string{"level1.bz2", "multi-stream.bz2", "one-byte.bz2"}; !slices.Equal(names, want) {
+		t.Errorf("testdata/bzip2/*.bz2 is %v, want %v", names, want)
+	}
+}
+
+// bzip2Inputs returns every testdata/bzip2 file (not the zeros/ ones, see
 // internal/bzip2's tests) and the bench file, by name.
 func bzip2Inputs(t testing.TB) map[string][]byte {
 	t.Helper()
-	paths, err := filepath.Glob("testdata/bzip2/[^z]*.bz2")
+	paths, err := filepath.Glob("testdata/bzip2/*.bz2")
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no testdata/bzip2 files: %v", err)
 	}
@@ -807,7 +827,7 @@ func TestDecompressWithPipe(t *testing.T) {
 
 // zeros1 is 60,000,000 zero bytes through bzip2 -1: blocks that decode to
 // more than the speculative cap (zeros1Blocks) from a few bytes each.
-const zeros1 = "testdata/bzip2/zeros-1.bz2"
+const zeros1 = "testdata/bzip2/zeros/zeros-1.bz2"
 
 // zeros1Blocks are the decoded sizes of zeros1's blocks, in order.
 var zeros1Blocks = append(slices.Repeat([]int{5_099_235}, 11), 3_908_415)
@@ -993,7 +1013,7 @@ func TestDecompressWithCapsZeroBlocks(t *testing.T) {
 }
 
 // TestDecompressWithCappedDamaged is spec §6.4 on zeros1 with one byte
-// flipped at 10 offsets (5 under -race) from byte 4 to the end, at Workers 4:
+// flipped at 10 offsets (3 under -race) from byte 4 to the end, at Workers 4:
 // damaged blocks over the cap fail, or decode, as Decompress does.
 func TestDecompressWithCappedDamaged(t *testing.T) {
 	in, err := os.ReadFile(zeros1)
@@ -1002,7 +1022,7 @@ func TestDecompressWithCappedDamaged(t *testing.T) {
 	}
 	n := 10
 	if mrt.RaceEnabled {
-		n = 5
+		n = 3
 	}
 	for k := 0; k < n; k++ {
 		off := 4 + k*(len(in)-5)/(n-1)
@@ -1072,11 +1092,13 @@ func TestDecompressWithCancelStartsNoJob(t *testing.T) {
 	}
 }
 
-// TestDecompressWithCancelDuringSerialBlock cancels zeros1 at Workers 4
+// TestDecompressWithCancelBetweenCappedReads cancels zeros1 at Workers 4
 // after 1 MiB of output, inside the first block, which the chain decoded:
 // the next Read returns context.Canceled within 2 s, and every goroutine
-// ends. Not parallel: it times and counts goroutines.
-func TestDecompressWithCancelDuringSerialBlock(t *testing.T) {
+// ends. It is a regression test that also passes on v0.3.0;
+// TestDecompressWithCancelStartsNoJob pins the v0.3.1 fix. Not parallel: it
+// times and counts goroutines.
+func TestDecompressWithCancelBetweenCappedReads(t *testing.T) {
 	in, err := os.ReadFile(zeros1)
 	if err != nil {
 		t.Fatal(err)

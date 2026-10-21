@@ -20,7 +20,8 @@
 // block size in bytes, and last a line "cap: N", the smallest power of two
 // that is at least twice the largest block over all files and at least 2 MiB
 // (the v0.3.1 design §5.1 sizes the parallel reader's speculative cap from
-// it). It exits 1 if a file fails to read.
+// it). It exits 1 if a file fails to read, and when every file failed it
+// prints no "cap:" line.
 //
 //	go run ./internal/decompbench -mem [-crafted] -workers N FILE...
 //
@@ -32,8 +33,9 @@
 // memory, the same as decompress_with_test.go builds them: "end-magic-flood"
 // (BZh9 and then end magics, past the look-ahead of the given workers) and
 // "sparse-block-magics" (32 MiB, a block magic and 200 KiB of zeros repeated).
-// A read error on a crafted input is reported, not a failure. It exits 1 if a
-// FILE fails to open. The peak is the largest of the samples, so a short peak
+// A read error on a crafted input is reported, not a failure. With -crafted
+// and no FILE it runs the crafted inputs only (-mem alone needs a FILE). It
+// exits 1 if a FILE fails to open. The peak is the largest of the samples, so a short peak
 // between two samples can be missed. With the default GC the figure includes
 // garbage not yet collected; the v0.3.1 gate runs it under GOGC=10, as an
 // upper-bound estimate of live bytes (.data/v031-gate-mem.log).
@@ -66,8 +68,9 @@ func main() {
 	memMode := flag.Bool("mem", false, "sample the heap while reading each file once with DecompressWith")
 	crafted := flag.Bool("crafted", false, "with -mem: add the end-magic flood and sparse block magics")
 	flag.Parse()
-	if flag.NArg() == 0 || *workers < 1 {
-		fmt.Fprintln(os.Stderr, "usage: decompbench -workers N FILE... | decompbench -blocks FILE... | decompbench -mem [-crafted] -workers N FILE...")
+	// -mem -crafted needs no FILE: it runs the crafted inputs only.
+	if (flag.NArg() == 0 && !(*memMode && *crafted)) || *workers < 1 {
+		fmt.Fprintln(os.Stderr, "usage: decompbench -workers N FILE... | decompbench -blocks FILE... | decompbench -mem [-crafted] -workers N FILE... | decompbench -mem -crafted -workers N")
 		os.Exit(2)
 	}
 	if *memMode {
@@ -94,7 +97,7 @@ func main() {
 // and the cap for all of them (see the package comment). It returns the exit
 // status.
 func blockSizes(paths []string) int {
-	status, largest := 0, 0
+	status, largest, read := 0, 0, 0
 	for _, p := range paths {
 		sizes, err := walkBlocks(p)
 		if err != nil {
@@ -109,6 +112,10 @@ func blockSizes(paths []string) int {
 		}
 		fmt.Printf("%s blocks %d largest %d mean %d\n", filepath.Base(p), len(sizes), maxSize, sum/max(len(sizes), 1))
 		largest = max(largest, maxSize)
+		read++
+	}
+	if read == 0 {
+		return 1 // every file failed: a cap from no block would be a made-up figure
 	}
 	capBytes := 2 << 20
 	for capBytes < 2*largest {

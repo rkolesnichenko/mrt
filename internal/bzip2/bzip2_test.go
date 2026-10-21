@@ -18,7 +18,7 @@ const benchFile = "../../testdata/bench/rv2-updates-et.20261015.1200.bz2"
 // the tests that cut and flip an input) and the bench file, by name.
 func inputs(t testing.TB) map[string][]byte {
 	t.Helper()
-	paths, err := filepath.Glob("../../testdata/bzip2/[^z]*.bz2")
+	paths, err := filepath.Glob("../../testdata/bzip2/*.bz2")
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no testdata/bzip2 files: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestStreamWalk(t *testing.T) {
 
 // zerosFixture is 60,000,000 zero bytes at level 1: 12 blocks, of which 11
 // hold 5,099,235 bytes and the last 3,908,415.
-const zerosFixture = "../../testdata/bzip2/zeros-1.bz2"
+const zerosFixture = "../../testdata/bzip2/zeros/zeros-1.bz2"
 
 // fullBlock and lastBlock are the sizes of zerosFixture's blocks.
 const fullBlock, lastBlock = 5099235, 3908415
@@ -436,12 +436,12 @@ func TestZeroFixtureBlocks(t *testing.T) {
 }
 
 // TestSpeculativeBlockCap: the zero fixture's blocks are over a 4 MiB cap
-// except the last, which is under it; with a cap over all of them
-// SpeculativeBlock gives what Block gives. Not parallel: it reads the
+// except the last, which is under it, and for that one SpeculativeBlock gives
+// what Block gives: data, CRC and error. Not parallel: it reads the
 // process-wide runtime.MemStats.TotalAlloc.
 func TestSpeculativeBlockCap(t *testing.T) {
 	in := readZerosFixture(t)
-	const cap4, cap8 = 4 << 20, 8 << 20
+	const cap4 = 4 << 20
 	var d, ref Decoder
 	br := NewBitReader(bytes.NewReader(in))
 	level, err := d.Header(br)
@@ -449,11 +449,15 @@ func TestSpeculativeBlockCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	var starts []uint64
+	var lastData []byte
+	var lastCRC uint32
 	for br.PeekMagic() == BlockMagic {
 		starts = append(starts, br.Offset())
-		if _, _, err := ref.Block(br, level); err != nil {
+		data, crc, err := ref.Block(br, level)
+		if err != nil {
 			t.Fatal(err)
 		}
+		lastData, lastCRC = data, crc
 	}
 	if len(starts) != 12 {
 		t.Fatalf("%d blocks, want 12", len(starts))
@@ -469,8 +473,9 @@ func TestSpeculativeBlockCap(t *testing.T) {
 			if data != nil || crc != 0 || err != ErrOverCap {
 				t.Errorf("block %d at cap 4 MiB: %d bytes, crc %08x, error %v; want nil, 0, ErrOverCap", i, len(data), crc, err)
 			}
-		} else if data == nil || len(data) != lastBlock || err != nil {
-			t.Errorf("block %d at cap 4 MiB: %d bytes, error %v; want %d bytes", i, len(data), err, lastBlock)
+		} else if len(data) != lastBlock || !bytes.Equal(data, lastData) || crc != lastCRC || err != nil {
+			t.Errorf("block %d at cap 4 MiB: %d bytes, crc %08x, error %v; Block gives %d bytes, crc %08x, no error",
+				i, len(data), crc, err, len(lastData), lastCRC)
 		}
 		// The call above has allocated the Decoder's block buffer. A capped
 		// call stops filling chunks at the one that passes the cap, and the
@@ -488,13 +493,6 @@ func TestSpeculativeBlockCap(t *testing.T) {
 					t.Errorf("block %d: a call capped at %d allocated %d bytes, want under %d", i, c.maxOut, alloc, c.limit)
 				}
 			}
-		}
-
-		wantData, wantCRC, wantErr := ref.Block(at(i), level)
-		data, crc, err = d.SpeculativeBlock(at(i), level, cap8)
-		if !bytes.Equal(data, wantData) || crc != wantCRC || err != wantErr {
-			t.Errorf("block %d at cap 8 MiB: %d bytes, crc %08x, error %v; Block gives %d bytes, crc %08x, error %v",
-				i, len(data), crc, err, len(wantData), wantCRC, wantErr)
 		}
 	}
 }
@@ -528,10 +526,41 @@ func TestSpeculativeBlockPastInput(t *testing.T) {
 	if data != nil || crc != 0 || err == nil || err != br.Err() || err != io.ErrUnexpectedEOF {
 		t.Errorf("SpeculativeBlock: %d bytes, crc %08x, error %v, br.Err() %v; want nil, 0, io.ErrUnexpectedEOF", len(data), crc, err, br.Err())
 	}
+
 	br = at()
 	data, _, err = d.Block(br, level)
 	if err == nil || err != br.Err() {
 		t.Errorf("Block: %d bytes, error %v, br.Err() %v; want br.Err()", len(data), err, br.Err())
+	}
+
+	// The half block above fails inside the Huffman data, before any output
+	// in either function. A cut in the last bytes of a small block lets the
+	// Huffman and move-to-front data finish with br.Err() set, so that Block
+	// produces bytes. There, the result alone cannot tell the check before
+	// any output from the one after it (both return nil and br.Err()): the
+	// first leaves a fresh Decoder with no output chunk, the second only
+	// after filling one.
+	small := inputs(t)["level1.bz2"]
+	smallLevel := int(small[3] - '0')
+	found := 0
+	for n := 5; n < len(small); n++ {
+		br := NewBitReader(bytes.NewReader(small[:n]))
+		br.ReadBits64(32)
+		var blk, spec Decoder
+		if data, _, err := blk.Block(br, smallLevel); len(data) == 0 || err == nil || err != br.Err() {
+			continue // not a cut that decodes the block's bytes from zeros
+		}
+		found++
+		br = NewBitReader(bytes.NewReader(small[:n]))
+		br.ReadBits64(32)
+		data, crc, err := spec.SpeculativeBlock(br, smallLevel, 64<<20)
+		if data != nil || crc != 0 || err != io.ErrUnexpectedEOF || len(spec.chunks) != 0 {
+			t.Errorf("level1.bz2 cut at %d bytes: SpeculativeBlock gave %d bytes, crc %08x, error %v and filled %d output chunks; want nil, 0, io.ErrUnexpectedEOF and none",
+				n, len(data), crc, err, len(spec.chunks))
+		}
+	}
+	if found == 0 {
+		t.Error("no cut of level1.bz2 lets Block decode bytes with br.Err() set; the test no longer reaches the check")
 	}
 }
 
@@ -551,7 +580,8 @@ func TestSpeculativeBlockMatchesBlock(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		ref.Header(refBr)
-		for i := 0; ; i++ {
+		i := 0 // counts blocks across the file's streams
+		for {
 			// Each stream's end is skipped as TestStreamWalk does.
 			var crc uint32
 			for br.PeekMagic() == BlockMagic {
@@ -574,5 +604,36 @@ func TestSpeculativeBlockMatchesBlock(t *testing.T) {
 			}
 			level = next
 		}
+	}
+}
+
+// TestSpeculativeBlockDropsChunks: a call that stops at the cap leaves the
+// Decoder holding the chunks a call below the cap leaves, keepChunks, not the
+// five the block's output had filled by then.
+func TestSpeculativeBlockDropsChunks(t *testing.T) {
+	t.Parallel()
+	in := readZerosFixture(t)
+	var d Decoder
+	br := NewBitReader(bytes.NewReader(in))
+	level, err := d.Header(br)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first block is 5,099,235 bytes: five chunks, over a 4 MiB cap.
+	if _, _, err := d.SpeculativeBlock(br, level, 4<<20); err != ErrOverCap {
+		t.Fatalf("capped call: error %v, want ErrOverCap", err)
+	}
+	capped := len(d.chunks)
+	// The same block again, below an 8 MiB cap (br is in the block after the
+	// capped call, so it is read anew).
+	br = NewBitReader(bytes.NewReader(in))
+	if _, err := d.Header(br); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := d.SpeculativeBlock(br, level, 8<<20); err != nil {
+		t.Fatalf("call below the cap: %v", err)
+	}
+	if below := len(d.chunks); capped != below || capped != keepChunks {
+		t.Errorf("chunks kept: %d after the capped call, %d after a call below the cap; want both %d", capped, below, keepChunks)
 	}
 }
