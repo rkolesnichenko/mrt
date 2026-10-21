@@ -8,7 +8,10 @@ package bzip2
 // reader runs that code. The decoding itself (readBlock, readFromBlock, setup,
 // the Huffman, move-to-front and CRC code) is the standard code, unchanged.
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
 // BlockMagic starts every block and EndMagic ends every stream, 48 bits each.
 // Neither is byte-aligned in general.
@@ -59,8 +62,11 @@ func FoldCRC(stream, block uint32) uint32 {
 }
 
 // A Decoder decodes blocks. Its zero value is ready to use. It keeps its
-// block buffer (up to 3.6 MB, at level 9) and its output chunks (2 MiB)
-// between calls; it is not safe for concurrent use.
+// block buffer (up to 3.6 MB, at level 9) and up to two output chunks (2 MiB)
+// between calls; it is not safe for concurrent use. A call holds more while it
+// runs: Block as many chunks as the block's output needs (1 MiB each, so the
+// block's size rounded up) and then the slice it returns; SpeculativeBlock
+// stops filling chunks at its cap, so it holds at most the cap plus one chunk.
 type Decoder struct {
 	r      reader
 	chunks [][]byte // a block's bytes, before they are copied out
@@ -93,20 +99,50 @@ const (
 // Afterwards br.Offset() is the block's end: the bit after its last, where the
 // next block magic or the end magic starts.
 func (d *Decoder) Block(br *BitReader, level int) (data []byte, storedCRC uint32, err error) {
+	return d.decode(br, level, 0)
+}
+
+// ErrOverCap is what SpeculativeBlock returns for a block whose output is
+// over the cap it was given.
+var ErrOverCap = errors.New("bzip2: block output over the cap")
+
+// SpeculativeBlock is Block, with two differences, for a caller that decodes
+// a block it is not sure is one, and wants to bound what that costs:
+//   - If the block's output passes maxOut bytes, it stops filling chunks and
+//     returns nil, 0 and ErrOverCap. It has then held at most maxOut bytes
+//     plus one chunk, and has made no copy. Afterwards br is in the block, at
+//     no particular bit.
+//   - If br's input ended or failed (br.Err() is not nil) by the end of the
+//     block's Huffman and move-to-front data, it returns nil, 0 and br.Err()
+//     before it produces any output, where Block would produce the bytes
+//     that decode from the zeros the reader returns past the input.
+//
+// Otherwise it returns what Block returns. A maxOut under 1 is 1.
+func (d *Decoder) SpeculativeBlock(br *BitReader, level, maxOut int) (data []byte, storedCRC uint32, err error) {
+	return d.decode(br, level, max(maxOut, 1))
+}
+
+// decode is Block (maxOut 0) and SpeculativeBlock (maxOut over 0).
+func (d *Decoder) decode(br *BitReader, level, maxOut int) (data []byte, storedCRC uint32, err error) {
 	if level < 1 || level > 9 {
 		return nil, 0, StructuralError("invalid compression level")
 	}
 	// The standard code reads d.r.br, so br is copied in and back out.
 	d.r.br = *br
-	data, err = d.block(level)
+	data, err = d.block(level, maxOut)
 	*br = d.r.br
 	if br.err != nil {
 		err = br.err // as the standard reader's Read prefers it
 	}
+	if maxOut > 0 && (err == ErrOverCap || br.err != nil) {
+		return nil, 0, err
+	}
 	return data, d.r.wantBlockCRC, err
 }
 
-func (d *Decoder) block(level int) ([]byte, error) {
+// block decodes the block at d.r.br. A maxOut over 0 is SpeculativeBlock's:
+// see there.
+func (d *Decoder) block(level, maxOut int) ([]byte, error) {
 	bz2 := &d.r
 	bz2.wantBlockCRC = 0
 	if bz2.br.ReadBits64(48) != BlockMagic {
@@ -120,6 +156,9 @@ func (d *Decoder) block(level int) ([]byte, error) {
 	if err := bz2.readBlock(); err != nil {
 		return nil, err
 	}
+	if maxOut > 0 && bz2.br.err != nil {
+		return nil, bz2.br.err
+	}
 	n := 0
 	for i := 0; ; i++ {
 		if i == len(d.chunks) {
@@ -127,6 +166,10 @@ func (d *Decoder) block(level int) ([]byte, error) {
 		}
 		m := bz2.readFromBlock(d.chunks[i]) // fills the chunk unless the block ends
 		n += m
+		if maxOut > 0 && n > maxOut {
+			d.dropChunks()
+			return nil, ErrOverCap
+		}
 		if m < chunkSize {
 			break
 		}
@@ -135,14 +178,19 @@ func (d *Decoder) block(level int) ([]byte, error) {
 	for _, c := range d.chunks {
 		data = append(data, c[:min(len(c), n-len(data))]...)
 	}
-	if len(d.chunks) > keepChunks {
-		clear(d.chunks[keepChunks:])
-		d.chunks = d.chunks[:keepChunks]
-	}
+	d.dropChunks()
 	if updateCRC(0, data) != bz2.wantBlockCRC {
 		return data, StructuralError("block checksum mismatch")
 	}
 	return data, nil
+}
+
+// dropChunks keeps keepChunks chunks and frees the others.
+func (d *Decoder) dropChunks() {
+	if len(d.chunks) > keepChunks {
+		clear(d.chunks[keepChunks:])
+		d.chunks = d.chunks[:keepChunks]
+	}
 }
 
 // Header reads a stream header at br: "BZh" and the level digit. It returns

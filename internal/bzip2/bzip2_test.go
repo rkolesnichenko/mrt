@@ -8,15 +8,17 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
 const benchFile = "../../testdata/bench/rv2-updates-et.20261015.1200.bz2"
 
-// inputs returns every testdata/bzip2 file and the bench file, by name.
+// inputs returns every testdata/bzip2 file but the zeros-* ones (too big for
+// the tests that cut and flip an input) and the bench file, by name.
 func inputs(t testing.TB) map[string][]byte {
 	t.Helper()
-	paths, err := filepath.Glob("../../testdata/bzip2/*.bz2")
+	paths, err := filepath.Glob("../../testdata/bzip2/[^z]*.bz2")
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no testdata/bzip2 files: %v", err)
 	}
@@ -382,5 +384,190 @@ func TestStreamWalk(t *testing.T) {
 	}
 	if level, err := d.StreamEnd(br, 0); level != 0 || err == nil || err.Error() != "bzip2 data invalid: file checksum mismatch" {
 		t.Errorf("StreamEnd with a wrong CRC: level %d, error %v", level, err)
+	}
+}
+
+// zerosFixture is 60,000,000 zero bytes at level 1: 12 blocks, of which 11
+// hold 5,099,235 bytes and the last 3,908,415.
+const zerosFixture = "../../testdata/bzip2/zeros-1.bz2"
+
+// fullBlock and lastBlock are the sizes of zerosFixture's blocks.
+const fullBlock, lastBlock = 5099235, 3908415
+
+func readZerosFixture(t testing.TB) []byte {
+	t.Helper()
+	in, err := os.ReadFile(zerosFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return in
+}
+
+func TestZeroFixtureBlocks(t *testing.T) {
+	t.Parallel()
+	in := readZerosFixture(t)
+	var d Decoder
+	br := NewBitReader(bytes.NewReader(in))
+	level, err := d.Header(br)
+	if err != nil || level != 1 {
+		t.Fatalf("Header: level %d, error %v", level, err)
+	}
+	var sizes []int
+	var crc uint32
+	for br.PeekMagic() == BlockMagic {
+		data, stored, err := d.Block(br, level)
+		if err != nil {
+			t.Fatalf("block %d: %v", len(sizes), err)
+		}
+		if len(data) == 0 || data[0] != 0 || !bytes.Equal(data[:len(data)-1], data[1:]) {
+			t.Fatalf("block %d: %d bytes that are not all zeros", len(sizes), len(data))
+		}
+		sizes = append(sizes, len(data))
+		crc = FoldCRC(crc, stored)
+	}
+	if next, err := d.StreamEnd(br, crc); next != 0 || err != io.EOF {
+		t.Fatalf("StreamEnd: %d, %v; want 0, io.EOF", next, err)
+	}
+	want := slices.Repeat([]int{fullBlock}, 11)
+	want = append(want, lastBlock)
+	if !slices.Equal(sizes, want) {
+		t.Errorf("block sizes %v; want %v", sizes, want)
+	}
+}
+
+// TestSpeculativeBlockCap: the zero fixture's blocks are over a 4 MiB cap
+// except the last, which is under it; with a cap over all of them
+// SpeculativeBlock gives what Block gives. Not parallel: it reads the
+// process-wide runtime.MemStats.TotalAlloc.
+func TestSpeculativeBlockCap(t *testing.T) {
+	in := readZerosFixture(t)
+	const cap4, cap8 = 4 << 20, 8 << 20
+	var d, ref Decoder
+	br := NewBitReader(bytes.NewReader(in))
+	level, err := d.Header(br)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var starts []uint64
+	for br.PeekMagic() == BlockMagic {
+		starts = append(starts, br.Offset())
+		if _, _, err := ref.Block(br, level); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(starts) != 12 {
+		t.Fatalf("%d blocks, want 12", len(starts))
+	}
+	at := func(i int) *BitReader {
+		br := NewBitReader(bytes.NewReader(in[starts[i]/8:]))
+		br.ReadBits(uint(starts[i] % 8))
+		return br
+	}
+	for i := range starts {
+		data, crc, err := d.SpeculativeBlock(at(i), level, cap4)
+		if i < 11 {
+			if data != nil || crc != 0 || err != ErrOverCap {
+				t.Errorf("block %d at cap 4 MiB: %d bytes, crc %08x, error %v; want nil, 0, ErrOverCap", i, len(data), crc, err)
+			}
+		} else if data == nil || len(data) != lastBlock || err != nil {
+			t.Errorf("block %d at cap 4 MiB: %d bytes, error %v; want %d bytes", i, len(data), err, lastBlock)
+		}
+		// The call above has allocated the Decoder's block buffer. A capped
+		// call holds the cap plus one chunk at most, and the Decoder keeps
+		// two chunks, so a warm one allocates under 4 MiB + 1 MiB.
+		if i < 11 {
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			d.SpeculativeBlock(at(i), level, cap4)
+			runtime.ReadMemStats(&after)
+			if alloc := after.TotalAlloc - before.TotalAlloc; alloc >= cap4+1<<20 {
+				t.Errorf("block %d: a capped call allocated %d bytes, want under %d", i, alloc, cap4+1<<20)
+			}
+		}
+
+		wantData, wantCRC, wantErr := ref.Block(at(i), level)
+		data, crc, err = d.SpeculativeBlock(at(i), level, cap8)
+		if !bytes.Equal(data, wantData) || crc != wantCRC || err != wantErr {
+			t.Errorf("block %d at cap 8 MiB: %d bytes, crc %08x, error %v; Block gives %d bytes, crc %08x, error %v",
+				i, len(data), crc, err, len(wantData), wantCRC, wantErr)
+		}
+	}
+}
+
+// TestSpeculativeBlockPastInput: a block whose input ends inside it is
+// SpeculativeBlock's br.Err() with no bytes, where Block still returns the
+// bytes that decode from the zeros past the end, with the same error.
+func TestSpeculativeBlockPastInput(t *testing.T) {
+	t.Parallel()
+	in := inputs(t)[filepath.Base(benchFile)]
+	blocks, ends := magics(in)
+	if len(blocks) < 2 || len(ends) != 1 {
+		t.Fatalf("%d blocks and %d ends in the bench file, want at least 2 and 1", len(blocks), len(ends))
+	}
+	// Half of the second block's compressed bytes.
+	next := append(append([]uint64{}, blocks[2:]...), ends[0])
+	cut := in[:(blocks[1]+next[0])/2/8]
+	level := int(in[3] - '0')
+	at := func() *BitReader {
+		br := NewBitReader(bytes.NewReader(cut))
+		br.ReadBits64(32)
+		var d Decoder
+		if _, _, err := d.Block(br, level); err != nil {
+			t.Fatalf("first block: %v", err)
+		}
+		return br
+	}
+	var d Decoder
+	br := at()
+	data, crc, err := d.SpeculativeBlock(br, level, 64<<20)
+	if data != nil || crc != 0 || err == nil || err != br.Err() || err != io.ErrUnexpectedEOF {
+		t.Errorf("SpeculativeBlock: %d bytes, crc %08x, error %v, br.Err() %v; want nil, 0, io.ErrUnexpectedEOF", len(data), crc, err, br.Err())
+	}
+	br = at()
+	data, _, err = d.Block(br, level)
+	if err == nil || err != br.Err() {
+		t.Errorf("Block: %d bytes, error %v, br.Err() %v; want br.Err()", len(data), err, br.Err())
+	}
+}
+
+// TestSpeculativeBlockMatchesBlock: under a cap no block reaches, on every
+// block of every testdata/bzip2 file (the zero fixture included) and the
+// bench file, SpeculativeBlock is Block.
+func TestSpeculativeBlockMatchesBlock(t *testing.T) {
+	t.Parallel()
+	all := inputs(t)
+	all["zeros-1.bz2"] = readZerosFixture(t)
+	for name, in := range all {
+		var d, ref Decoder
+		br := NewBitReader(bytes.NewReader(in))
+		refBr := NewBitReader(bytes.NewReader(in))
+		level, err := d.Header(br)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		ref.Header(refBr)
+		for i := 0; ; i++ {
+			// Each stream's end is skipped as TestStreamWalk does.
+			var crc uint32
+			for br.PeekMagic() == BlockMagic {
+				data, stored, err := d.SpeculativeBlock(br, level, 64<<20)
+				wantData, wantStored, wantErr := ref.Block(refBr, level)
+				if !bytes.Equal(data, wantData) || stored != wantStored || err != wantErr || br.Offset() != refBr.Offset() {
+					t.Fatalf("%s block %d: %d bytes, crc %08x, error %v, at bit %d; Block gives %d, %08x, %v, %d",
+						name, i, len(data), stored, err, br.Offset(), len(wantData), wantStored, wantErr, refBr.Offset())
+				}
+				crc = FoldCRC(crc, stored)
+				i++
+			}
+			next, err := d.StreamEnd(br, crc)
+			ref.StreamEnd(refBr, crc)
+			if next == 0 {
+				if err != io.EOF {
+					t.Fatalf("%s: StreamEnd: %v", name, err)
+				}
+				break
+			}
+			level = next
+		}
 	}
 }

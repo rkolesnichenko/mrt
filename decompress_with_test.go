@@ -82,10 +82,11 @@ func matchesDecompress(t testing.TB, in []byte, oneByte bool, workers []int) {
 	}
 }
 
-// bzip2Inputs returns every testdata/bzip2 file and the bench file, by name.
+// bzip2Inputs returns every testdata/bzip2 file but the zeros-* ones (see
+// internal/bzip2's tests) and the bench file, by name.
 func bzip2Inputs(t testing.TB) map[string][]byte {
 	t.Helper()
-	paths, err := filepath.Glob("testdata/bzip2/*.bz2")
+	paths, err := filepath.Glob("testdata/bzip2/[^z]*.bz2")
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no testdata/bzip2 files: %v", err)
 	}

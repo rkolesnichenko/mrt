@@ -12,9 +12,19 @@
 // identical, and the Decompress+Routes and DecompressWith+Routes times and
 // that speed-up. It exits 1 if a file fails to read, the outputs differ, or
 // the routes differ in count.
+//
+//	go run ./internal/decompbench -blocks FILE...
+//
+// With -blocks it times nothing: it walks each file's streams and blocks with
+// internal/bzip2 and prints the block count, the largest and the mean decoded
+// block size in bytes, and last a line "cap: N", the smallest power of two
+// that is at least twice the largest block over all files and at least 2 MiB
+// (the v0.3.1 design §5.1 sizes the parallel reader's speculative cap from
+// it). It exits 1 if a file fails to read.
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -28,14 +38,19 @@ import (
 	"time"
 
 	"github.com/rkolesnichenko/mrt"
+	"github.com/rkolesnichenko/mrt/internal/bzip2"
 )
 
 func main() {
 	workers := flag.Int("workers", runtime.GOMAXPROCS(0), "DecompressWith's Workers")
+	blocks := flag.Bool("blocks", false, "print the decoded block sizes of each file, and the speculative cap")
 	flag.Parse()
 	if flag.NArg() == 0 || *workers < 1 {
-		fmt.Fprintln(os.Stderr, "usage: decompbench -workers N FILE...")
+		fmt.Fprintln(os.Stderr, "usage: decompbench -workers N FILE... | decompbench -blocks FILE...")
 		os.Exit(2)
+	}
+	if *blocks {
+		os.Exit(blockSizes(flag.Args()))
 	}
 	fmt.Printf("go %s GOMAXPROCS %d NumCPU %d GOMEMLIMIT %d workers %d\n",
 		runtime.Version(), runtime.GOMAXPROCS(0), runtime.NumCPU(), debug.SetMemoryLimit(-1), *workers)
@@ -49,6 +64,66 @@ func main() {
 	if !ok {
 		os.Exit(1)
 	}
+}
+
+// blockSizes prints each file's block count and largest and mean block size,
+// and the cap for all of them (see the package comment). It returns the exit
+// status.
+func blockSizes(paths []string) int {
+	status, largest := 0, 0
+	for _, p := range paths {
+		sizes, err := walkBlocks(p)
+		if err != nil {
+			fmt.Printf("%s: FAIL: %v\n", filepath.Base(p), err)
+			status = 1
+			continue
+		}
+		maxSize, sum := 0, 0
+		for _, n := range sizes {
+			maxSize = max(maxSize, n)
+			sum += n
+		}
+		fmt.Printf("%s blocks %d largest %d mean %d\n", filepath.Base(p), len(sizes), maxSize, sum/max(len(sizes), 1))
+		largest = max(largest, maxSize)
+	}
+	capBytes := 2 << 20
+	for capBytes < 2*largest {
+		capBytes <<= 1
+	}
+	fmt.Printf("cap: %d\n", capBytes)
+	return status
+}
+
+// walkBlocks returns the decoded size of each block of the file at p, across
+// all its streams.
+func walkBlocks(p string) ([]int, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var d bzip2.Decoder
+	br := bzip2.NewBitReader(bufio.NewReaderSize(f, 1<<20))
+	level, err := d.Header(br)
+	if err != nil {
+		return nil, err
+	}
+	var sizes []int
+	for level != 0 {
+		var crc uint32
+		for br.PeekMagic() == bzip2.BlockMagic {
+			data, stored, err := d.Block(br, level)
+			if err != nil {
+				return nil, fmt.Errorf("block %d: %v", len(sizes), err)
+			}
+			sizes = append(sizes, len(data))
+			crc = bzip2.FoldCRC(crc, stored)
+		}
+		if level, err = d.StreamEnd(br, crc); err != nil && err != io.EOF {
+			return nil, err
+		}
+	}
+	return sizes, nil
 }
 
 // open returns a reader of the file at p: Decompress (workers 0) or

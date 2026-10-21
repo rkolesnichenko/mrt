@@ -290,7 +290,7 @@ func TestHugeCountsAllocateLittle(t *testing.T) {
 // that an input expanding to hundreds of MB stays quick: past that, only the
 // common prefix is compared, and the read is ended by cancelling.
 func FuzzDecompress(f *testing.F) {
-	paths, err := filepath.Glob("testdata/bzip2/*.bz2")
+	paths, err := filepath.Glob("testdata/bzip2/[^z]*.bz2")
 	if err != nil {
 		f.Fatal(err)
 	}
