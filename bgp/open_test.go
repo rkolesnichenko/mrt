@@ -125,9 +125,9 @@ func TestParseOpenErrors(t *testing.T) {
 	extOverrun := openMsgExt(capParam(capMP))
 	extOverrun[30] = 200 // high byte of the extended length
 	short := msgOf(1, 4, 0, 1)
-	paramOverrun := openMsg([]byte{2, 5, 1, 4, 0, 1})    // parameter says 5 bytes, 4 are present
-	capHeaderOverrun := openMsg([]byte{2, 3, 1, 4, 0})   // one byte left in the parameter for a capability header
-	capValueOverrun := openMsg([]byte{2, 4, 1, 9, 0, 1}) // capability says 9 bytes, 2 are left in its parameter
+	paramOverrun := openMsg([]byte{2, 5, 1, 4, 0, 1})        // parameter says 5 bytes, 4 are present
+	lonelyByte := openMsg([]byte{2, 7, 1, 4, 0, 1, 0, 1, 9}) // a whole capability, then one byte where a header should start
+	capValueOverrun := openMsg([]byte{2, 4, 1, 9, 0, 1})     // capability says 9 bytes, 2 are left in its parameter
 	cut := good[:len(good)-3]
 
 	cases := []struct {
@@ -142,7 +142,7 @@ func TestParseOpenErrors(t *testing.T) {
 		{"params length past message", overrun, []string{DiagOpenLength}},
 		{"extended params length past message", extOverrun, []string{DiagOpenLength}},
 		{"parameter past the optional parameters", paramOverrun, []string{DiagOpenLength}},
-		{"capability header past its parameter", capHeaderOverrun, []string{DiagOpenLength}},
+		{"one byte where a capability header should start", lonelyByte, []string{DiagOpenLength}},
 		{"capability value past its parameter", capValueOverrun, []string{DiagOpenLength}},
 		{"cut message", cut, []string{DiagMessageTruncated}},
 	}
@@ -177,7 +177,7 @@ func TestParseOpenErrors(t *testing.T) {
 	})
 
 	t.Run("capability overruns keep earlier capabilities", func(t *testing.T) {
-		for _, tail := range [][]byte{{2, 3, 1, 4, 0}, {2, 4, 1, 9, 0, 1}} {
+		for _, tail := range [][]byte{{2, 1, 1}, {2, 4, 1, 9, 0, 1}} {
 			// the first capability, then a capability that runs past its correctly sized parameter
 			msg := openMsg(capParam(capMP), tail)
 			o, d := ParseOpen(msg)
