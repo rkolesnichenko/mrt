@@ -69,15 +69,6 @@ func goldenFixtures(t *testing.T) []goldenFixture {
 	return fs
 }
 
-// splitLines splits text into lines without their newlines.
-func splitLines(b []byte) []string {
-	s := strings.TrimSuffix(string(b), "\n")
-	if s == "" {
-		return nil
-	}
-	return strings.Split(s, "\n")
-}
-
 var (
 	routeLinesMu    sync.Mutex
 	routeLinesCache = map[string][]string{}
@@ -140,7 +131,7 @@ func readBMPGolden(t *testing.T, f goldenFixture) []string {
 	if err != nil {
 		t.Fatalf("%v (MRT_GOLDEN_UPDATE=1 go test -run TestBMPMatchesBgpkitLive ./bmp writes the goldens; it needs bgpkit-bmp)", err)
 	}
-	return splitLines(b)
+	return oracle.Lines(b)
 }
 
 // bgpkitPairs are the pairs of divergences.md's "## bgpkit-parser" section.
@@ -239,7 +230,7 @@ func TestBMPMatchesBgpkitLive(t *testing.T) {
 			}
 			if !bytes.Equal(b.Bytes(), golden) {
 				t.Errorf("bgpkit-bmp's output differs from %s at %s\n(MRT_GOLDEN_UPDATE=1 rewrites it; review the diff)",
-					f.golden(), oracle.FirstDifference(splitLines(golden), splitLines(b.Bytes())))
+					f.golden(), oracle.FirstDifference(oracle.Lines(golden), oracle.Lines(b.Bytes())))
 			}
 		})
 	}

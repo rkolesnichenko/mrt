@@ -57,6 +57,34 @@ func TestParseDivergencesRefuses(t *testing.T) {
 	}
 }
 
+// Every entry with no pair block is named, not only the first.
+func TestParseDivergencesNamesEveryEmptyEntry(t *testing.T) {
+	doc := "## bgpkit-parser\n\n### K1. one\n\n### K2. two\n\n```pair\nfixture: f\nmrt: a\n```\n\n### K3. three\n"
+	_, err := ParseDivergences(writeDoc(t, doc), "bgpkit-parser")
+	if err == nil {
+		t.Fatal("no error")
+	}
+	for _, e := range []string{`"bgpkit-parser/K1. one"`, `"bgpkit-parser/K3. three"`} {
+		if !strings.Contains(err.Error(), e) {
+			t.Errorf("err = %v, want it to name %s", err, e)
+		}
+	}
+	if strings.Contains(err.Error(), "K2") {
+		t.Errorf("err = %v names K2, which has a pair", err)
+	}
+}
+
+func TestLines(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want []string
+	}{{"", nil}, {"\n", nil}, {"a", []string{"a"}}, {"a\nb\n", []string{"a", "b"}}, {"a\n\nb", []string{"a", "", "b"}}} {
+		if got := Lines([]byte(tc.in)); !slices.Equal(got, tc.want) {
+			t.Errorf("Lines(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestDocumentedWithout(t *testing.T) {
 	ps := []Pair{{Fixture: "f", Ours: "a"}, {Fixture: "f", Ours: "a", Theirs: "b"}, {Fixture: "g", Ours: "c"}}
 	ours, theirs := Documented(ps, "f")

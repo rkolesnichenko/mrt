@@ -82,15 +82,6 @@ func (f fixture) golden(kind string) string { return filepath.Join(goldenDir, f.
 
 func update() bool { return os.Getenv("MRT_GOLDEN_UPDATE") == "1" }
 
-// lines splits text into lines without their newlines.
-func lines(b []byte) []string {
-	s := strings.TrimSuffix(string(b), "\n")
-	if s == "" {
-		return nil
-	}
-	return strings.Split(s, "\n")
-}
-
 // dumpResult is what mrtdump gives for one fixture.
 type dumpResult struct {
 	lines  []string
@@ -123,7 +114,7 @@ func runMrtdump(t *testing.T, f fixture) dumpResult {
 	if st > 1 {
 		t.Fatalf("mrtdump %s: status %d: %s", f.path, st, errs.String())
 	}
-	dumpCache[f.path] = dumpResult{lines(out.Bytes()), st, errs.String()}
+	dumpCache[f.path] = dumpResult{oracle.Lines(out.Bytes()), st, errs.String()}
 	return dumpCache[f.path]
 }
 
@@ -178,7 +169,7 @@ func readGolden(t *testing.T, path string) []string {
 	if err != nil {
 		t.Fatalf("%v (MRT_GOLDEN_UPDATE=1 go test -run 'TestMatches' . writes the goldens; it needs the oracles)", err)
 	}
-	return lines(b)
+	return oracle.Lines(b)
 }
 
 // divergences reads divergences.md: the pairs of its "## bgpdump" section and
@@ -393,7 +384,7 @@ func checkLive(t *testing.T, path string, out []byte, crashed bool) {
 	}
 	if !bytes.Equal(out, golden) {
 		t.Errorf("the oracle's output differs from %s at %s\n(MRT_GOLDEN_UPDATE=1 rewrites it; review the diff)",
-			path, oracle.FirstDifference(lines(golden), lines(out)))
+			path, oracle.FirstDifference(oracle.Lines(golden), oracle.Lines(out)))
 	}
 }
 

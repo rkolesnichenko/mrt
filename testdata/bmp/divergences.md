@@ -111,31 +111,106 @@ mrt: {"kind":"A","peer":"invalid IP","peer_as":64500,"prefix":"198.51.100.0/24",
 bgpkit: {"kind":"A","peer":"0.0.0.0","peer_as":64500,"prefix":"198.51.100.0/24","path_id":7,"as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
 ```
 
+### BK3. A path identifier of 2^24 or more is read as plain NLRI
+
+Reason: bgpkit-parser 0.22.0 parses every Route Monitoring UPDATE with ADD-PATH
+off (`route_monitoring.rs`: `parse_bgp_message(data, false, asn_len)`) and
+then guesses from the bytes: `parse_nlri_list` (`src/parser/utils.rs`
+lines 283-326, used for NLRI, withdrawn routes and MP_REACH/MP_UNREACH)
+reads an entry as ADD-PATH when its first byte is 0. Once on, the guess
+holds for the following entries of the list until one fails to parse, which
+is then read in the plain form and the guess starts over. mrt takes ADD-PATH
+from the peer's Peer Up only (spec §7.5). RFC 7911 section 5: a speaker that
+advertised and received the capability for an <AFI, SAFI> "MUST ... use the
+extended NLRI encodings specified in this document. The peer SHALL act
+accordingly in processing an UPDATE message related to a particular <AFI,
+SAFI>"; nothing in the NLRI says which form it is in.
+
+In `bmp-addpath-guess` the peer 192.0.2.190 negotiated IPv4 ADD-PATH in both
+directions and announces 198.51.100.0/24 with path identifier 0x01000000
+(bytes `01 00 00 00 18 c6 33 64`). The first byte is not 0, so bgpkit reads
+the plain form: 0.0.0.0/1 (`01 00`), then two 0.0.0.0/0 (each a failed guess
+read plain) and 198.51.100.0/24 without a path identifier. mrt reads the one
+route the Peer Up says is there.
+
+Decides: RFC 7911, for mrt.
+
+```pair
+fixture: bmp-addpath-guess
+mrt: {"kind":"A","peer":"192.0.2.190","peer_as":64690,"prefix":"198.51.100.0/24","path_id":16777216,"as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+bgpkit: {"kind":"A","peer":"192.0.2.190","peer_as":64690,"prefix":"198.51.100.0/24","as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+```
+
+```pair
+fixture: bmp-addpath-guess
+mrt: (none)
+bgpkit: {"kind":"A","peer":"192.0.2.190","peer_as":64690,"prefix":"0.0.0.0/1","as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+```
+
+```pair
+fixture: bmp-addpath-guess
+mrt: (none)
+bgpkit: {"kind":"A","peer":"192.0.2.190","peer_as":64690,"prefix":"0.0.0.0/0","as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+```
+
+```pair
+fixture: bmp-addpath-guess
+mrt: (none)
+bgpkit: {"kind":"A","peer":"192.0.2.190","peer_as":64690,"prefix":"0.0.0.0/0","as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+```
+
+### BK4. Plain NLRI that also parse as ADD-PATH are read as ADD-PATH
+
+Reason: the guess of BK3 the other way round. In `bmp-addpath-guess` the peer
+192.0.2.191 has no ADD-PATH (its Peer Up has no capability) and announces
+0.0.0.0/0, 10.11.0.0/16 and 198.51.100.0/24: bytes `00 10 0a 0b 18 c6 33
+64`. The first byte is 0, and the eight bytes also parse as one ADD-PATH
+entry: path identifier 0x00100a0b (1051147) and 198.51.100.0/24. bgpkit
+loses the first two routes and gives the third a path identifier. A lone
+0.0.0.0/0, or one followed by bytes that do not parse as ADD-PATH, falls
+back to the plain form and agrees.
+
+Decides: RFC 7911 section 5 (quoted in BK3), for mrt: without the
+capability the NLRI are in the plain form.
+
+```pair
+fixture: bmp-addpath-guess
+mrt: {"kind":"A","peer":"192.0.2.191","peer_as":64691,"prefix":"0.0.0.0/0","as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+bgpkit: (none)
+```
+
+```pair
+fixture: bmp-addpath-guess
+mrt: {"kind":"A","peer":"192.0.2.191","peer_as":64691,"prefix":"10.11.0.0/16","as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+bgpkit: (none)
+```
+
+```pair
+fixture: bmp-addpath-guess
+mrt: {"kind":"A","peer":"192.0.2.191","peer_as":64691,"prefix":"198.51.100.0/24","as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+bgpkit: {"kind":"A","peer":"192.0.2.191","peer_as":64691,"prefix":"198.51.100.0/24","path_id":1051147,"as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+```
+
 ## Known from bgpkit-parser's source, in no differing line
 
 Read in bgpkit-parser 0.22.0's source; the fixtures named give the same
 lines on both sides, so nothing checks these.
 
-- BS1. ADD-PATH is guessed from the bytes. `parse_route_monitoring` parses
-  every UPDATE with ADD-PATH off, but `parse_nlri_list` (`parser/utils.rs`,
-  used for NLRI, withdrawn routes and MP_REACH/MP_UNREACH) then reads each
-  entry whose first byte is 0 as ADD-PATH (the top byte of a path ID), and
-  falls back to the plain form when that entry does not parse so. The
+- BS1. Where the ADD-PATH guess (BK3) agrees with the Peer Up. The other
   ADD-PATH fixtures (`bmp-addpath`, `bmp-reup`, `bmp-no-peer-up`,
-  `bmp-open-extended`, `bmp-locrib-multi`, the `.obmp` ones) agree because
-  every path ID in them is below 2^24 and no plain entry has prefix length 0.
-  A plain default route (0.0.0.0/0, ::/0), or a path ID of 2^24 or more,
-  would differ. mrt takes ADD-PATH from the peer's
-  Peer Up only (spec §7.5): RFC 7911 section 4, the extended NLRI encodings
-  are used when the capability was advertised and received "for the
-  corresponding <AFI, SAFI>", and "The peer SHALL act accordingly in
-  processing an UPDATE message related to a particular <AFI, SAFI>"; nothing
-  in the NLRI says which form it is. (Spec §5.5 says only that bgpkit parses
-  with ADD-PATH off.)
+  `bmp-open-extended`, `bmp-locrib-multi`, the `.obmp` ones) give the same
+  lines on both sides: every path identifier in them is below 2^24 (first
+  byte 0, so the guess is ADD-PATH and right), and no plain list in them
+  starts with prefix length 0.
 - BS2. Peer types other than 0-3 are an error in `parse_per_peer_header`, so
-  the message is lost. mrt reads the message and refuses its Route Monitoring
-  with a `*MessageError` (spec §7.4). `bmp-garbage`'s peer type 9 gives no
-  line on either side.
+  the message is lost. RFC 7854 section 4.2 defines peer types 0-2 ("Currently,
+  three types of peers are identified") and RFC 9069 section 4.1 adds 3
+  ("Peer Type = 3: Loc-RIB Instance Peer"); neither says what a type's Route
+  Monitoring means beyond those, while the per-peer header's layout does not
+  depend on the type. So mrt reads the message and refuses its Route
+  Monitoring with a `*MessageError` (spec §7.1, §7.4): it would have to guess
+  the AS width and the view. `bmp-garbage`'s peer type 9 gives no line on
+  either side.
 - BS3. A message bgpkit-parser rejects costs only that message, because the
   harness frames the stream itself (`bgpkit-bmp` prints each to standard
   error as `skip: OFFSET: ERROR`): two Peer Ups of `bmp-bad-open` (offsets

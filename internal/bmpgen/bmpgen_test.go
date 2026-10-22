@@ -42,9 +42,10 @@ var expected = map[string]expect{
 	"bmp-locrib-multi":  {},
 	"bmp-truncated":     {errs: 1, truncated: true},
 	// length 3, version 2, one message over the limit, twelve zero bytes of junk (two headers).
-	"bmp-garbage":    {errs: 5, limit: 1024},
-	"obmp-v4-router": {},
-	"obmp-v6-router": {},
+	"bmp-garbage":       {errs: 5, limit: 1024},
+	"bmp-addpath-guess": {},
+	"obmp-v4-router":    {},
+	"obmp-v6-router":    {},
 }
 
 // read returns the messages of a file and its errors.

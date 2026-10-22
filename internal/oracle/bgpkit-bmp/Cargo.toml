@@ -4,6 +4,9 @@
 # versions of bgpkit-parser 0.22.0's own Cargo.lock.
 [package]
 name = "bgpkit-bmp"
+# The bgpkit-parser version this harness pins (=0.22.0 below): change both
+# together. `bgpkit-bmp --version` prints it, and scripts/build-oracles.sh
+# checks it against BGPKIT_VERSION before skipping a rebuild.
 version = "0.22.0"
 edition = "2021"
 publish = false

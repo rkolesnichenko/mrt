@@ -177,6 +177,7 @@ func Synthetic() []File {
 	return []File{
 		types(), peerFlags(), addPath(), as2(), ipv6Peers(), eor(), noPeerUp(), badOpen(),
 		reUp(), sessions(), stats(), openExtended(), locRIBMulti(), truncated(), garbage(),
+		addPathGuess(),
 		obmp("obmp-v4-router", netip.MustParseAddr("192.0.2.1")),
 		obmp("obmp-v6-router", netip.MustParseAddr("2001:db8::1")),
 	}
@@ -313,6 +314,25 @@ func addPath() File {
 	s.up(loc, locCaps, locCaps)
 	s.add(RouteMonitoring(s.h(loc), ann(loc, "198.51.100.0/24", true, 7)))
 	return s.file("bmp-addpath")
+}
+
+// addPathGuess holds two UPDATEs whose NLRI also parse in the other form,
+// so that a reader guessing ADD-PATH from the bytes, not from the Peer Up,
+// reads them wrong: a path identifier of 2^24 (first byte non-zero) from a
+// peer that negotiated IPv4 ADD-PATH, and from a peer without it 0.0.0.0/0,
+// 10.11.0.0/16 and 198.51.100.0/24, whose bytes 00 10 0a 0b 18 c6 33 64 are
+// also path identifier 0x00100a0b and 198.51.100.0/24.
+func addPathGuess() File {
+	var s stream
+	p := global(190, false)
+	s.up(p, basicCaps(routerAS, CapAddPath(ap(fam4, 3))), basicCaps(p.AS, CapAddPath(ap(fam4, 3))))
+	s.add(RouteMonitoring(s.h(p), ann(p, "198.51.100.0/24", true, 1<<24)))
+	q := global(191, false)
+	s.plainUp(q)
+	s.add(RouteMonitoring(s.h(q), mrtgen.Update(nil,
+		[]bgp.NLRI{nlri("0.0.0.0/0"), nlri("10.11.0.0/16"), nlri("198.51.100.0/24")},
+		mrtgen.Attrs(mrtgen.Origin(bgp.OriginIGP), mrtgen.ASPath(true, mrtgen.Seq(64501, 64502)), mrtgen.NextHop(nh4)), false)))
+	return s.file("bmp-addpath-guess")
 }
 
 // as2 holds A = 1 peers, with an AS_PATH and AS4_PATH merge, and one whose

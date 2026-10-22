@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -42,8 +43,9 @@ func Labels(section string) (ours, theirs string) {
 // under an entry heading "### ID. title", with the labels Labels gives; (none)
 // stands for no line. A pair outside those sections or outside an entry, a
 // pair with no fixture or no line, an unknown line in a pair, an unterminated
-// pair, and an entry of those sections that holds no pair are errors: a
-// difference no fixture shows belongs in another section.
+// pair, and an entry of those sections that holds no pair are errors (every
+// such entry is named, in one joined error): a difference no fixture shows
+// belongs in another section.
 func ParseDivergences(path string, sections ...string) (map[string][]Pair, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -108,12 +110,25 @@ func ParseDivergences(path string, sections ...string) (map[string][]Pair, error
 	if cur != nil {
 		return nil, fmt.Errorf("%s: unterminated pair", path)
 	}
+	var empty []error
 	for _, e := range entries {
 		if pairsOf[e] == 0 {
-			return nil, fmt.Errorf("%s: entry %q has no pair block", path, e)
+			empty = append(empty, fmt.Errorf("%s: entry %q has no pair block", path, e))
 		}
 	}
+	if len(empty) > 0 {
+		return nil, errors.Join(empty...)
+	}
 	return out, nil
+}
+
+// Lines splits text into lines without their newlines; empty text is none.
+func Lines(b []byte) []string {
+	s := strings.TrimSuffix(string(b), "\n")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }
 
 // Documented returns how many times each line of fixture is documented in
