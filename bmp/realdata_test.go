@@ -79,6 +79,16 @@ func readBMPManifest(t *testing.T, path string) []bmpManifestFile {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fs, err := parseBMPManifest(b)
+	if err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	return fs
+}
+
+// parseBMPManifest reads MANIFEST's lines. A MANIFEST that pins nothing is an
+// error: the run would otherwise pass having compared nothing.
+func parseBMPManifest(b []byte) ([]bmpManifestFile, error) {
 	var fs []bmpManifestFile
 	for _, l := range strings.Split(string(b), "\n") {
 		f := strings.Fields(l)
@@ -86,18 +96,21 @@ func readBMPManifest(t *testing.T, path string) []bmpManifestFile {
 			continue
 		}
 		if len(f) != 8 {
-			t.Fatalf("%s: bad line %q", path, l)
+			return nil, fmt.Errorf("bad line %q", l)
 		}
 		partition, err1 := strconv.Atoi(f[3])
 		offset, err2 := strconv.ParseInt(f[4], 10, 64)
 		count, err3 := strconv.Atoi(f[5])
 		size, err4 := strconv.ParseInt(f[6], 10, 64)
 		if err := errors.Join(err1, err2, err3, err4); err != nil {
-			t.Fatalf("%s: bad number in %q: %v", path, l, err)
+			return nil, fmt.Errorf("bad number in %q: %v", l, err)
 		}
 		fs = append(fs, bmpManifestFile{name: f[0], broker: f[1], topic: f[2], partition: partition, offset: offset, count: count, size: size, sha256: f[7]})
 	}
-	return fs
+	if len(fs) == 0 {
+		return nil, errors.New("no capture is pinned (rerun scripts/fetch-bmp.sh)")
+	}
+	return fs, nil
 }
 
 // checkBMPPinned errors unless the file has the size and sha256 MANIFEST pins.
@@ -496,6 +509,24 @@ func TestClassifyBMP(t *testing.T) {
 		known, left := classifyBMP(tc.ours, tc.theirs)
 		if !maps.Equal(known, tc.known) || !slices.Equal(left, tc.unclassified) {
 			t.Errorf("%s: known %v, unclassified %q; want %v, %q", tc.name, known, left, tc.known, tc.unclassified)
+		}
+	}
+}
+
+func TestParseBMPManifest(t *testing.T) {
+	line := "f.obmp broker:9092 topic 0 42 10 1234 " + strings.Repeat("0", 64)
+	fs, err := parseBMPManifest([]byte(line + "\n"))
+	if err != nil || len(fs) != 1 || fs[0].name != "f.obmp" || fs[0].offset != 42 || fs[0].count != 10 || fs[0].size != 1234 {
+		t.Errorf("one line: %+v, %v", fs, err)
+	}
+	for _, in := range []string{"", "\n\n", "  \n\t\n"} {
+		if fs, err := parseBMPManifest([]byte(in)); err == nil {
+			t.Errorf("%q: %+v and no error, want an error for a MANIFEST that pins nothing", in, fs)
+		}
+	}
+	for _, in := range []string{"f.obmp broker topic 0 42 10 1234", "f.obmp broker topic 0 x 10 1234 " + strings.Repeat("0", 64)} {
+		if _, err := parseBMPManifest([]byte(in)); err == nil {
+			t.Errorf("%q: no error", in)
 		}
 	}
 }
