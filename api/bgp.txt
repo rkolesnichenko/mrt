@@ -83,6 +83,7 @@ func (Community) String() string
 type Context struct
 	AS4 bool
 	AddPath bool
+	AddPathFamilies FamilySet
 	RIB bool
 type Diagnostic struct
 	Severity Severity
@@ -109,6 +110,9 @@ type Family struct
 	AFI AFI
 	SAFI SAFI
 func (Family) HasPrefixes() bool
+type FamilySet uint8
+func (FamilySet) Has(f Family) bool
+func (FamilySet) With(f Family) FamilySet
 type Interner struct
 func (*Interner) Decode(a Attrs) (*Path, []Diagnostic)
 func (*Interner) DropPathIndex()

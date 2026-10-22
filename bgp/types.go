@@ -41,12 +41,34 @@ func (f Family) HasPrefixes() bool {
 	return (f.AFI == AFIIPv4 || f.AFI == AFIIPv6) && (f.SAFI == SAFIUnicast || f.SAFI == SAFIMulticast)
 }
 
+// FamilySet is a set of the families whose NLRI are prefixes
+// (Family.HasPrefixes): AFI 1 and 2 with SAFI 1 and 2.
+type FamilySet uint8
+
+// familyBit returns f's bit, or 0 for a family without prefixes.
+func familyBit(f Family) FamilySet {
+	if !f.HasPrefixes() {
+		return 0
+	}
+	return 1 << ((f.AFI-1)*2 + AFI(f.SAFI-1))
+}
+
+// Has reports whether f is in s. A family without prefixes never is.
+func (s FamilySet) Has(f Family) bool { return s&familyBit(f) != 0 }
+
+// With returns s with f added. For a family without prefixes it returns s.
+func (s FamilySet) With(f Family) FamilySet { return s | familyBit(f) }
+
 // Context says how to read bytes that do not describe themselves.
 type Context struct {
-	AS4     bool // AS_PATH and AGGREGATOR carry 4-byte ASNs
-	AddPath bool // every NLRI is preceded by a 4-byte path identifier
-	RIB     bool // MRT RIB entry: MP_REACH_NLRI may be abbreviated (RFC 6396 §4.3.4)
+	AS4             bool      // AS_PATH and AGGREGATOR carry 4-byte ASNs
+	AddPath         bool      // every NLRI is preceded by a 4-byte path identifier
+	AddPathFamilies FamilySet // NLRI of these families are preceded by one (BMP: from Peer Up)
+	RIB             bool      // MRT RIB entry: MP_REACH_NLRI may be abbreviated (RFC 6396 §4.3.4)
 }
+
+// addPath reports whether NLRI of family f carry path identifiers.
+func (c Context) addPath(f Family) bool { return c.AddPath || c.AddPathFamilies.Has(f) }
 
 // MessageType is a BGP message type.
 type MessageType uint8
