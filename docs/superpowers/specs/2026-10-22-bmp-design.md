@@ -283,8 +283,14 @@ is `iana.org/assignments/bmp-parameters`.
 
   So the oracle is a small Rust harness against the pinned crate (§9.2).
   Known limits, read in the source:
-  - It parses every Route Monitoring UPDATE with ADD-PATH off
-    (`route_monitoring.rs`: `parse_bgp_message(data, false, asn_len)`).
+  - It passes ADD-PATH off for every Route Monitoring UPDATE
+    (`route_monitoring.rs`: `parse_bgp_message(data, false, asn_len)`), but
+    then guesses from the bytes: `parse_nlri_list` (`src/parser/utils.rs`
+    :283-313) reads a list as ADD-PATH when its first byte is 0, and retries
+    without it if that fails. (Corrected 2026-10-22, during Task 9: the first
+    draft said only "ADD-PATH off".) So bgpkit gets path IDs below 2^24
+    right and misreads, for example, a 0.0.0.0/0 announcement from a peer
+    without ADD-PATH.
   - With the A flag set it keeps only the low 16 bits of the peer AS
     (`headers.rs`).
   - Peer types other than 0-3 are an error.
