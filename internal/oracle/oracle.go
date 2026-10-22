@@ -95,6 +95,21 @@ func Bgpkit(path, file string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
+// BgpkitBMP runs bgpkit-bmp (internal/oracle/bgpkit-bmp, the binary at path)
+// as `bgpkit-bmp file` on a .bmp or .obmp file and returns its standard
+// output: bgpkit-parser's --json elem form, one per line, which
+// NormalizeBgpkit reads. The messages bgpkit-parser rejects go to its standard
+// error and are not an error here.
+func BgpkitBMP(path, file string) ([]byte, error) {
+	cmd := exec.Command(path, file)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%s %s: %w: %s", path, file, err, bytes.TrimSpace(stderr.Bytes()))
+	}
+	return stdout.Bytes(), nil
+}
+
 // line is the normalized form; the field order is the line's.
 type line struct {
 	Kind        string   `json:"kind"`

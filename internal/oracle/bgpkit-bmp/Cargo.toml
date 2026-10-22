@@ -1,0 +1,17 @@
+# The BMP oracle: bgpkit-parser 0.22.0's library run over a .bmp or .obmp
+# file (its command line reads MRT only). scripts/build-oracles.sh builds it
+# with --locked into $HOME/.local/bin/bgpkit-bmp. The lock file keeps the
+# versions of bgpkit-parser 0.22.0's own Cargo.lock.
+[package]
+name = "bgpkit-bmp"
+version = "0.22.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bgpkit-parser = { version = "=0.22.0", default-features = false, features = ["parser", "serde"] }
+bytes = "=1.12.1"
+serde_json = "=1.0.151"
+
+[profile.release]
+debug = false

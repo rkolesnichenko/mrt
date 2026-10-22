@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds the two differential oracles and installs them into PREFIX
-# (default $HOME/.local/bin):
+# Builds the differential oracles and installs them into PREFIX (default
+# $HOME/.local/bin):
 #
 #   bgpdump        RIPE-NCC/bgpdump master at $BGPDUMP_COMMIT (default caf2cb07;
 #                  the environment may override it), built with
@@ -8,6 +8,9 @@
 #                  autoconf and automake (macOS: brew install autoconf automake).
 #   bgpkit-parser  the crate at $BGPKIT_VERSION with its "cli" feature, built
 #                  by cargo install --locked into a temporary root.
+#   bgpkit-bmp     internal/oracle/bgpkit-bmp, a harness over the same crate's
+#                  BMP and OpenBMP parsers (its CLI reads MRT only), built by
+#                  cargo build --locked from the committed Cargo.lock.
 #
 #   scripts/build-oracles.sh [PREFIX]
 #
@@ -15,6 +18,8 @@
 # bgpdump's own version string (PACKAGE_VERSION) does not name a commit, so
 # the script writes PREFIX/.bgpdump.stamp holding the commit and the
 # installed binary's sha256, and skips the build only while both match.
+# bgpkit-bmp is rebuilt unless it prints "bgpkit-bmp $BGPKIT_VERSION" and
+# PREFIX/.bgpkit-bmp.stamp holds the sha256 of its sources and of the binary.
 set -eu
 
 BGPDUMP_REPO=https://github.com/RIPE-NCC/bgpdump
@@ -76,4 +81,29 @@ else
 	cp "$tmp/cargo/bin/bgpkit-parser" "$PREFIX/bgpkit-parser"
 	chmod 755 "$PREFIX/bgpkit-parser"
 	echo "bgpkit-parser: installed $PREFIX/bgpkit-parser"
+fi
+
+# bgpkit-bmp --version prints "bgpkit-bmp 0.22.0"; the stamp ties the binary to
+# the harness sources, which can change without the version changing.
+harness=$(cd "$(dirname "$0")/.." && pwd)/internal/oracle/bgpkit-bmp
+sources=$(for f in Cargo.toml Cargo.lock src/main.rs; do sha256 "$harness/$f"; done | tr '\n' ' ')
+bmpstamp="$PREFIX/.bgpkit-bmp.stamp"
+if [ -x "$PREFIX/bgpkit-bmp" ] && [ -f "$bmpstamp" ] &&
+	[ "$("$PREFIX/bgpkit-bmp" --version 2>/dev/null)" = "bgpkit-bmp $BGPKIT_VERSION" ] &&
+	[ "$(cat "$bmpstamp")" = "$sources$(sha256 "$PREFIX/bgpkit-bmp")" ]; then
+	echo "bgpkit-bmp: $BGPKIT_VERSION already installed in $PREFIX"
+else
+	command -v cargo >/dev/null || { echo "bgpkit-bmp: cargo is missing" >&2; exit 1; }
+	echo "bgpkit-bmp: building $BGPKIT_VERSION"
+	cargo build --release --locked --quiet --manifest-path "$harness/Cargo.toml" \
+		--target-dir "$tmp/bgpkit-bmp"
+	cp "$tmp/bgpkit-bmp/release/bgpkit-bmp" "$PREFIX/bgpkit-bmp"
+	chmod 755 "$PREFIX/bgpkit-bmp"
+	version=$("$PREFIX/bgpkit-bmp" --version)
+	if [ "$version" != "bgpkit-bmp $BGPKIT_VERSION" ]; then
+		echo "bgpkit-bmp: built \"$version\", not $BGPKIT_VERSION" >&2
+		exit 1
+	fi
+	echo "$sources$(sha256 "$PREFIX/bgpkit-bmp")" >"$bmpstamp"
+	echo "bgpkit-bmp: installed $PREFIX/bgpkit-bmp"
 fi

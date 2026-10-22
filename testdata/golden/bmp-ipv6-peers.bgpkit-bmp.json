@@ -1,0 +1,4 @@
+{"kind":"A","peer":"2001:db8::50","peer_as":64580,"prefix":"198.51.100.0/24","as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+{"kind":"A","peer":"2001:db8::50","peer_as":64580,"prefix":"2001:db8:80::/48","as_path":"64580","origin":"IGP","next_hop":"2001:db8::fe"}
+{"kind":"A","peer":"2001:db8::81","peer_as":64581,"prefix":"2001:db8:81::/48","as_path":"64501 64502","origin":"IGP","next_hop":"2001:db8::fe"}
+{"kind":"W","peer":"2001:db8::50","peer_as":64580,"prefix":"2001:db8:80::/48"}

@@ -16,11 +16,8 @@ package mrt_test
 // both directions.
 
 import (
-	"bufio"
 	"bytes"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -184,210 +181,27 @@ func readGolden(t *testing.T, path string) []string {
 	return lines(b)
 }
 
-// A pair is one documented difference: the line mrt gives and the line the
-// oracle gives, either of them "" when that side gives none.
-type pair struct {
-	entry, fixture string
-	ours, theirs   string
-}
-
 // divergences reads divergences.md: the pairs of its "## bgpdump" section and
-// of its "## bgpkit-parser" section. A pair is a fenced block
-//
-//	```pair
-//	fixture: NAME
-//	mrtdump: LINE         (mrt: in the bgpkit-parser section)
-//	bgpdump: LINE         (bgpkit: in the bgpkit-parser section)
-//	```
-//
-// under an entry heading "### ID. title"; (none) stands for no line. Every
-// entry of those two sections must hold at least one pair.
-func divergences(t *testing.T) (bgpdump, bgpkit []pair) {
+// of its "## bgpkit-parser" section (oracle.ParseDivergences).
+func divergences(t *testing.T) (bgpdump, bgpkit []oracle.Pair) {
 	t.Helper()
-	b, err := os.ReadFile(divergencesFile)
+	d, err := oracle.ParseDivergences(divergencesFile, "bgpdump", "bgpkit-parser")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var section, entry string
-	var cur *pair
-	pairsOf := map[string]int{} // entries of the oracle sections, by "section/entry"
-	oracleSection := func() bool { return section == "bgpdump" || section == "bgpkit-parser" }
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	sc.Buffer(nil, 1<<20)
-	for n := 1; sc.Scan(); n++ {
-		l := sc.Text()
-		bad := func(why string) { t.Fatalf("%s:%d: %s: %q", divergencesFile, n, why, l) }
-		switch {
-		case cur != nil && l == "```":
-			if cur.fixture == "" || (cur.ours == "" && cur.theirs == "") {
-				bad("a pair needs a fixture and at least one line")
-			}
-			if section == "bgpdump" {
-				bgpdump = append(bgpdump, *cur)
-			} else {
-				bgpkit = append(bgpkit, *cur)
-			}
-			pairsOf[section+"/"+entry]++
-			cur = nil
-		case cur != nil:
-			ours, theirs := "mrtdump: ", "bgpdump: "
-			if section == "bgpkit-parser" {
-				ours, theirs = "mrt: ", "bgpkit: "
-			}
-			val := func(s string) string {
-				if s == "(none)" {
-					return ""
-				}
-				return s
-			}
-			switch {
-			case strings.HasPrefix(l, "fixture: "):
-				cur.fixture = strings.TrimPrefix(l, "fixture: ")
-			case strings.HasPrefix(l, ours):
-				cur.ours = val(strings.TrimPrefix(l, ours))
-			case strings.HasPrefix(l, theirs):
-				cur.theirs = val(strings.TrimPrefix(l, theirs))
-			default:
-				bad("unknown line in a pair")
-			}
-		case strings.HasPrefix(l, "## "):
-			section, entry = strings.TrimPrefix(l, "## "), ""
-		case strings.HasPrefix(l, "### "):
-			entry = strings.TrimPrefix(l, "### ")
-			if oracleSection() {
-				pairsOf[section+"/"+entry] += 0
-			}
-		case l == "```pair":
-			if !oracleSection() {
-				bad("a pair outside the bgpdump and bgpkit-parser sections")
-			}
-			if entry == "" {
-				bad("a pair outside an entry")
-			}
-			cur = &pair{entry: entry}
-		}
-	}
-	if cur != nil {
-		t.Fatalf("%s: unterminated pair", divergencesFile)
-	}
-	// An entry of an oracle section names at least one fixture line; a
-	// difference no fixture shows belongs in another section.
-	for e, n := range pairsOf {
-		if n == 0 {
-			t.Errorf("%s: entry %q has no pair block", divergencesFile, e)
-		}
-	}
-	return bgpdump, bgpkit
-}
-
-// documented returns how many times each line of fixture is documented, on
-// each side: every pair stands for one occurrence.
-func documented(ps []pair, fixture string) (ours, theirs map[string]int) {
-	ours, theirs = map[string]int{}, map[string]int{}
-	for _, p := range ps {
-		if p.fixture != fixture {
-			continue
-		}
-		if p.ours != "" {
-			ours[p.ours]++
-		}
-		if p.theirs != "" {
-			theirs[p.theirs]++
-		}
-	}
-	return ours, theirs
-}
-
-// without returns ls less the first drop[l] occurrences of each line l.
-func without(ls []string, drop map[string]int) []string {
-	left := maps.Clone(drop)
-	var out []string
-	for _, l := range ls {
-		if left[l] > 0 {
-			left[l]--
-			continue
-		}
-		out = append(out, l)
-	}
-	return out
-}
-
-// stillDiffers returns, sorted, the documented lines of one side (doc) that
-// the side does not hold as many more times than the other side as they are
-// documented.
-func stillDiffers(side, other []string, doc map[string]int) []string {
-	n := map[string]int{}
-	for _, l := range side {
-		n[l]++
-	}
-	for _, l := range other {
-		n[l]--
-	}
-	var bad []string
-	for l, k := range doc {
-		if n[l] < k {
-			bad = append(bad, l)
-		}
-	}
-	sort.Strings(bad)
-	return bad
-}
-
-// diff returns the lines of a not in b and of b not in a, as multisets, in
-// the order they come.
-func diff(a, b []string) (onlyA, onlyB []string) {
-	count := map[string]int{}
-	for _, l := range b {
-		count[l]++
-	}
-	for _, l := range a {
-		if count[l] > 0 {
-			count[l]--
-		} else {
-			onlyA = append(onlyA, l)
-		}
-	}
-	count = map[string]int{}
-	for _, l := range a {
-		count[l]++
-	}
-	for _, l := range b {
-		if count[l] > 0 {
-			count[l]--
-		} else {
-			onlyB = append(onlyB, l)
-		}
-	}
-	return onlyA, onlyB
-}
-
-// firstDifference describes where two line lists first differ.
-func firstDifference(ours, theirs []string) string {
-	for i := range max(len(ours), len(theirs)) {
-		var o, g string
-		if i < len(ours) {
-			o = ours[i]
-		}
-		if i < len(theirs) {
-			g = theirs[i]
-		}
-		if o != g {
-			return fmt.Sprintf("line %d (documented lines left out):\n mrt:    %s\n oracle: %s", i+1, o, g)
-		}
-	}
-	return ""
+	return d["bgpdump"], d["bgpkit-parser"]
 }
 
 func TestGoldens(t *testing.T) {
 	bgpdumpPairs, _ := divergences(t)
 	for _, f := range fixtures(t) {
 		t.Run(f.name, func(t *testing.T) {
-			ours, theirs := documented(bgpdumpPairs, f.name)
-			got := without(mrtdumpLines(t, f), ours)
-			want := without(readGolden(t, f.golden(".bgpdump")), theirs)
+			ours, theirs := oracle.Documented(bgpdumpPairs, f.name)
+			got := oracle.Without(mrtdumpLines(t, f), ours)
+			want := oracle.Without(readGolden(t, f.golden(".bgpdump")), theirs)
 			if !slices.Equal(got, want) {
 				t.Errorf("mrtdump -m -l -u differs from bgpdump's golden at %s\n(TestDivergencesDocumented lists the lines)",
-					firstDifference(got, want))
+					oracle.FirstDifference(got, want))
 			}
 		})
 	}
@@ -397,12 +211,12 @@ func TestMatchesBgpkit(t *testing.T) {
 	_, bgpkitPairs := divergences(t)
 	for _, f := range fixtures(t) {
 		t.Run(f.name, func(t *testing.T) {
-			ours, theirs := documented(bgpkitPairs, f.name)
-			got := without(routeLines(t, f), ours)
-			want := without(readGolden(t, f.golden(".bgpkit.json")), theirs)
+			ours, theirs := oracle.Documented(bgpkitPairs, f.name)
+			got := oracle.Without(routeLines(t, f), ours)
+			want := oracle.Without(readGolden(t, f.golden(".bgpkit.json")), theirs)
 			if !slices.Equal(got, want) {
 				t.Errorf("Routes differs from bgpkit-parser's golden at %s\n(TestDivergencesDocumented lists the lines)",
-					firstDifference(got, want))
+					oracle.FirstDifference(got, want))
 			}
 		})
 	}
@@ -420,115 +234,49 @@ func TestDivergencesDocumented(t *testing.T) {
 	}
 	for _, side := range []struct {
 		section, ours, theirs string
-		pairs                 []pair
+		pairs                 []oracle.Pair
 		key                   func(string) []string
 		mrt, oracle           func(*testing.T, fixture) []string
 	}{
 		{"bgpdump", "mrtdump", "bgpdump", bgpdumpPairs, bgpdumpKey,
 			mrtdumpLines, func(t *testing.T, f fixture) []string { return readGolden(t, f.golden(".bgpdump")) }},
-		{"bgpkit-parser", "mrt", "bgpkit", bgpkitPairs, bgpkitKey,
+		{"bgpkit-parser", "mrt", "bgpkit", bgpkitPairs, oracle.LineKey,
 			routeLines, func(t *testing.T, f fixture) []string { return readGolden(t, f.golden(".bgpkit.json")) }},
 	} {
 		t.Run(side.section, func(t *testing.T) {
 			for _, p := range side.pairs {
-				if !names[p.fixture] {
-					t.Errorf("%s: no fixture named %q", p.entry, p.fixture)
+				if !names[p.Fixture] {
+					t.Errorf("%s: no fixture named %q", p.Entry, p.Fixture)
 				}
 			}
 			for _, f := range fixtures(t) {
 				ours, theirs := side.mrt(t, f), side.oracle(t, f)
-				docOurs, docTheirs := documented(side.pairs, f.name)
+				docOurs, docTheirs := oracle.Documented(side.pairs, f.name)
 				// Every documented line still differs, as many times as it is
 				// documented.
-				for _, l := range stillDiffers(ours, theirs, docOurs) {
+				for _, l := range oracle.StillDiffers(ours, theirs, docOurs) {
 					t.Errorf("%s: the %s line is documented more often than it differs: %s", f.name, side.ours, l)
 				}
-				for _, l := range stillDiffers(theirs, ours, docTheirs) {
+				for _, l := range oracle.StillDiffers(theirs, ours, docTheirs) {
 					t.Errorf("%s: the %s line is documented more often than it differs: %s", f.name, side.theirs, l)
 				}
 				// Every differing line is documented.
-				onlyOurs, onlyTheirs := diff(ours, theirs)
-				onlyOurs, onlyTheirs = without(onlyOurs, docOurs), without(onlyTheirs, docTheirs)
+				onlyOurs, onlyTheirs := oracle.Diff(ours, theirs)
+				onlyOurs, onlyTheirs = oracle.Without(onlyOurs, docOurs), oracle.Without(onlyTheirs, docTheirs)
 				if len(onlyOurs)+len(onlyTheirs) > 0 {
 					t.Errorf("%s: %d %s and %d %s lines differ and are not in %s:\n%s", f.name,
 						len(onlyOurs), side.ours, len(onlyTheirs), side.theirs, divergencesFile,
-						pairBlocks(f.name, side.ours, side.theirs, onlyOurs, onlyTheirs, side.key))
+						oracle.PairBlocks(f.name, side.ours, side.theirs, onlyOurs, onlyTheirs, side.key))
 				}
 			}
 		})
 	}
 }
 
-// pairBlocks writes undocumented lines as pair blocks, pairing a line of
-// ours with the first unused line of theirs that has the same key, trying
-// each of key's keys in turn (most specific first).
-func pairBlocks(fixture, oursName, theirsName string, ours, theirs []string, key func(string) []string) string {
-	var b strings.Builder
-	block := func(o, g string) {
-		if o == "" {
-			o = "(none)"
-		}
-		if g == "" {
-			g = "(none)"
-		}
-		fmt.Fprintf(&b, "```pair\nfixture: %s\n%s: %s\n%s: %s\n```\n", fixture, oursName, o, theirsName, g)
-	}
-	match := make([]string, len(ours))
-	used := make([]bool, len(theirs))
-	for level := range len(key("")) {
-		for i, o := range ours {
-			if match[i] != "" {
-				continue
-			}
-			for j, g := range theirs {
-				if !used[j] && key(g)[level] == key(o)[level] {
-					used[j], match[i] = true, g
-					break
-				}
-			}
-		}
-	}
-	const limit = 20
-	n := 0
-	for i, o := range ours {
-		if n++; n <= limit {
-			block(o, match[i])
-		}
-	}
-	for j, g := range theirs {
-		if !used[j] {
-			if n++; n <= limit {
-				block("", g)
-			}
-		}
-	}
-	if n > limit {
-		fmt.Fprintf(&b, "... and %d more\n", n-limit)
-	}
-	return b.String()
-}
-
 // bgpdumpKey is a bgpdump line's type, time, kind, peer, AS and prefix.
 func bgpdumpKey(l string) []string {
 	f := strings.SplitN(l, "|", 7)
 	return []string{strings.Join(f[:min(6, len(f))], "|")}
-}
-
-// bgpkitKey is a normalized line's kind, peer, prefix and path ID, then the
-// same without the path ID.
-func bgpkitKey(l string) []string {
-	var k struct {
-		Kind, Peer, Prefix string
-		PathID             *uint32 `json:"path_id"`
-	}
-	if json.Unmarshal([]byte(l), &k) != nil {
-		return []string{l, l}
-	}
-	id := "-"
-	if k.PathID != nil {
-		id = fmt.Sprint(*k.PathID)
-	}
-	return []string{strings.Join([]string{k.Kind, k.Peer, k.Prefix, id}, "|"), strings.Join([]string{k.Kind, k.Peer, k.Prefix}, "|")}
 }
 
 // TestCommunityFieldsFitBgpdumpBuffer pins Ruling R16: no fixture route has a
@@ -645,7 +393,7 @@ func checkLive(t *testing.T, path string, out []byte, crashed bool) {
 	}
 	if !bytes.Equal(out, golden) {
 		t.Errorf("the oracle's output differs from %s at %s\n(MRT_GOLDEN_UPDATE=1 rewrites it; review the diff)",
-			path, firstDifference(lines(golden), lines(out)))
+			path, oracle.FirstDifference(lines(golden), lines(out)))
 	}
 }
 
@@ -726,6 +474,9 @@ func TestFixturesListed(t *testing.T) {
 	var orphans []string
 	for _, g := range goldens {
 		n := strings.TrimSuffix(g.Name(), ".gz")
+		if strings.HasSuffix(n, ".bgpkit-bmp.json") {
+			continue // a BMP golden: bmp/golden_test.go's TestBMPFixturesListed
+		}
 		n = strings.TrimSuffix(strings.TrimSuffix(n, ".bgpdump"), ".bgpkit.json")
 		if !names[n] {
 			orphans = append(orphans, g.Name())
@@ -750,21 +501,6 @@ func TestCommunityFieldsColumns(t *testing.T) {
 		if comm != tc.comm || large != tc.large {
 			t.Errorf("%s: %q %q, want %q %q", tc.line, comm, large, tc.comm, tc.large)
 		}
-	}
-}
-
-func TestWithoutCounts(t *testing.T) {
-	ls := []string{"a", "b", "a", "c", "a"}
-	if got := without(ls, map[string]int{"a": 2, "c": 1}); !slices.Equal(got, []string{"b", "a"}) {
-		t.Errorf("without = %q, want [b a]", got)
-	}
-	// "a" differs twice (3 against 1): documenting it twice holds, three times does not.
-	ours, theirs := []string{"a", "a", "a", "b"}, []string{"a", "b"}
-	if bad := stillDiffers(ours, theirs, map[string]int{"a": 2}); len(bad) != 0 {
-		t.Errorf("a documented twice: %q", bad)
-	}
-	if bad := stillDiffers(ours, theirs, map[string]int{"a": 3, "b": 1}); !slices.Equal(bad, []string{"a", "b"}) {
-		t.Errorf("a three times, b once: %q, want [a b]", bad)
 	}
 }
 
