@@ -57,6 +57,7 @@ bgp . FuzzParseUpdate
 bgp . FuzzDecodeAttrs
 bgp . FuzzASPathMerge
 bgp . FuzzParseOpen
+bmp . FuzzMessages
 internal/bzip2 . FuzzBzip2
 . . FuzzDecompress
 '

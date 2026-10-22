@@ -1,4 +1,5 @@
 package bmp
+const DefaultMaxMessageLen = 1 << 20
 const MirrorErroredPDU MirrorCode = 0
 const MirrorMessagesLost MirrorCode = 1
 const PeerDownDeconfigured PeerDownReason = 5
@@ -76,6 +77,8 @@ var ErrMalformed = errors.New(…)
 var ErrNoPeerUp = errors.New(…)
 var ErrTooLarge = errors.New(…)
 var ErrTruncated = errors.New(…)
+func Messages(r io.Reader) iter.Seq2[Message, error]
+func MessagesWith(r io.Reader, opts Options) iter.Seq2[Message, error]
 func ParseMessage(b []byte) (Message, error)
 type Header struct
 	Version uint8
@@ -95,6 +98,8 @@ type MessageError struct
 func (*MessageError) Error() string
 func (*MessageError) Unwrap() error
 type MirrorCode uint16
+type Options struct
+	MaxMessageLen uint32
 type Other struct
 type PeerDown struct
 	Peer PeerHeader
