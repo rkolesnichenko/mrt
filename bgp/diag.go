@@ -53,4 +53,15 @@ const (
 	DiagASPathWidth = "bgp/aspath-width"
 	// DiagAS4PathIgnored reports an AS4_PATH (or AS4_AGGREGATOR) that was not applied.
 	DiagAS4PathIgnored = "bgp/as4path-ignored"
+	// DiagNotOpen reports a BGP message whose type is not OPEN.
+	DiagNotOpen = "bgp/not-open"
+	// DiagOpenLength reports OPEN fields that are missing or run past the message: the fixed part, the
+	// optional parameters, a parameter or a capability. What parsed before them is kept.
+	DiagOpenLength = "bgp/open-length"
+	// DiagCapabilityValue reports a capability whose value has the wrong length for its code, an ADD-PATH
+	// tuple with a Send/Receive value outside 1-3 or a family listed twice, and an ADD-PATH capability
+	// after the first. The capability stays in Open.Capabilities.
+	DiagCapabilityValue = "bgp/capability-value"
+	// DiagNotNotification reports a BGP message whose type is not NOTIFICATION.
+	DiagNotNotification = "bgp/not-notification"
 )

@@ -56,6 +56,7 @@ targets='
 bgp . FuzzParseUpdate
 bgp . FuzzDecodeAttrs
 bgp . FuzzASPathMerge
+bgp . FuzzParseOpen
 internal/bzip2 . FuzzBzip2
 . . FuzzDecompress
 '
