@@ -64,13 +64,20 @@ type cursor struct {
 	bad string
 }
 
+// zeros is what a short read returns. No caller reads more than 16 bytes of
+// it, and a string read short ends in an error.
+var zeros [16]byte
+
+// take returns the next n bytes. On a short read it marks the cursor bad,
+// drops the bytes left and returns at most 16 zero bytes: a length read from
+// the frame never sizes an allocation (CLAUDE.md principle 2).
 func (c *cursor) take(n int, what string) []byte {
 	if len(c.b) < n {
 		if c.bad == "" {
 			c.bad = what
 		}
 		c.b = nil
-		return make([]byte, n)
+		return zeros[:min(n, len(zeros))]
 	}
 	v := c.b[:n]
 	c.b = c.b[n:]
@@ -86,7 +93,9 @@ func malformed(format string, args ...any) error {
 }
 
 // Parse reads one Kafka frame: the header and the BMP message after it. The
-// returned message aliases frame, with cap equal to len.
+// returned message aliases frame, with cap equal to len. A frame that fails a
+// check is ErrMalformed; one whose message length is beyond the bytes left
+// also wraps ErrTruncated.
 func Parse(frame []byte) (Header, []byte, error) {
 	var h Header
 	if !bytes.HasPrefix(frame, magic) {
@@ -101,7 +110,8 @@ func Parse(frame []byte) (Header, []byte, error) {
 		return h, nil, fmt.Errorf("%w: %d.%d", ErrVersion, h.Major, h.Minor)
 	}
 	h.Length = int(c.u16("header length"))
-	h.MessageLen = int(c.u32("message length"))
+	ml := c.u32("message length")
+	h.MessageLen = int(ml)
 	h.Flags = c.u8("flags")
 	h.ObjectType = c.u8("object type")
 	sec, usec := c.u32("timestamp"), c.u32("timestamp")
@@ -125,6 +135,9 @@ func Parse(frame []byte) (Header, []byte, error) {
 	}
 	if parsed := len(frame) - len(c.b); h.Length != parsed {
 		return h, nil, malformed("stated header length %d, parsed %d", h.Length, parsed)
+	}
+	if uint64(ml) > uint64(len(c.b)) { // not h.MessageLen, which can wrap where int is 32 bits
+		return h, nil, fmt.Errorf("%w: %w: message length %d, %d bytes follow", ErrMalformed, ErrTruncated, ml, len(c.b))
 	}
 	if h.MessageLen != len(c.b) {
 		return h, nil, malformed("message length %d, %d bytes follow", h.MessageLen, len(c.b))
@@ -180,21 +193,30 @@ func readFrame(r io.Reader) ([]byte, error) {
 		}
 		return nil, err
 	}
-	hl := int(binary.BigEndian.Uint16(head[6:]))
-	ml := int(binary.BigEndian.Uint32(head[8:]))
-	if hl < minHeader {
-		return nil, malformed("stated header length %d is below the minimum %d", hl, minHeader)
-	}
-	if total := hl + ml; total > MaxFrameLen {
-		return nil, fmt.Errorf("openbmp: frame of %d bytes exceeds %d", total, MaxFrameLen)
-	}
-	// The rest grows with the bytes that arrive, not with the stated length.
-	rest, err := io.ReadAll(io.LimitReader(r, int64(hl+ml-prefixLen)))
+	total, err := frameLen(binary.BigEndian.Uint16(head[6:]), binary.BigEndian.Uint32(head[8:]))
 	if err != nil {
 		return nil, err
 	}
-	if len(rest) != hl+ml-prefixLen {
-		return nil, fmt.Errorf("%w: %d of %d bytes", ErrTruncated, prefixLen+len(rest), hl+ml)
+	// The rest grows with the bytes that arrive, not with the stated length.
+	rest, err := io.ReadAll(io.LimitReader(r, int64(total-prefixLen)))
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != total-prefixLen {
+		return nil, fmt.Errorf("%w: %d of %d bytes", ErrTruncated, prefixLen+len(rest), total)
 	}
 	return append(head, rest...), nil
+}
+
+// frameLen checks a frame's stated header and message lengths and returns the
+// frame's length. The sum is taken in uint64, so it cannot wrap where int is
+// 32 bits.
+func frameLen(hl uint16, ml uint32) (int, error) {
+	if hl < minHeader {
+		return 0, malformed("stated header length %d is below the minimum %d", hl, minHeader)
+	}
+	if total := uint64(hl) + uint64(ml); total > MaxFrameLen {
+		return 0, fmt.Errorf("openbmp: frame of %d bytes exceeds %d", total, MaxFrameLen)
+	}
+	return int(hl) + int(ml), nil
 }

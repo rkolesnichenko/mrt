@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +121,46 @@ func TestParseErrors(t *testing.T) {
 		_, _, err := openbmp.Parse(tt.in)
 		if !errors.Is(err, tt.want) {
 			t.Errorf("%s: %v, want %v", tt.name, err, tt.want)
+		}
+	}
+	// A message length beyond the bytes left is malformed by truncation
+	// (spec §8); one short of them is not truncation.
+	if _, _, err := openbmp.Parse(set(11, good[11]+1)); !errors.Is(err, openbmp.ErrMalformed) || !errors.Is(err, openbmp.ErrTruncated) {
+		t.Errorf("message length longer: %v, want ErrMalformed and ErrTruncated", err)
+	}
+	if _, _, err := openbmp.Parse(set(11, good[11]-1)); errors.Is(err, openbmp.ErrTruncated) {
+		t.Errorf("message length shorter: %v, want no ErrTruncated", err)
+	}
+}
+
+// TestParseShortFrameBoundedAlloc is CLAUDE.md principle 2: a short frame that
+// claims a 64 KiB admin ID or router group allocates nothing sized by the
+// claim.
+func TestParseShortFrameBoundedAlloc(t *testing.T) {
+	good := frame(openbmp.Header{RouterIP: netip.MustParseAddr("192.0.2.7")})
+	// With an empty admin ID, its length is at 38-39 and the router group's at 72-73.
+	claim := func(at, cut int) []byte {
+		b := bytes.Clone(good[:cut])
+		b[at], b[at+1] = 0xFF, 0xFF
+		return b
+	}
+	for name, in := range map[string][]byte{
+		"admin ID":     claim(38, 50),
+		"router group": claim(72, 80),
+	} {
+		if _, _, err := openbmp.Parse(in); !errors.Is(err, openbmp.ErrMalformed) {
+			t.Fatalf("%s: %v, want ErrMalformed", name, err)
+		}
+		const runs = 100
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		for range runs {
+			openbmp.Parse(in)
+		}
+		runtime.ReadMemStats(&after)
+		if per := (after.TotalAlloc - before.TotalAlloc) / runs; per > 1024 {
+			t.Errorf("%s: a %d-byte frame claiming 65535 bytes allocates %d bytes per Parse, want at most 1024", name, len(in), per)
 		}
 	}
 }
