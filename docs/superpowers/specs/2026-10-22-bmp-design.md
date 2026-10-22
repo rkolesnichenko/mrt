@@ -1,12 +1,28 @@
 # mrt v0.4: a BMP reader
 
-Status: draft for review, 2026-10-22. Amends the v0.1 design
+Status: approved by the user 2026-10-22 ("Approved; take your recommendations
+on all five, no capture yet"). Amends the v0.1 design
 (`2026-10-16-mrt-design.md`) and the v0.2 design (`2026-10-20-mrt-v0.2-design.md`)
 where it says so. CLAUDE.md's principles and rulings hold for everything
-below. The user wrote the brief and asked for this spec to come before any
-code. The brief leaves four questions open (§10), and they go back to the user
-with a recommendation each. Every other decision that is not quoted from the
-brief, an RFC or an earlier design is the author's call and is marked so.
+below. The user wrote the brief and asked for this spec before any code.
+
+**User's rulings, 2026-10-22** (§10 has the options that were weighed):
+
+1. Route type (§10.1): **option A.** `bmp` imports `mrt` and yields `mrt.Route`.
+2. Route Monitoring before Peer Up (§10.2): **option 1.** Decode with no
+   ADD-PATH, add a `bmp/addpath-unknown` Warning, and let `RequirePeerUp`
+   refuse instead.
+3. OpenBMP (§10.3): **sub-package `bmp/openbmp`**, binary v1.7 only, with no
+   text form.
+4. Statistics (§10.4): **raw TLVs with typed accessors.**
+5. Version (§10.5): **v0.4.0**, with the CHANGELOG and README wording of §10.5.
+6. **No capture yet.** Nothing is fetched from either broker, topic listing
+   included. §9.5's script and test are written; neither runs until the
+   user says so. The benchmark (§9.6) runs on the largest synthetic stream,
+   and its gate is re-checked on a capture once one exists.
+
+Every other decision not quoted from the brief, an RFC or an earlier design
+is the author's call and is marked so.
 
 ## 1. Intent
 
