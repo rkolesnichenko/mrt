@@ -1,0 +1,25 @@
+package openbmp
+const FlagIPv6 = 0x40
+const FlagRouter = 0x80
+const MaxFrameLen = 16 << 20
+const ObjectBMPRaw = 12
+var ErrMalformed = errors.New(…)
+var ErrNotOpenBMP = errors.New(…)
+var ErrTruncated = errors.New(…)
+var ErrVersion = errors.New(…)
+func Frames(r io.Reader) iter.Seq2[[]byte, error]
+func Parse(frame []byte) (Header, []byte, error)
+type Header struct
+	Major uint8
+	Minor uint8
+	Flags uint8
+	ObjectType uint8
+	Time time.Time
+	CollectorHash [16]byte
+	CollectorAdminID string
+	RouterHash [16]byte
+	RouterIP netip.Addr
+	RouterGroup string
+	RowCount uint32
+	Length int
+	MessageLen int

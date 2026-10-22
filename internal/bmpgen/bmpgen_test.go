@@ -11,6 +11,7 @@ import (
 	"github.com/rkolesnichenko/mrt"
 	"github.com/rkolesnichenko/mrt/bgp"
 	"github.com/rkolesnichenko/mrt/bmp"
+	"github.com/rkolesnichenko/mrt/bmp/openbmp"
 	"github.com/rkolesnichenko/mrt/internal/bmpgen"
 )
 
@@ -41,7 +42,9 @@ var expected = map[string]expect{
 	"bmp-locrib-multi":  {},
 	"bmp-truncated":     {errs: 1, truncated: true},
 	// length 3, version 2, one message over the limit, twelve zero bytes of junk (two headers).
-	"bmp-garbage": {errs: 5, limit: 1024},
+	"bmp-garbage":    {errs: 5, limit: 1024},
+	"obmp-v4-router": {},
+	"obmp-v6-router": {},
 }
 
 // read returns the messages of a file and its errors.
@@ -71,7 +74,7 @@ func TestGeneratedFiles(t *testing.T) {
 			if !ok {
 				t.Fatalf("no expectation for %s", f.Name)
 			}
-			path := filepath.Join(dir, f.Name+".bmp")
+			path := filepath.Join(dir, f.Name+f.Ext())
 			if os.Getenv("MRT_GOLDEN_UPDATE") == "1" {
 				if err := os.WriteFile(path, f.Data, 0o644); err != nil {
 					t.Fatal(err)
@@ -83,6 +86,10 @@ func TestGeneratedFiles(t *testing.T) {
 			}
 			if !bytes.Equal(disk, f.Data) {
 				t.Fatal("file on disk differs from the generator's output; regenerate")
+			}
+			if f.Ext() == ".obmp" {
+				checkOBMP(t, disk)
+				return
 			}
 			msgs, errs := read(disk, want.limit)
 			if len(msgs) == 0 {
@@ -121,6 +128,31 @@ func TestGeneratedFiles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// checkOBMP reads an OpenBMP frame stream through Frames, Parse and
+// bmp.ParseMessage with no errors, and wants the frames to reproduce the file.
+func checkOBMP(t *testing.T, disk []byte) {
+	t.Helper()
+	var all []byte
+	n := 0
+	for frame, err := range openbmp.Frames(bytes.NewReader(disk)) {
+		if err != nil {
+			t.Fatalf("Frames: %v", err)
+		}
+		all = append(all, frame...)
+		_, msg, err := openbmp.Parse(frame)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if _, err := bmp.ParseMessage(msg); err != nil {
+			t.Fatalf("ParseMessage: %v", err)
+		}
+		n++
+	}
+	if n == 0 || !bytes.Equal(all, disk) {
+		t.Errorf("%d frames; reproduce the file: %v", n, bytes.Equal(all, disk))
 	}
 }
 

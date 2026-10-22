@@ -1,22 +1,33 @@
 package bmpgen
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rkolesnichenko/mrt"
 	"github.com/rkolesnichenko/mrt/bgp"
 	"github.com/rkolesnichenko/mrt/bmp"
+	"github.com/rkolesnichenko/mrt/bmp/openbmp"
 	"github.com/rkolesnichenko/mrt/internal/mrtgen"
 )
 
 // File is one synthetic fixture. Its name has no extension; the file is
-// testdata/bmp/<Name>.bmp.
+// testdata/bmp/<Name>.bmp, or <Name>.obmp for an OpenBMP frame stream.
 type File struct {
 	Name string
 	Data []byte
+}
+
+// Ext is the file extension: ".obmp" for the OpenBMP fixtures, else ".bmp".
+func (f File) Ext() string {
+	if strings.HasPrefix(f.Name, "obmp-") {
+		return ".obmp"
+	}
+	return ".bmp"
 }
 
 // Peer header flags (RFC 7854 section 4.2, RFC 9069 section 4.2).
@@ -166,7 +177,33 @@ func Synthetic() []File {
 	return []File{
 		types(), peerFlags(), addPath(), as2(), ipv6Peers(), eor(), noPeerUp(), badOpen(),
 		reUp(), sessions(), stats(), openExtended(), locRIBMulti(), truncated(), garbage(),
+		obmp("obmp-v4-router", netip.MustParseAddr("192.0.2.1")),
+		obmp("obmp-v6-router", netip.MustParseAddr("2001:db8::1")),
 	}
+}
+
+// obmp wraps every message of bmp-types and bmp-addpath in an OBMP frame from
+// the router at ip. The collector time advances one second per frame.
+func obmp(name string, ip netip.Addr) File {
+	h := openbmp.Header{
+		CollectorHash:    [16]byte{0xc0, 0x11},
+		CollectorAdminID: "collector-1",
+		RouterHash:       [16]byte{0xa0, 0x07},
+		RouterIP:         ip,
+		RouterGroup:      "synthetic",
+	}
+	var b []byte
+	n := 0
+	for _, f := range []File{types(), addPath()} {
+		for rest := f.Data; len(rest) > 0; {
+			l := int(binary.BigEndian.Uint32(rest[1:]))
+			h.Time = epoch.Add(time.Duration(n) * time.Second).Add(123456 * time.Microsecond)
+			n++
+			b = append(b, OBMP(h, rest[:l])...)
+			rest = rest[l:]
+		}
+	}
+	return File{name, b}
 }
 
 // types holds every message type, and Peer Down for reasons 1-6.

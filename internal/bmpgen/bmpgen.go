@@ -13,6 +13,7 @@ import (
 
 	"github.com/rkolesnichenko/mrt/bgp"
 	"github.com/rkolesnichenko/mrt/bmp"
+	"github.com/rkolesnichenko/mrt/bmp/openbmp"
 )
 
 func u16(v uint16) []byte { return binary.BigEndian.AppendUint16(nil, v) }
@@ -180,4 +181,51 @@ func OpenExtended(as bgp.ASN, id netip.Addr, caps ...[]byte) []byte {
 	b := append(openFixed(as, id), 255, 255)
 	b = append(b, u16(uint16(len(params)))...)
 	return finish(append(b, params...))
+}
+
+// OBMP wraps bmpMsg in an OBMP v1.7 envelope. It computes Length and
+// MessageLen itself. Zero Major and Minor mean 1.7, a zero ObjectType 12 and a
+// zero RowCount 1. Flags always carry the router bit and the IPv6 bit of
+// RouterIP; any other bit of h.Flags is kept. An IPv4 router IP goes in the
+// first 4 bytes of its field.
+func OBMP(h openbmp.Header, bmpMsg []byte) []byte {
+	if h.Major == 0 && h.Minor == 0 {
+		h.Major, h.Minor = 1, 7
+	}
+	if h.ObjectType == 0 {
+		h.ObjectType = openbmp.ObjectBMPRaw
+	}
+	if h.RowCount == 0 {
+		h.RowCount = 1
+	}
+	flags := h.Flags&^(openbmp.FlagRouter|openbmp.FlagIPv6) | openbmp.FlagRouter
+	ip := make([]byte, 16)
+	switch {
+	case h.RouterIP.Is4():
+		a := h.RouterIP.As4()
+		copy(ip, a[:])
+	case h.RouterIP.IsValid():
+		a := h.RouterIP.As16()
+		copy(ip, a[:])
+		flags |= openbmp.FlagIPv6
+	}
+	var sec, usec uint32
+	if !h.Time.IsZero() {
+		sec, usec = uint32(h.Time.Unix()), uint32(h.Time.Nanosecond()/1000)
+	}
+	b := []byte("OBMP")
+	b = append(b, h.Major, h.Minor, 0, 0, 0, 0, 0, 0, flags, h.ObjectType)
+	b = append(b, u32(sec)...)
+	b = append(b, u32(usec)...)
+	b = append(b, h.CollectorHash[:]...)
+	b = append(b, u16(uint16(len(h.CollectorAdminID)))...)
+	b = append(b, h.CollectorAdminID...)
+	b = append(b, h.RouterHash[:]...)
+	b = append(b, ip...)
+	b = append(b, u16(uint16(len(h.RouterGroup)))...)
+	b = append(b, h.RouterGroup...)
+	b = append(b, u32(h.RowCount)...)
+	binary.BigEndian.PutUint16(b[6:], uint16(len(b)))
+	binary.BigEndian.PutUint32(b[8:], uint32(len(bmpMsg)))
+	return append(b, bmpMsg...)
 }
