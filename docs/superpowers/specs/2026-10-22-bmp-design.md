@@ -798,7 +798,10 @@ func RoutesWith(msgs iter.Seq2[Message, error], opts RoutesOptions) iter.Seq2[mr
   The peer's state becomes *unknown* (§7.6) when `Body` fails, or when either
   OPEN has a Warning or Error diagnostic. That is author's call, and
   conservative: a damaged ADD-PATH capability must not read as "no
-  ADD-PATH". Unknown replaces whatever the key held. Otherwise:
+  ADD-PATH". The one exception is for Loc-RIB: the Warning for an ADD-PATH
+  Mode outside 1-3 does not count, because Loc-RIB ignores the Mode (the
+  Loc-RIB bullet below; ruled during implementation, 2026-10-22). Unknown
+  replaces whatever the key held. Otherwise:
   - Adj-RIB-In views (O = 0): `AddPathFamilies(received, sent)`. The peer
     sends and the router receives.
   - Adj-RIB-Out views (O = 1): `AddPathFamilies(sent, received)`.
