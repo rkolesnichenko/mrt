@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"iter"
 	"net/netip"
+	"slices"
 
 	"github.com/rkolesnichenko/mrt"
 	"github.com/rkolesnichenko/mrt/bgp"
@@ -34,9 +35,11 @@ type RoutesOptions struct {
 	// EndOfRIB yields a KindEndOfRIB Route for every End-of-RIB marker (RFC
 	// 4724 section 2). Without it a marker yields nothing, as in mrt.Routes.
 	EndOfRIB bool
-	// RequirePeerUp refuses a Route Monitoring that would carry
-	// DiagAddPathUnknown: it yields one *MessageError (Offset -1, wrapping
-	// ErrNoPeerUp) and no route.
+	// RequirePeerUp refuses a Route Monitoring that holds a family whose
+	// ADD-PATH state is not known and that gives routes or a Warning or Error
+	// from bgp (path IDs read as prefixes): it yields one *MessageError
+	// (Offset -1, wrapping ErrNoPeerUp) and no route. An End-of-RIB or an
+	// UPDATE with no NLRI is not refused.
 	RequirePeerUp bool
 	// Interner, when set, decodes path attributes through it, as
 	// mrt.RoutesOptions.Interner does for UPDATEs: each UPDATE's path is its
@@ -65,8 +68,10 @@ func (o RoutesOptions) decode(a bgp.Attrs) (*bgp.Path, []bgp.Diagnostic) {
 // -1, wrapping ErrMalformed) and the others continue: a Route Monitoring of
 // an unknown peer type, one whose BGP header is broken or whose message is
 // not an UPDATE, and an UPDATE that yields no route but has a Warning or
-// Error diagnostic from bgp (the first one is named). Statistics, Initiation,
-// Termination, Route Mirroring and Other yield nothing.
+// Error diagnostic from bgp (the first one is named, and DiagAddPathUnknown
+// as the likely cause when the peer's ADD-PATH state for a family the UPDATE
+// holds is not known). Statistics, Initiation, Termination, Route Mirroring
+// and Other yield nothing.
 //
 // Routes stops when yield returns false. Ranging over it again after a
 // break goes on with the next message from msgs and the same session state;
@@ -214,12 +219,22 @@ func (s *Session) monitoring(m RouteMonitoring, addPath, known bgp.FamilySet, yi
 			n += len(mpr.NLRI)
 		}
 	}
-	if n > 0 && used&^known != 0 {
+	// The first Warning or Error from bgp: before DiagAddPathUnknown is added,
+	// diags holds only bgp's.
+	fault := slices.IndexFunc(diags, func(d bgp.Diagnostic) bool { return d.Severity >= bgp.SeverityWarning })
+	// A family whose ADD-PATH state is unknown was read without path IDs. That
+	// matters when it gave routes, or when bgp found a fault that path IDs
+	// read as prefixes would explain; an End-of-RIB or an empty UPDATE stays
+	// silent (spec §7.6).
+	unknown := used&^known != 0
+	if unknown && (n > 0 || fault >= 0) {
 		if s.opts.RequirePeerUp {
 			return fail(ErrNoPeerUp)
 		}
-		diags = append(diags, bgp.Diagnostic{Severity: bgp.SeverityWarning, Code: DiagAddPathUnknown,
-			Message: "no Peer Up seen for this peer and family: NLRI read without ADD-PATH path identifiers"})
+		if n > 0 {
+			diags = append(diags, bgp.Diagnostic{Severity: bgp.SeverityWarning, Code: DiagAddPathUnknown,
+				Message: "no Peer Up seen for this peer and family: NLRI read without ADD-PATH path identifiers"})
+		}
 	}
 
 	base := mrt.Route{Time: m.Peer.Time, Peer: m.Peer.Peer(), Diagnostics: diags, Router: s.opts.Router, View: m.Peer.View()}
@@ -254,10 +269,13 @@ func (s *Session) monitoring(m RouteMonitoring, addPath, known bgp.FamilySet, yi
 	}
 	// No route: a fault that made the UPDATE's routes vanish must not be
 	// silent. Only bgp's diagnostics are here: DiagAddPathUnknown needs a route.
-	for _, d := range diags {
-		if d.Severity >= bgp.SeverityWarning {
-			return fail(fmt.Errorf("%w: %s: %s", ErrMalformed, d.Code, d.Message))
+	if fault >= 0 {
+		d := diags[fault]
+		if unknown {
+			return fail(fmt.Errorf("%w: %s: %s (likely cause %s: no Peer Up seen for this peer and family, so NLRI that carry path identifiers were read without them)",
+				ErrMalformed, d.Code, d.Message, DiagAddPathUnknown))
 		}
+		return fail(fmt.Errorf("%w: %s: %s", ErrMalformed, d.Code, d.Message))
 	}
 	if s.opts.EndOfRIB && len(diags) == 0 {
 		if fam, ok := endOfRIB(u, mpu); ok {

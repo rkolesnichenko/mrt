@@ -867,6 +867,10 @@ assumes the recommendation:
   on Peer Up (it is the A flag), so only ADD-PATH is assumed.
 - **`RequirePeerUp`:** such a message yields one
   `*MessageError{Offset: -1, Err: ErrNoPeerUp}` and no routes.
+  So does one whose NLRI, read without path IDs, give no route but a
+  Warning or Error from `bgp` (final review, 2026-10-23). Without
+  `RequirePeerUp` that message is the R22 `ErrMalformed`, whose text names
+  `bmp/addpath-unknown` as the likely cause.
 - **Priming:** a consumer that kept the Peer Ups it saw earlier (or reads
   the topic from an earlier offset) passes them to `Session.Routes` first.
   No extra API.

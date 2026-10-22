@@ -3,6 +3,7 @@ package bmp_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -185,6 +186,62 @@ func TestSessionUnknownState(t *testing.T) {
 				t.Fatalf("RequirePeerUp: %+v, want one ErrNoPeerUp at offset -1 and then a route", got)
 			}
 			wantIDs(t, routesOf(t, got[1:]), map[bgp.Family]uint32{fam4: 3})
+		})
+	}
+}
+
+// TestSessionMisreadPathIDs: an unknown peer whose NLRI really carry path IDs.
+// Read as plain NLRI, path ID 1 gives routes (and bgp faults); 0x21000000 for
+// IPv4 and 0x81000000 for IPv6 give none, only a bgp Error. Under
+// RequirePeerUp both are ErrNoPeerUp (spec §7.6); without it the first gives
+// routes with DiagAddPathUnknown and the second an ErrMalformed that names
+// DiagAddPathUnknown as the likely cause.
+func TestSessionMisreadPathIDs(t *testing.T) {
+	h := at(global4(60), 0, 1)
+	one := func(t *testing.T, got []result, want error) *bmp.MessageError {
+		t.Helper()
+		var me *bmp.MessageError
+		if len(got) != 1 || !errors.As(got[0].err, &me) || me.Offset != -1 || !errors.Is(got[0].err, want) || !reflect.DeepEqual(got[0].r, mrt.Route{}) {
+			var first error
+			if len(got) > 0 {
+				first = got[0].err
+			}
+			t.Fatalf("%d results, the first with error %v; want one error wrapping %v at offset -1 and no route", len(got), first, want)
+		}
+		return me
+	}
+	for _, c := range []struct {
+		prefix string
+		id     uint32
+		routes bool // whether the NLRI read plain still give routes
+	}{
+		{"198.51.100.0/24", 1, true},
+		{"2001:db8:1::/48", 1, true},
+		{"198.51.100.0/24", 0x21000000, false},
+		{"2001:db8:1::/48", 0x81000000, false},
+	} {
+		t.Run(fmt.Sprintf("%s-%#x", c.prefix, c.id), func(t *testing.T) {
+			msg := rm(h, announce(h, c.prefix, true, c.id))
+			e := one(t, feed(bmp.RoutesOptions{RequirePeerUp: true}, msg), bmp.ErrNoPeerUp)
+			if errors.Is(e, bmp.ErrMalformed) {
+				t.Errorf("RequirePeerUp: %v also wraps ErrMalformed", e)
+			}
+			got := feed(bmp.RoutesOptions{}, msg)
+			if c.routes {
+				wantUnknown(t, routesOf(t, got))
+				return
+			}
+			e = one(t, got, bmp.ErrMalformed)
+			if !strings.Contains(e.Error(), "bgp/nlri-length") || !strings.Contains(e.Error(), bmp.DiagAddPathUnknown) {
+				t.Errorf("%v: want it to name bgp/nlri-length and %s", e, bmp.DiagAddPathUnknown)
+			}
+			// A known peer without ADD-PATH: the same bytes are plainly malformed.
+			for _, req := range []bool{false, true} {
+				e = one(t, feed(bmp.RoutesOptions{RequirePeerUp: req}, plainUp(h), msg), bmp.ErrMalformed)
+				if strings.Contains(e.Error(), bmp.DiagAddPathUnknown) {
+					t.Errorf("known peer: %v names %s", e, bmp.DiagAddPathUnknown)
+				}
+			}
 		})
 	}
 }
