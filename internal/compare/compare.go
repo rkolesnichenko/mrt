@@ -23,6 +23,21 @@
 // route per RIB entry pass 3 decoded (so the file must be a RIB), and
 // allocated less than pass 3. Exit status:
 // 0 the gate holds, 1 it does not, 2 a bad command line or unreadable file.
+//
+// With -bmp it reads a BMP stream instead (spec §9.2, §9.6; bmp.go):
+//
+//	go run . -bmp FILE
+//
+// FILE is a .bmp file (one router's messages) or an .obmp file (OpenBMP
+// frames, one session per router). The messages are framed once and held in
+// memory; then, after a garbage collection each, mrt (bmp.Session.Routes over
+// bmp.ParseMessage) and gobgp (ParseBMPMessageWithOptions, with the Peer Up
+// state of gobgpSession) decode them, and the TotalAlloc and Mallocs each
+// adds are printed per message. Then both sides' announcements and
+// withdrawals are rendered as oracle.FromRoute lines and compared; the line
+// counts and every mismatch are printed (divergences.md is not read). Exit
+// status: 0 no mismatch, 1 a mismatch, 2 a bad command line or unreadable
+// file.
 package main
 
 import (
@@ -31,20 +46,26 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	gobgp "github.com/osrg/gobgp/v4/pkg/packet/mrt"
 	"github.com/rkolesnichenko/mrt"
 	"github.com/rkolesnichenko/mrt/bgp"
+	"github.com/rkolesnichenko/mrt/internal/oracle"
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: compare FILE")
-		os.Exit(2)
+	switch {
+	case len(os.Args) == 3 && os.Args[1] == "-bmp":
+		os.Exit(runBMP(os.Args[2], os.Stdout))
+	case len(os.Args) == 2 && os.Args[1] != "-bmp":
+		os.Exit(run(os.Args[1], os.Stdout))
 	}
-	os.Exit(run(os.Args[1], os.Stdout))
+	fmt.Fprintln(os.Stderr, "usage: compare FILE | compare -bmp FILE")
+	os.Exit(2)
 }
 
 // walk is what one pass counted: a summary, the items the gate compares
@@ -242,4 +263,60 @@ func walkRoutes(r io.Reader) (walk, error) {
 	}
 	return walk{fmt.Sprintf("%d routes (%d with a path), %d paths, %d errors, AS path length sum %d", routes, withPath, paths, routeErrors, asns),
 		routes, routeErrors}, nil
+}
+
+// runBMP is the -bmp mode: it measures both decoders over the messages of
+// path, then compares their routes line by line.
+func runBMP(path string, w io.Writer) int {
+	streams, err := readBMPStreams(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "compare: %v\n", err)
+		return 2
+	}
+	msgs := 0
+	for _, s := range streams {
+		msgs += len(s)
+	}
+	if msgs == 0 {
+		fmt.Fprintf(os.Stderr, "compare: %s: no BMP message\n", path)
+		return 2
+	}
+	pass := func(name string, f func([][][]byte) (int, int)) result {
+		return measure(name, func() (walk, error) {
+			routes, errs := f(streams)
+			return walk{fmt.Sprintf("%d routes, %d errors", routes, errs), routes, errs}, nil
+		})
+	}
+	results := []result{
+		pass("mrt bmp.Session.Routes", walkMrtBMP),
+		pass("gobgp ParseBMPMessage", walkGobgpBMP),
+	}
+	var ours, theirs []string
+	for _, s := range streams {
+		ours = append(ours, mrtBMPRoutes(s)...)
+		g, err := gobgpBMPRoutes(s)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "compare: %s: gobgp: %v\n", path, err)
+			return 2
+		}
+		theirs = append(theirs, g...)
+	}
+	ours, theirs = oracle.Sorted(ours), oracle.Sorted(theirs)
+
+	fmt.Fprintf(w, "file %s\n%d messages, %d router streams; %s, GOMAXPROCS %d\n\n", path, msgs, len(streams), runtime.Version(), runtime.GOMAXPROCS(0))
+	fmt.Fprintf(w, "%-30s %12s %14s %12s %10s %10s  %s\n", "pass", "wall", "TotalAlloc", "Mallocs", "B/msg", "allocs/msg", "counted")
+	for _, r := range results {
+		fmt.Fprintf(w, "%-30s %12s %14d %12d %10.1f %10.2f  %s\n", r.name, r.wall.Round(time.Microsecond), r.totalAlloc, r.mallocs,
+			float64(r.totalAlloc)/float64(msgs), float64(r.mallocs)/float64(msgs), r.summary)
+	}
+	fmt.Fprintf(w, "\nmrt lines %d, gobgp lines %d\n", len(ours), len(theirs))
+	onlyOurs, onlyTheirs := oracle.Diff(ours, theirs)
+	if len(onlyOurs)+len(onlyTheirs) > 0 {
+		name := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(path), ".bmp"), ".obmp")
+		fmt.Fprintf(w, "MISMATCH: %d mrt and %d gobgp lines differ:\n%s", len(onlyOurs), len(onlyTheirs),
+			oracle.PairBlocks(name, "mrt", "gobgp", onlyOurs, onlyTheirs, oracle.LineKey))
+		return 1
+	}
+	fmt.Fprintln(w, "no mismatch")
+	return 0
 }

@@ -1,17 +1,24 @@
 # package bmp against the oracles: every known difference
 
-The oracle is bgpkit-parser 0.22.0's library, run by the harness
-`internal/oracle/bgpkit-bmp` (its command line reads MRT only), which
-`scripts/build-oracles.sh` installs as `bgpkit-bmp`. Its output on every
-fixture of `testdata/bmp` is in `testdata/golden/NAME.bgpkit-bmp.json` (see
-`bmp/golden_test.go`).
+There are two oracles, one section each:
+
+- bgpkit-parser 0.22.0's library, run by the harness
+  `internal/oracle/bgpkit-bmp` (its command line reads MRT only), which
+  `scripts/build-oracles.sh` installs as `bgpkit-bmp`. Its output on every
+  fixture of `testdata/bmp` is in `testdata/golden/NAME.bgpkit-bmp.json` (see
+  `bmp/golden_test.go`).
+- gobgp v4.10.0's `pkg/packet/bmp`, in the nested module `internal/compare`
+  (see its `bmp.go`), run live on every fixture.
 
 Each entry has an ID, the reason for the difference, and which side is right
-("Decides"). The `pair` blocks are checked by `TestBMPDivergencesDocumented`
-in both directions: every line on which mrt and an oracle differ must be in a
-block, and every line in a block must still differ. A block names the fixture
-(its file name without `.bmp` or `.obmp`), the line mrt gives and the line the
-oracle gives; `(none)` means that side gives no line.
+("Decides"). The `pair` blocks are checked in both directions: every line on
+which mrt and an oracle differ must be in a block, and every line in a block
+must still differ. `TestBMPDivergencesDocumented` (root module) checks the
+bgpkit-parser section, `TestGobgpBMPMatches` (`internal/compare`, which the
+root's `go test ./...` and `scripts/check.sh` do not enter; CI runs it) the
+gobgp section. A block names the fixture (its file name without `.bmp` or
+`.obmp`), the line mrt gives and the line the oracle gives; `(none)` means
+that side gives no line.
 
 ## bgpkit-parser
 
@@ -223,3 +230,91 @@ lines on both sides, so nothing checks these.
   not check the stated header length against the fields it read (the BMP
   message starts after the row count), where `openbmp.Parse` refuses a
   mismatch.
+
+## gobgp
+
+`bmp.Session` over each stream (`internal/compare`'s `mrtBMPRoutes`),
+normalized by `oracle.FromRoute`, against gobgp's
+`ParseBMPMessageWithOptions` over the same messages, its routes rendered in
+the same line form (`gobgpBMPRoutes`). Both read the messages `bmp.Messages`
+(or `openbmp.Frames` and `openbmp.Parse`) frames. The harness passes gobgp
+the A flag (`Use2ByteAS`) and the ADD-PATH families it keeps from each
+peer's Peer Up by spec §7.5's rule, from the OPENs as gobgp parses them (a
+Send/Receive value outside 1-3 voids the capability, RFC 7911 section 4,
+where gobgp's own `open2Cap` would test its bits); a peer with no Peer Up,
+or whose Peer Up gobgp refuses, is decoded without ADD-PATH. A Route Monitoring gobgp decodes with an error gives no line.
+
+### GB1. AS4_PATH and AS4_AGGREGATOR are not merged
+
+Reason: in `bmp-as2` the peer 192.0.2.70 has the A flag set and sends
+AS_PATH `64500 23456 23456` with AS4_PATH `196618 4200000001`, and
+AGGREGATOR `23456 192.0.2.71` with AS4_AGGREGATOR `196618 192.0.2.71`.
+gobgp's `pkg/packet/bgp` decodes the four attributes and keeps them apart;
+the merge is in its server (`internal/pkg/table`'s `UpdatePathAttrs4ByteAs`
+and `UpdatePathAggregator4ByteAs`, which no other module can import), so the
+oracle's line shows the 2-byte attributes. mrt yields the effective path and
+aggregator. RFC 6793 section 4.2.3: "If the AS4_PATH attribute is also
+received, both of the attributes will be used to construct the exact AS path
+information"; and when both AGGREGATOR and AS4_AGGREGATOR are received and
+"the AS number in the AGGREGATOR attribute is" AS_TRANS, "the AGGREGATOR
+attribute SHALL be ignored, the AS4_AGGREGATOR attribute SHALL be taken as
+the information about the aggregating node, and the AS path information
+would need to be constructed".
+
+Decides: RFC 6793, for mrt. bgpkit-parser gives mrt's line.
+
+```pair
+fixture: bmp-as2
+mrt: {"kind":"A","peer":"192.0.2.70","peer_as":196618,"prefix":"198.51.100.0/24","as_path":"64500 196618 4200000001","origin":"IGP","next_hop":"192.0.2.254","aggregator":"196618 192.0.2.71"}
+gobgp: {"kind":"A","peer":"192.0.2.70","peer_as":196618,"prefix":"198.51.100.0/24","as_path":"64500 23456 23456","origin":"IGP","next_hop":"192.0.2.254","aggregator":"23456 192.0.2.71"}
+```
+
+### GB2. An RFC 9072 OPEN is refused, so the peer's ADD-PATH is lost
+
+Reason: in `bmp-open-extended` the Peer Ups of 192.0.2.150 (both OPENs) and
+192.0.2.152 (the received OPEN) are in the RFC 9072 form: Optional
+Parameters Length 255, then type 255 and a 2-byte length. gobgp's
+`BGPOpen.DecodeFromBytes` reads the 255 as the RFC 4271 Optional Parameters
+Length and, finding fewer than 255 bytes of parameters, refuses the OPEN
+("Not all BGP Open message bytes available"), so the Peer Up is refused and
+the peer is decoded without ADD-PATH. Its UPDATE carries path identifiers (both peers negotiated IPv4
+ADD-PATH), which then do not parse as plain NLRI ("network bytes is short"),
+and the message gives no route. mrt parses both forms (spec §6.1). RFC 9072
+section 2: "If the value of the "Non-Ext OP Type" field is 255, then the
+encoding described above is used for the Optional Parameters length.
+Otherwise, the encoding defined in [RFC4271] is used." The peer 192.0.2.151,
+whose extended OPENs carry no ADD-PATH, gives the same line on both sides.
+
+Decides: RFC 9072, for mrt.
+
+```pair
+fixture: bmp-open-extended
+mrt: {"kind":"A","peer":"192.0.2.150","peer_as":64650,"prefix":"198.51.100.0/24","path_id":1,"as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+gobgp: (none)
+```
+
+```pair
+fixture: bmp-open-extended
+mrt: {"kind":"A","peer":"192.0.2.152","peer_as":196618,"prefix":"198.51.100.0/24","path_id":2,"as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+gobgp: (none)
+```
+
+### GB3. A Route Monitoring of peer type 9 is decoded
+
+Reason: in `bmp-garbage` a Route Monitoring has peer type 9. gobgp does not
+check the type and decodes the UPDATE (the harness passes the A flag's AS
+width, as for every type but Loc-RIB). mrt refuses the Route Monitoring
+with a `*MessageError` (spec §7.1, §7.4), as BS2 says: RFC 7854 section 4.2
+defines peer types 0-2 ("Currently, three types of peers are identified")
+and RFC 9069 section 4.1 adds 3 ("Peer Type = 3: Loc-RIB Instance Peer");
+for any other type the AS width and the view are not defined, and mrt would
+have to guess them. bgpkit-parser drops the message (BS2).
+
+Decides: RFC 7854 and RFC 9069, for mrt: the type is undefined, so its
+message is refused rather than guessed at.
+
+```pair
+fixture: bmp-garbage
+mrt: (none)
+gobgp: {"kind":"A","peer":"192.0.2.181","peer_as":64581,"prefix":"198.51.102.0/24","as_path":"64501 64502","origin":"IGP","next_hop":"192.0.2.254"}
+```

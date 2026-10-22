@@ -135,9 +135,11 @@ func readBMPGolden(t *testing.T, f goldenFixture) []string {
 }
 
 // bgpkitPairs are the pairs of divergences.md's "## bgpkit-parser" section.
+// The "## gobgp" section is read too, so that its pairs are not refused as
+// outside a named section; internal/compare's TestGobgpBMPMatches checks it.
 func bgpkitPairs(t *testing.T) []oracle.Pair {
 	t.Helper()
-	d, err := oracle.ParseDivergences(bmpDivergencesFile, "bgpkit-parser")
+	d, err := oracle.ParseDivergences(bmpDivergencesFile, "bgpkit-parser", "gobgp")
 	if err != nil {
 		t.Fatal(err)
 	}
