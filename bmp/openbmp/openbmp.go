@@ -93,9 +93,8 @@ func malformed(format string, args ...any) error {
 }
 
 // Parse reads one Kafka frame: the header and the BMP message after it. The
-// returned message aliases frame, with cap equal to len. A frame that fails a
-// check is ErrMalformed; one whose message length is beyond the bytes left
-// also wraps ErrTruncated.
+// returned message aliases frame, with cap equal to len. A message length
+// beyond the bytes left wraps both ErrMalformed and ErrTruncated.
 func Parse(frame []byte) (Header, []byte, error) {
 	var h Header
 	if !bytes.HasPrefix(frame, magic) {
