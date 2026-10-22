@@ -6,7 +6,8 @@ rulings below amend it where they say so). This file is the operating contract.
 ## What we're building
 
 `github.com/rkolesnichenko/mrt`: a dependency-free Go module that reads the MRT files RIPE RIS and
-RouteViews publish (RFC 6396, RFC 8050) and decodes BGP UPDATEs. Output is typed `Record`s, or one
+RouteViews publish (RFC 6396, RFC 8050), BMP streams (RFC 7854, bare or in an OpenBMP 1.7 envelope)
+and decodes BGP UPDATEs. Output is typed `Record`s, or one
 `Route` per (peer, prefix, path ID). `mrtdump` is a `bgpdump -m` compatible printer, the subject of
 the differential test.
 
@@ -25,7 +26,7 @@ the differential test.
 5. **AS width comes from the record type, never from the bytes.** `BGP4MP_MESSAGE` 2-byte,
    `*_AS4` 4-byte, TABLE_DUMP_V2 entries 4-byte, TABLE_DUMP 2-byte (`bgp.Context.AS4`). A 2-byte
    AS_PATH that does not parse at width 2 is a Warning and an empty path, never re-read at width 4.
-6. **Import direction `cmd → mrt → bgp`.** `bgp` never imports `mrt`. No dependency on any rpsl module;
+6. **Import direction `cmd → bmp → mrt → bgp`.** `bgp` never imports `mrt`; `mrt` and `bgp` never import `bmp`; `bmp/openbmp` imports nothing of ours. No dependency on any rpsl module;
    ASNs are `bgp.ASN`.
 7. **Conventions C1-C3** (spec §3), held by `go run ./internal/apisurface -check`: `X(in)` /
    `XWith(in, XOptions)`; whole-value parsers return `(T, []Diagnostic)`, single values `(T, error)`;
@@ -73,6 +74,32 @@ the differential test.
 - **Duplicates and malformed attributes.** First duplicate wins (RFC 7606 §3 g), later ones to
   `Unknown()` with a Warning. RFC 7606 actions are out of scope: diagnostics carry the fault.
 
+## BMP rules settled by the 2026-10-22 design
+
+Spec `docs/superpowers/specs/2026-10-22-bmp-design.md`; the rulings below amend it where they say so.
+
+- **AS width** comes from the per-peer A flag (`PeerHeader.AS4`), and is 4-byte for Loc-RIB; never
+  from the bytes (principle 5).
+- **ADD-PATH** comes from the peer's Peer Up OPENs (`bgp.AddPathFamilies`), per family and per
+  direction (Adj-RIB-In vs Adj-RIB-Out). Loc-RIB ignores the capability intent (RFC 9069 §5.2). The one
+  exception: a Loc-RIB Peer Up whose only OPEN Warning is an ADD-PATH Mode outside 1-3 stays known;
+  any other Warning makes the peer unknown.
+- **No usable Peer Up** gives the Warning `bmp/addpath-unknown` (NLRI read without path IDs), or
+  `ErrNoPeerUp` under `RequirePeerUp`. A damaged Peer Up deletes the peer's state.
+- **Session.Routes applies Peer Up/Down/Termination state when called, not when ranged.** The
+  routes decode at range time, so range before reusing the buffer (`Interner` protects kept paths only).
+- **Termination changes no state.** Peer Up/Down whose per-peer header reads is never malformed:
+  a bad body is a Diagnostic on its `KindPeerState` route.
+- **MRT routes keep the zero `View`, `Router` and `Peer.Type`** (`TestMRTRoutesHaveZeroBMPFields`);
+  a table key for BMP routes includes `View`.
+- **OpenBMP: binary 1.7 only,** no text form. `openbmp.Parse` requires the message length to equal
+  the bytes left (strict; relax only if a real feed needs it, see `TestRealDataBMP`).
+- **Oracles:** bgpkit-parser 0.22.0's library via the `internal/oracle/bgpkit-bmp` harness (it
+  guesses ADD-PATH per NLRI from the bytes; mrt never does), and gobgp `pkg/packet/bmp` in
+  `internal/compare`. Divergences: `testdata/bmp/divergences.md`, two-directional like bgpdump's.
+- **Fixtures** `testdata/bmp/*.bmp|*.obmp` are synthetic, from `internal/bmpgen`; no capture is
+  committed. The real feed's licence terms are unknown: nothing is captured without the user's go-ahead.
+
 ## Oracles and goldens
 
 - Oracles are pinned: bgpdump RIPE-NCC/bgpdump master at `caf2cb07bc3cf06f1720c4cb274811599e9bda6a`
@@ -109,11 +136,20 @@ the differential test.
   the fuzz targets. On this machine always run it guarded:
   `memguard.sh 8 3600 env GOMAXPROCS=4 FUZZTIME=15s scripts/check.sh`
   (output to a file, then `echo "exit=$?"`; it must end SUCCESS and `check: ok`).
-- `scripts/fuzz.sh` — seven targets (FuzzRecords, FuzzRoutes, FuzzParseUpdate, FuzzDecodeAttrs,
-  FuzzASPathMerge, FuzzBzip2, FuzzDecompress). `FUZZTIME=1m`, `FUZZ_SHARD=i/n` (CI runs two shards; `i/n` is validated).
+- `scripts/fuzz.sh` — eleven targets (FuzzRecords, FuzzRoutes, FuzzParseUpdate, FuzzDecodeAttrs,
+  FuzzASPathMerge, FuzzParseOpen, FuzzMessages, FuzzBMPRoutes, FuzzOpenBMP, FuzzBzip2, FuzzDecompress). `FUZZTIME=1m`, `FUZZ_SHARD=i/n` (CI runs two shards; `i/n` is validated).
 - `MRT_API_UPDATE=1 go run ./internal/apisurface -check` rewrites `api/`; review `git diff api/`, it
   is the API change list.
-- `scripts/build-oracles.sh [PREFIX]` — builds the two oracles (needs autoconf, automake, cargo).
+- `scripts/build-oracles.sh [PREFIX]` — builds the oracles: bgpdump, bgpkit-parser and `bgpkit-bmp`
+  (the BMP harness; needs autoconf, automake, cargo). `MRT_GOLDEN_UPDATE=1 go test -count=1 ./internal/bmpgen`
+  rewrites `testdata/bmp`; read `git diff testdata/bmp`.
+- **BMP gobgp comparison and benchmark.** `cd internal/compare && go run . -bmp FILE` compares routes with
+  gobgp on a BMP or OpenBMP file; `go test -run='^$' -bench=BMP -benchmem -count=5 .` there is the allocation gate (under memguard
+  with `MEMGUARD_NORMAL_PRIORITY=1`; the default `taskpolicy -b` distorts timing).
+- `scripts/fetch-bmp.sh BROKER TOPIC PARTITION OFFSET COUNT` — captures OpenBMP frames from Kafka into
+  `.data/realdata/bmp` for the opt-in `TestRealDataBMP`. Needs `kcat`, the user's approval and
+  `MRT_BMP_CAPTURE_OK=1`; only the user sets that. Never run it, and never list a broker's topics,
+  without the go-ahead.
 - `scripts/fetch-fixtures.sh` — rebuilds `testdata/mrt` from RouteViews.
 - **Real data (opt-in).** `scripts/fetch-mrt.sh` downloads into `.data/realdata/` and pins name, URL,
   size and sha256 in `.data/realdata/MANIFEST` (not under memguard: its `taskpolicy -b` throttles

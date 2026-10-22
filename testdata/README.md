@@ -205,3 +205,18 @@ RIPE-NCC/ris-docs `docs/99_legal_information.md`) shows RIPE NCC's general
 legal text, and the RIS commercial-use page
 (https://www.ripe.net/analyse/internet-measurements/routing-information-service-ris/commercial-use/)
 covers services and products built on RIS data, not copies of the files.
+
+## BMP (testdata/bmp)
+
+The BMP fixtures are synthetic: `internal/bmpgen` builds them, deterministically
+(fixed times, no randomness), and they hold no data from any collector, so no
+attribution or licence applies. `*.bmp` files are concatenated BMP messages;
+`*.obmp` files are concatenated OpenBMP 1.7 frames. Their bgpkit-bmp
+goldens are in `testdata/golden` (`*.bgpkit-bmp.json`), and every difference
+from an oracle is in `testdata/bmp/divergences.md`. Regenerate the files with
+
+    MRT_GOLDEN_UPDATE=1 go test -count=1 ./internal/bmpgen
+
+and read `git diff testdata/bmp`. No real BMP capture is committed: the live
+feeds' terms are unknown, and `scripts/fetch-bmp.sh` writes to the git-ignored
+`.data/realdata/bmp`.

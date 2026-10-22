@@ -1,6 +1,6 @@
 # mrt v0.4: a BMP reader
 
-Status: approved by the user 2026-10-22 ("Approved; take your recommendations
+Status: implemented in v0.4.0 (branch release-0.4.0; unreleased until the user says so). Approved by the user 2026-10-22 ("Approved; take your recommendations
 on all five, no capture yet"). Amends the v0.1 design
 (`2026-10-16-mrt-design.md`) and the v0.2 design (`2026-10-20-mrt-v0.2-design.md`)
 where it says so. CLAUDE.md's principles and rulings hold for everything

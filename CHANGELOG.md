@@ -8,6 +8,56 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+v0.4.0 adds a BMP reader. The API additions are listed below; `git diff main -- api/`
+shows all of them (254 added lines, none removed: `api/bgp.txt` 37, `api/bmp.txt`
+174, `api/bmp_openbmp.txt` 25, `api/mrt.txt` 18).
+
+### Added
+
+- Package `bmp`: reads BMP (RFC 7854, RFC 8671 Adj-RIB-Out, RFC 9069 Loc-RIB,
+  RFC 9736 Peer Up TLVs, RFC 9972 statistics). `Messages`/`MessagesWith` yield
+  typed messages (each with its exact bytes in `Raw`), `ParseMessage` decodes
+  one, and `Routes`/`RoutesWith`/`NewSession` yield `mrt.Route`, the same type
+  `mrt.Routes` yields. A `Session` takes each peer's ADD-PATH state from its
+  Peer Up, per family and direction; a Route Monitoring with no usable Peer Up
+  is decoded without ADD-PATH and carries the Warning `bmp/addpath-unknown`
+  (`RoutesOptions.RequirePeerUp` refuses it with `ErrNoPeerUp`).
+- Package `bmp/openbmp`: the OpenBMP binary 1.7 envelope (`Frames`, `Parse`);
+  no other version and no text form.
+- `bgp.ParseOpen`, `bgp.ParseNotification`, `bgp.AddPathFamilies`, the `Open`,
+  `Notification`, `Capability` and `AddPathFamily` types, `bgp.FamilySet`, and
+  `Context.AddPathFamilies` (ADD-PATH per family instead of for the whole
+  message).
+- `mrt.Route` gains `Router` and `View`; `mrt.Peer` gains `Type` and
+  `Distinguisher`; new types `mrt.View` and `mrt.PeerType`; new `mrt.KindEndOfRIB`.
+- `internal/bmpgen` (synthetic BMP and OpenBMP fixtures in `testdata/bmp`),
+  the `bgpkit-bmp` oracle harness built by `scripts/build-oracles.sh`, a gobgp
+  BMP comparison in `internal/compare` (`go run . -bmp FILE`), and the opt-in
+  `scripts/fetch-bmp.sh` and `TestRealDataBMP` (not run: see below).
+
+### Changed
+
+- Nothing for MRT callers: `mrt.Routes` and `mrt.RoutesWith` yield the same
+  routes as in 0.3.2, with the new fields zero (`TestMRTRoutesHaveZeroBMPFields`),
+  and no existing exported signature changed. One compile-time effect: adding
+  fields to `mrt.Peer` breaks unkeyed `mrt.Peer{...}` composite literals
+  outside the package (`go vet` flags them). Keyed literals still build;
+  routecheck uses keyed ones and builds and tests against this branch.
+
+### Measured
+
+`BenchmarkBMP` (`internal/compare`) over the largest synthetic stream, 50,085
+messages, 5 runs, Go 1.27.2 on an Apple M3 Max, `GOMAXPROCS=4`,
+`MEMGUARD_NORMAL_PRIORITY=1` (log `.data/bmp-bench-v0.4.log`): mrt 704.0 to
+704.1 B/msg and 8.483 to 8.484 allocs/msg; gobgp (pkg/packet/bmp) 872.7 B/msg
+and 22.73 allocs/msg. mrt allocates less than gobgp per message (ratio 0.807
+by bytes, arithmetic: 704.0 / 872.7). Wall time per pass was 19.2 to 19.9 ms for
+mrt and 26.0 to 27.2 ms for gobgp; the gate is allocations.
+
+Not measured: a real BMP feed. No capture exists yet (the user's decision), so
+the gobgp gate is re-checked on a capture once one exists, and the real-data
+comparison against bgpkit-bmp has not run.
+
 ## [0.3.2] - 2026-10-21
 
 v0.3.2 closes the items v0.3.1 left open: the `mrtcut` slowdown on gzip, the

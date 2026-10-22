@@ -1,10 +1,11 @@
 # mrt
 
-A streaming reader for MRT routing-information files (RFC 6396, RFC 8050) and a
-BGP UPDATE decoder, in Go. It reads what the RIPE RIS and RouteViews route
-collectors publish — table dumps and update files, including BGP4MP_ET and
-add-path records — and yields typed records or one route per (peer, prefix,
-path ID).
+A streaming reader for MRT routing-information files (RFC 6396, RFC 8050) and
+BMP streams (RFC 7854), and a BGP UPDATE decoder, in Go. It reads what the RIPE
+RIS and RouteViews route collectors publish — table dumps and update files,
+including BGP4MP_ET and add-path records — and what a router sends over BMP,
+bare or in an OpenBMP envelope, and yields typed records or messages, or one
+route per (peer, prefix, path ID).
 
 It streams with bounded memory, uses `net/netip`, has no dependencies outside
 the standard library, never panics on hostile input, keeps going past a
@@ -150,8 +151,68 @@ table within a fixed memory budget.
 `TableDump`, `BGP4MPMessage`, `BGP4MPStateChange`, or `Other`), each with its
 exact bytes in `Raw()`, so concatenating them reproduces the input. The `bgp`
 package decodes UPDATE messages and path attributes on their own
-(`bgp.ParseUpdate`, `bgp.Attrs.Decode`), for a later BMP or RIS Live reader to
-reuse. The exported API is listed in [api/](api/).
+(`bgp.ParseUpdate`, `bgp.Attrs.Decode`), which the `bmp` package reuses. The exported API is listed in [api/](api/).
+
+## BMP
+
+The `bmp` package reads BMP (RFC 7854, with Adj-RIB-Out, Loc-RIB, Peer Up TLVs
+and statistics) and yields the same `mrt.Route` that `mrt.Routes` does, so code
+that consumes routes does not care where they came from. `bmp/openbmp` unwraps
+the OpenBMP binary 1.7 envelope (version 1.7 only, no text form) that
+RouteViews' and CAIDA's Kafka feeds carry. In a Kafka loop, keep one `Session`
+per router hash:
+
+```go
+sessions := make(map[[16]byte]*bmp.Session)
+for frame, err := range openbmp.Frames(f) { // or one Kafka message per frame
+	if err != nil {
+		log.Fatal(err)
+	}
+	h, msg, err := openbmp.Parse(frame)
+	if err != nil {
+		continue
+	}
+	s := sessions[h.RouterHash]
+	if s == nil {
+		s = bmp.NewSession(bmp.RoutesOptions{Router: h.RouterIP, PeerStates: true})
+		sessions[h.RouterHash] = s
+	}
+	for route, err := range s.Routes(bmp.ParseMessage(msg)) {
+		if err != nil {
+			continue // a bad message is reported and the stream goes on
+		}
+		// ... route.Kind, route.Peer, route.View, route.Prefix, route.Path
+	}
+}
+```
+
+This is `ExampleSession_Routes` in [bmp/example_test.go](bmp/example_test.go),
+run by `go test` over a committed synthetic OpenBMP stream. A message's bytes
+alias the buffer it was parsed from, so range over its routes before reusing
+the buffer. On a plain byte stream, such as a router's TCP session, one session
+is implied:
+
+```go
+opts := bmp.RoutesOptions{PeerStates: true, EndOfRIB: true}
+for route, err := range bmp.RoutesWith(bmp.Messages(f), opts) {
+	if err != nil {
+		continue // ErrTruncated or a read error ends the stream
+	}
+	// ...
+}
+```
+
+This is `ExampleRoutesWith` in the same file. The rule that makes a stream's
+routes right: ADD-PATH is not negotiated in an UPDATE, so `Session` takes it
+from each peer's Peer Up, per family and direction. A Route Monitoring from a
+peer with no (or a damaged) Peer Up is decoded without ADD-PATH and carries the
+Warning `bmp/addpath-unknown`; `RoutesOptions.RequirePeerUp` refuses it with
+`bmp.ErrNoPeerUp` instead. A BMP table's key must include `Route.View` as well
+as the router and the peer: the same prefix from one peer is held once per
+RIB view (Adj-RIB-In before and after policy, Adj-RIB-Out, Loc-RIB). The zero
+`Router`, `View` and `Peer.Type` on a route mean an MRT source states none of
+them. No real BMP feed has been measured with this reader (no capture yet);
+the figures are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Faster decompression
 
