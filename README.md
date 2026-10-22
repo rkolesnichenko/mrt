@@ -151,16 +151,19 @@ table within a fixed memory budget.
 `TableDump`, `BGP4MPMessage`, `BGP4MPStateChange`, or `Other`), each with its
 exact bytes in `Raw()`, so concatenating them reproduces the input. The `bgp`
 package decodes UPDATE messages and path attributes on their own
-(`bgp.ParseUpdate`, `bgp.Attrs.Decode`), which the `bmp` package reuses. The exported API is listed in [api/](api/).
+(`bgp.ParseUpdate`, `bgp.Attrs.Decode`), which the `bmp` package
+reuses. The exported API is listed in [api/](api/).
 
 ## BMP
 
 The `bmp` package reads BMP (RFC 7854, with Adj-RIB-Out, Loc-RIB, Peer Up TLVs
 and statistics) and yields the same `mrt.Route` that `mrt.Routes` does, so code
 that consumes routes does not care where they came from. `bmp/openbmp` unwraps
-the OpenBMP binary 1.7 envelope (version 1.7 only, no text form) that
-RouteViews' and CAIDA's Kafka feeds carry. In a Kafka loop, keep one `Session`
-per router hash:
+the OpenBMP binary 1.7 envelope (1.7 only, no text form) that OpenBMP's
+collector writes. CAIDA's and RouteViews' Kafka feeds are expected to carry it;
+that is unverified until a capture exists. In a Kafka loop, keep one `Session`
+per router hash. Abridged from `ExampleSession_Routes` in
+[bmp/example_test.go](bmp/example_test.go) (with `f` an open file of frames):
 
 ```go
 sessions := make(map[[16]byte]*bmp.Session)
@@ -186,11 +189,10 @@ for frame, err := range openbmp.Frames(f) { // or one Kafka message per frame
 }
 ```
 
-This is `ExampleSession_Routes` in [bmp/example_test.go](bmp/example_test.go),
-run by `go test` over a committed synthetic OpenBMP stream. A message's bytes
+The example runs under `go test` over a committed synthetic OpenBMP stream. A message's bytes
 alias the buffer it was parsed from, so range over its routes before reusing
 the buffer. On a plain byte stream, such as a router's TCP session, one session
-is implied:
+is implied (abridged from `ExampleRoutesWith`, same file):
 
 ```go
 opts := bmp.RoutesOptions{PeerStates: true, EndOfRIB: true}
@@ -202,7 +204,7 @@ for route, err := range bmp.RoutesWith(bmp.Messages(f), opts) {
 }
 ```
 
-This is `ExampleRoutesWith` in the same file. The rule that makes a stream's
+The rule that makes a stream's
 routes right: ADD-PATH is not negotiated in an UPDATE, so `Session` takes it
 from each peer's Peer Up, per family and direction. A Route Monitoring from a
 peer with no (or a damaged) Peer Up is decoded without ADD-PATH and carries the

@@ -42,12 +42,14 @@ shows all of them (254 added lines, none removed: `api/bgp.txt` 37, `api/bmp.txt
   and no existing exported signature changed. One compile-time effect: adding
   fields to `mrt.Peer` breaks unkeyed `mrt.Peer{...}` composite literals
   outside the package (`go vet` flags them). Keyed literals still build;
-  routecheck uses keyed ones and builds and tests against this branch.
+  routecheck uses keyed ones and builds and tests against this branch. For the
+  same reason `bgp.Context`, which gained `AddPathFamilies`, breaks unkeyed
+  `bgp.Context{...}` literals outside the package; routecheck builds.
 
 ### Measured
 
 `BenchmarkBMP` (`internal/compare`) over the largest synthetic stream, 50,085
-messages, 5 runs, Go 1.27.2 on an Apple M3 Max, `GOMAXPROCS=4`,
+messages, 5 runs, Go 1.27.2 on an Apple M3 Max, run with `GOMAXPROCS=4` and
 `MEMGUARD_NORMAL_PRIORITY=1` (log `.data/bmp-bench-v0.4.log`): mrt 704.0 to
 704.1 B/msg and 8.483 to 8.484 allocs/msg; gobgp (pkg/packet/bmp) 872.7 B/msg
 and 22.73 allocs/msg. mrt allocates less than gobgp per message (ratio 0.807
