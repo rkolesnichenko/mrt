@@ -6,11 +6,14 @@ package bmp_test
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,9 +33,13 @@ import (
 // by Header.RouterHash) and with bgpkit-bmp, and compares the sorted route
 // lines. A line only one side gives passes only when classifyBMP names the
 // known divergence (BK1-BK4 of testdata/bmp/divergences.md) that explains it;
-// every other one fails the test (the first 20 printed). Run it alone:
+// every other one fails the test (the first 20 printed). bgpkit-bmp's whole
+// output is held in memory, so run it alone under the memory guard:
 //
-//	MRT_REALDATA=$PWD/.data go test -count=1 -run TestRealDataBMP -v ./bmp
+//	memguard.sh 8 4000 env GOMAXPROCS=4 MRT_REALDATA=$PWD/.data go test -count=1 -run TestRealDataBMP -v ./bmp
+//
+// (memguard.sh is ~/DEV/rpsl/.superpowers/sdd/tools/memguard.sh, as in
+// CLAUDE.md's real-data commands.)
 func TestRealDataBMP(t *testing.T) {
 	dir := os.Getenv("MRT_REALDATA")
 	if dir == "" {
@@ -53,16 +60,17 @@ func TestRealDataBMP(t *testing.T) {
 			if err := checkBMPPinned(path, f); err != nil {
 				t.Fatal(err)
 			}
-			realDataBMPFile(t, bin, path)
+			realDataBMPFile(t, bin, path, f.count)
 		})
 	}
 }
 
-// bmpManifestFile is one line of MANIFEST: name broker topic count size sha256.
+// bmpManifestFile is one line of MANIFEST: name broker topic partition offset
+// count size sha256.
 type bmpManifestFile struct {
 	name, broker, topic, sha256 string
-	count                       int
-	size                        int64
+	partition, count            int
+	offset, size                int64
 }
 
 func readBMPManifest(t *testing.T, path string) []bmpManifestFile {
@@ -72,17 +80,22 @@ func readBMPManifest(t *testing.T, path string) []bmpManifestFile {
 		t.Fatal(err)
 	}
 	var fs []bmpManifestFile
-	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+	for _, l := range strings.Split(string(b), "\n") {
 		f := strings.Fields(l)
-		if len(f) != 6 {
+		if len(f) == 0 {
+			continue
+		}
+		if len(f) != 8 {
 			t.Fatalf("%s: bad line %q", path, l)
 		}
-		count, err1 := strconv.Atoi(f[3])
-		size, err2 := strconv.ParseInt(f[4], 10, 64)
-		if err1 != nil || err2 != nil {
-			t.Fatalf("%s: bad count or size in %q", path, l)
+		partition, err1 := strconv.Atoi(f[3])
+		offset, err2 := strconv.ParseInt(f[4], 10, 64)
+		count, err3 := strconv.Atoi(f[5])
+		size, err4 := strconv.ParseInt(f[6], 10, 64)
+		if err := errors.Join(err1, err2, err3, err4); err != nil {
+			t.Fatalf("%s: bad number in %q: %v", path, l, err)
 		}
-		fs = append(fs, bmpManifestFile{name: f[0], broker: f[1], topic: f[2], count: count, size: size, sha256: f[5]})
+		fs = append(fs, bmpManifestFile{name: f[0], broker: f[1], topic: f[2], partition: partition, offset: offset, count: count, size: size, sha256: f[7]})
 	}
 	return fs
 }
@@ -174,7 +187,7 @@ func bmpCaptureLines(t *testing.T, path string) ([]string, bmpCounts) {
 	return oracle.Sorted(lines), c
 }
 
-func realDataBMPFile(t *testing.T, bin, path string) {
+func realDataBMPFile(t *testing.T, bin, path string, count int) {
 	t.Helper()
 	ours, c := bmpCaptureLines(t, path)
 	out, err := oracle.BgpkitBMP(bin, path)
@@ -192,6 +205,12 @@ func realDataBMPFile(t *testing.T, bin, path string) {
 		name, c.frames, c.frameErrors, c.headerErrors, c.messages, c.messageErrors, c.routes, c.routeErrors, c.addPathUnknown)
 	for _, ty := range slices.Sorted(maps.Keys(c.types)) {
 		t.Logf("%s: message type %d: %d", name, ty, c.types[ty])
+	}
+	if c.frameErrors > 0 {
+		t.Errorf("%d frame errors (logged above)", c.frameErrors)
+	}
+	if c.frames != count {
+		t.Errorf("%d frames, MANIFEST asked for %d (a short capture)", c.frames, count)
 	}
 	onlyOurs, onlyTheirs := oracle.Diff(ours, theirs)
 	known, left := classifyBMP(onlyOurs, onlyTheirs)
@@ -239,48 +258,52 @@ func pathIDOf(m map[string]any) (id uint32, ok bool) {
 	return uint32(v), ok
 }
 
-// pathIDDivergence names the ADD-PATH guess case that explains a line pair
-// that differs only in path_id: BK3 (ours has an ID of 2^24 or more, bgpkit
-// none) or BK4 (ours has none, bgpkit an ID below 2^24). "" for no case.
-func pathIDDivergence(ours, theirs map[string]any) (id string, ok bool) {
-	po, hasO := pathIDOf(ours)
-	pt, hasT := pathIDOf(theirs)
-	switch {
-	case !hasO && !hasT:
-		return "", true
-	case hasO && hasT:
-		return "", po == pt
-	case hasO && po >= 1<<24:
-		return "BK3", true
-	case hasT && pt < 1<<24:
-		return "BK4", true
+// plainNLRI reads the four bytes of a path ID as a list of plain NLRI of the
+// family of ipv6 (a length byte, then ceil(length/8) address bytes), the way
+// bgpkit-parser reads them when it guesses wrong. ok is false unless the
+// entries consume exactly the four bytes.
+func plainNLRI(id uint32, ipv6 bool) (prefixes []string, ok bool) {
+	b := binary.BigEndian.AppendUint32(nil, id)
+	maxLen, size := 32, 4
+	if ipv6 {
+		maxLen, size = 128, 16
 	}
-	return "", false
+	for len(b) > 0 {
+		l := int(b[0])
+		n := (l + 7) / 8
+		if l > maxLen || 1+n > len(b) {
+			return nil, false
+		}
+		addr := make([]byte, size)
+		copy(addr, b[1:1+n])
+		a, _ := netip.AddrFromSlice(addr)
+		prefixes = append(prefixes, netip.PrefixFrom(a, l).String())
+		b = b[1+n:]
+	}
+	return prefixes, true
 }
-
-// guessJunk are the prefixes bgpkit-parser makes up when it reads an ADD-PATH
-// NLRI list as plain (BK3): the path identifier's leading bytes parsed as
-// prefix lengths of 0 and 1.
-var guessJunk = []string{"0.0.0.0/0", "0.0.0.0/1", "::/0", "::/1"}
 
 // classifyBMP names the known divergences (testdata/bmp/divergences.md,
 // section bgpkit-parser) that explain the route lines only mrt gives
 // (onlyOurs) and only bgpkit-bmp gives (onlyTheirs). It returns the number of
 // lines explained per ID and the lines nothing explains, prefixed "mrt: " and
 // "bgpkit: ". An ours line is paired with a theirs line when applying BK1
-// and/or BK2 to it, and ignoring path_id, makes them equal, and the path_id
-// difference is BK3 or BK4:
+// and/or BK2 to it, and ignoring path_id, makes them equal; lines are keyed on
+// peer, peer_as and the attributes (the lines carry no router). The path_id
+// difference must then be explained:
 //
 //   - BK1: bgpkit's peer_as is the low 16 bits of ours (A flag, 16-bit AS).
 //   - BK2: ours has no peer address ("invalid IP"), bgpkit's is 0.0.0.0.
-//   - BK3: ours has a path_id of 2^24 or more, bgpkit none; a line bgpkit
-//     gives alone for 0.0.0.0/0, 0.0.0.0/1, ::/0 or ::/1 of a peer with a BK3
-//     pair is one the guess made up.
-//   - BK4: ours has no path_id, bgpkit one below 2^24; a line only ours gives
-//     for a peer with a BK4 pair is one the guess swallowed.
-//
-// The last two clauses are a heuristic: they cannot tell a made-up or lost
-// line from a genuine one of that peer.
+//   - BK3: ours has a path_id P of 2^24 or more, bgpkit none. bgpkit read
+//     P's four bytes as plain NLRI first; P must parse to exactly four bytes,
+//     and bgpkit must give, besides the pair, one line with the pair's key
+//     for each prefix P parses to. All of them are consumed, else the pair
+//     stays unclassified.
+//   - BK4: ours has no path_id, bgpkit one, Q, below 2^24. Q's four bytes
+//     must parse as plain NLRI to exactly four bytes, and ours must give one
+//     line with the pair's key for each prefix they parse to (the routes
+//     bgpkit lost), all consumed; else the pair stays unclassified (a Q of 1
+//     is an mrt bug, not BK4).
 func classifyBMP(onlyOurs, onlyTheirs []string) (known map[string]int, unclassified []string) {
 	known = map[string]int{}
 	ours, theirs := parseBMPLines(onlyOurs), parseBMPLines(onlyTheirs)
@@ -293,45 +316,107 @@ func classifyBMP(onlyOurs, onlyTheirs []string) (known map[string]int, unclassif
 	}
 	usedT := make([]bool, len(theirs))
 	usedO := make([]bool, len(ours))
-	peers3, peers4 := map[any]bool{}, map[any]bool{}
+
+	// take finds, for each prefix, an unused line of ls (marked in used and
+	// tmp) with the attributes of base, after fix; nil when one is missing.
+	take := func(ls []bmpLine, used []bool, fix func(map[string]any) map[string]any, base map[string]any, prefixes []string) []int {
+		var got []int
+		taken := map[int]bool{}
+		for _, p := range prefixes {
+			want := maps.Clone(base)
+			want["prefix"] = p
+			found := -1
+			for i, l := range ls {
+				if l.m != nil && !used[i] && !taken[i] && canonLine(fix(l.m), "path_id") == canonLine(want, "path_id") {
+					found = i
+					break
+				}
+			}
+			if found < 0 {
+				return nil
+			}
+			taken[found] = true
+			got = append(got, found)
+		}
+		return got
+	}
+
 	for oi, o := range ours {
 		if o.m == nil {
 			continue
 		}
 		for mask := 0; mask < 4 && !usedO[oi]; mask++ {
-			fixed := maps.Clone(o.m)
+			fix := func(m map[string]any) map[string]any {
+				f := maps.Clone(m)
+				if mask&1 != 0 {
+					f["peer"] = "0.0.0.0"
+				}
+				if mask&2 != 0 {
+					as, _ := m["peer_as"].(float64)
+					f["peer_as"] = float64(uint32(as) & 0xffff)
+				}
+				return f
+			}
 			var ids []string
 			if mask&1 != 0 {
 				if o.m["peer"] != "invalid IP" {
 					continue
 				}
-				fixed["peer"] = "0.0.0.0"
 				ids = append(ids, "BK2")
 			}
 			if mask&2 != 0 {
-				as, _ := o.m["peer_as"].(float64)
-				if as <= 0xffff {
+				if as, _ := o.m["peer_as"].(float64); as <= 0xffff {
 					continue
 				}
-				fixed["peer_as"] = float64(uint32(as) & 0xffff)
 				ids = append(ids, "BK1")
 			}
+			fixed := fix(o.m)
 			for _, ti := range index[canonLine(fixed, "path_id")] {
 				if usedT[ti] {
 					continue
 				}
-				pid, ok := pathIDDivergence(o.m, theirs[ti].m)
-				if !ok || (len(ids) == 0 && pid == "") {
-					continue // equal lines are not in a difference; other path_id pairs are not known
+				po, hasO := pathIDOf(o.m)
+				pt, hasT := pathIDOf(theirs[ti].m)
+				ipv6 := strings.Contains(fmt.Sprint(fixed["prefix"]), ":")
+				var extraO, extraT []int
+				switch {
+				case hasO == hasT:
+					// Equal path IDs (or none): a difference needs BK1 or BK2;
+					// path IDs that differ are not a known case.
+					if len(ids) == 0 || po != pt {
+						continue
+					}
+				case hasO:
+					prefixes, ok := plainNLRI(po, ipv6)
+					if po < 1<<24 || !ok {
+						continue
+					}
+					if extraT = take(theirs, usedT, func(m map[string]any) map[string]any { return m }, theirs[ti].m, prefixes); extraT == nil {
+						continue
+					}
+					ids = append(ids, "BK3")
+					for range extraT {
+						ids = append(ids, "BK3")
+					}
+				default:
+					prefixes, ok := plainNLRI(pt, ipv6)
+					if pt >= 1<<24 || !ok {
+						continue
+					}
+					if extraO = take(ours, usedO, fix, fixed, prefixes); extraO == nil {
+						continue
+					}
+					ids = append(ids, "BK4")
+					for range extraO {
+						ids = append(ids, "BK4")
+					}
 				}
 				usedT[ti], usedO[oi] = true, true
-				if pid != "" {
-					ids = append(ids, pid)
-					peers := peers3
-					if pid == "BK4" {
-						peers = peers4
-					}
-					peers[o.m["peer"]] = true
+				for _, i := range extraT {
+					usedT[i] = true
+				}
+				for _, i := range extraO {
+					usedO[i] = true
 				}
 				for _, id := range ids {
 					known[id]++
@@ -341,20 +426,12 @@ func classifyBMP(onlyOurs, onlyTheirs []string) (known map[string]int, unclassif
 		}
 	}
 	for oi, o := range ours {
-		switch {
-		case usedO[oi]:
-		case o.m != nil && peers4[o.m["peer"]]:
-			known["BK4"]++
-		default:
+		if !usedO[oi] {
 			unclassified = append(unclassified, "mrt: "+o.raw)
 		}
 	}
 	for ti, l := range theirs {
-		switch {
-		case usedT[ti]:
-		case l.m != nil && peers3[l.m["peer"]] && slices.Contains(guessJunk, fmt.Sprint(l.m["prefix"])):
-			known["BK3"]++
-		default:
+		if !usedT[ti] {
 			unclassified = append(unclassified, "bgpkit: "+l.raw)
 		}
 	}
@@ -405,6 +482,15 @@ func TestClassifyBMP(t *testing.T) {
 			[]string{"mrt: " + bk3Mrt, "bgpkit: " + strings.Replace(bk3Mrt, "16777216", "5", 1)}},
 		{"an unrelated line beside a known one", []string{as2Mrt, other}, []string{as2Bk}, map[string]int{"BK1": 1}, []string{"mrt: " + other}},
 		{"a line that is not JSON", []string{"garbage"}, nil, map[string]int{}, []string{"mrt: garbage"}},
+		{"made-up line with other attributes", []string{bk3Mrt}, []string{bk3Bk, junk1, junk0, strings.Replace(junk0, "192.0.2.254", "192.0.2.253", 1)}, map[string]int{},
+			[]string{"mrt: " + bk3Mrt, "bgpkit: " + bk3Bk, "bgpkit: " + junk1, "bgpkit: " + junk0, "bgpkit: " + strings.Replace(junk0, "192.0.2.254", "192.0.2.253", 1)}},
+		{"a /0 beyond what the path ID explains", []string{bk3Mrt}, []string{bk3Bk, junk1, junk0, junk0, junk0}, map[string]int{"BK3": 4}, []string{"bgpkit: " + junk0}},
+		{"BK3 path ID that is not plain NLRI", []string{strings.Replace(bk3Mrt, "16777216", "4278190080", 1)}, []string{bk3Bk}, map[string]int{},
+			[]string{"mrt: " + strings.Replace(bk3Mrt, "16777216", "4278190080", 1), "bgpkit: " + bk3Bk}},
+		{"swallowed prefix the path ID does not explain", []string{bk4A, strings.Replace(bk4B, "10.11.0.0", "10.12.0.0", 1), bk4Mrt}, []string{bk4Bk}, map[string]int{},
+			[]string{"mrt: " + bk4A, "mrt: " + strings.Replace(bk4B, "10.11.0.0", "10.12.0.0", 1), "mrt: " + bk4Mrt, "bgpkit: " + bk4Bk}},
+		{"BK4-looking pair with a path ID of 1", []string{bk4Mrt}, []string{strings.Replace(bk4Bk, "1051147", "1", 1)}, map[string]int{},
+			[]string{"mrt: " + bk4Mrt, "bgpkit: " + strings.Replace(bk4Bk, "1051147", "1", 1)}},
 	}
 	for _, tc := range tests {
 		known, left := classifyBMP(tc.ours, tc.theirs)
