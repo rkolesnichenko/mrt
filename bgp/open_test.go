@@ -55,14 +55,6 @@ var (
 	capAddPath = capTLV(69, 0, 1, 1, 3, 0, 2, 1, 1)
 )
 
-func diagCodes(d []Diagnostic) []string {
-	var s []string
-	for _, x := range d {
-		s = append(s, x.Code)
-	}
-	return s
-}
-
 func wantCodes(t *testing.T, d []Diagnostic, want ...string) {
 	t.Helper()
 	if !reflect.DeepEqual(codes(d), want) {
@@ -131,9 +123,11 @@ func TestParseOpenErrors(t *testing.T) {
 	overrun := append([]byte(nil), good...)
 	overrun[28] = 200
 	extOverrun := openMsgExt(capParam(capMP))
-	extOverrun[30] = 200 // low byte of the extended length
+	extOverrun[30] = 200 // high byte of the extended length
 	short := msgOf(1, 4, 0, 1)
-	capOverrun := openMsg([]byte{2, 5, 1, 4, 0, 1}) // capability says 4 bytes, one is left... within the parameter
+	paramOverrun := openMsg([]byte{2, 5, 1, 4, 0, 1})    // parameter says 5 bytes, 4 are present
+	capHeaderOverrun := openMsg([]byte{2, 3, 1, 4, 0})   // one byte left in the parameter for a capability header
+	capValueOverrun := openMsg([]byte{2, 4, 1, 9, 0, 1}) // capability says 9 bytes, 2 are left in its parameter
 	cut := good[:len(good)-3]
 
 	cases := []struct {
@@ -147,7 +141,9 @@ func TestParseOpenErrors(t *testing.T) {
 		{"short fixed part", short, []string{DiagOpenLength}},
 		{"params length past message", overrun, []string{DiagOpenLength}},
 		{"extended params length past message", extOverrun, []string{DiagOpenLength}},
-		{"capability past its parameter", capOverrun, []string{DiagOpenLength}},
+		{"parameter past the optional parameters", paramOverrun, []string{DiagOpenLength}},
+		{"capability header past its parameter", capHeaderOverrun, []string{DiagOpenLength}},
+		{"capability value past its parameter", capValueOverrun, []string{DiagOpenLength}},
 		{"cut message", cut, []string{DiagMessageTruncated}},
 	}
 	for _, c := range cases {
@@ -177,6 +173,28 @@ func TestParseOpenErrors(t *testing.T) {
 		wantCodes(t, d, DiagOpenLength)
 		if len(o.Capabilities) != 2 {
 			t.Errorf("%d capabilities kept", len(o.Capabilities))
+		}
+	})
+
+	t.Run("capability overruns keep earlier capabilities", func(t *testing.T) {
+		for _, tail := range [][]byte{{2, 3, 1, 4, 0}, {2, 4, 1, 9, 0, 1}} {
+			// the first capability, then a capability that runs past its correctly sized parameter
+			msg := openMsg(capParam(capMP), tail)
+			o, d := ParseOpen(msg)
+			wantCodes(t, d, DiagOpenLength)
+			if len(o.Capabilities) != 1 || o.Capabilities[0].Code != CapMultiprotocol {
+				t.Errorf("%v: %+v", tail, o.Capabilities)
+			}
+		}
+	})
+
+	t.Run("cut message without an overrun", func(t *testing.T) {
+		msg := openMsg(capParam(capMP))
+		msg[17] += 5 // header claims 5 more bytes than are present
+		o, d := ParseOpen(msg)
+		wantCodes(t, d, DiagMessageTruncated)
+		if d[0].Severity != SeverityError || len(o.Capabilities) != 1 {
+			t.Errorf("%+v %+v", d, o)
 		}
 	})
 
@@ -224,11 +242,12 @@ func TestParseOpenTrailingBytes(t *testing.T) {
 		t.Errorf("%+v %+v", d, o)
 	}
 	// bytes inside the message after the declared parameters
-	m := openMsg(capParam(capMP))
+	m := openMsg(capParam(capMP), []byte{9, 9, 9})
 	m[28] -= 3
 	_, d = ParseOpen(m)
-	if len(d) == 0 {
-		t.Error("no diagnostic for bytes after the optional parameters")
+	wantCodes(t, d, DiagOpenLength)
+	if d[0].Severity != SeverityWarning {
+		t.Errorf("severity %d", d[0].Severity)
 	}
 }
 

@@ -171,6 +171,9 @@ func ParseOpen(msg []byte) (Open, []Diagnostic) {
 	if !ok && !overran { // a parameter cut by the overrun already drew its diagnostic
 		diags = short(off, what)
 	}
+	if cut && !slices.ContainsFunc(diags, func(d Diagnostic) bool { return d.Code == DiagMessageTruncated }) {
+		diags = short(len(msg), "") // cut between fields: still say so once
+	}
 	return o, diags
 }
 
