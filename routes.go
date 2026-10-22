@@ -23,9 +23,12 @@ const (
 	// only with RoutesOptions.PeerStates. Only Time, Peer, OldState and
 	// NewState are set.
 	KindPeerState Kind = 4
+	// KindEndOfRIB marks the end of the initial routing information of a
+	// peer and View (BMP only; no MRT code path yields it).
+	KindEndOfRIB Kind = 5
 )
 
-// String returns "B", "A", "W" or "S", and "?" for the zero Kind or any other value.
+// String returns "B", "A", "W", "S" or "E", and "?" for the zero Kind or any other value.
 func (k Kind) String() string {
 	switch k {
 	case KindRIB:
@@ -36,6 +39,8 @@ func (k Kind) String() string {
 		return "W"
 	case KindPeerState:
 		return "S"
+	case KindEndOfRIB:
+		return "E"
 	}
 	return "?"
 }
@@ -63,6 +68,12 @@ type Route struct {
 	// OldState and NewState are the session states of a KindPeerState event,
 	// zero otherwise.
 	OldState, NewState State
+	// Router is the monitored router a BMP route came from, as given to the
+	// BMP reader. BMP only: zero on every MRT route.
+	Router netip.Addr
+	// View is the RIB a BMP route is in. BMP only: zero on every MRT route.
+	// A BMP table's key is (Router, Peer, View).
+	View View
 }
 
 // RoutesOptions are the options of RoutesWith.

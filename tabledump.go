@@ -15,6 +15,12 @@ type Peer struct {
 	BGPID netip.Addr // zero when the record does not carry one
 	Addr  netip.Addr
 	AS    bgp.ASN
+	// Type is the BMP peer type. BMP only: zero (the global instance) on
+	// every MRT peer.
+	Type PeerType
+	// Distinguisher is the BMP peer distinguisher. BMP only: zero on every
+	// MRT peer.
+	Distinguisher uint64
 }
 
 // PeerIndexTable is TABLE_DUMP_V2 PEER_INDEX_TABLE (RFC 6396 section 4.3.1).

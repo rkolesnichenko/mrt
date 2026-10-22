@@ -1,9 +1,14 @@
 package mrt
 const DefaultMaxRecordLen = 16 << 20
 const KindAnnounce Kind = 2
+const KindEndOfRIB Kind = 5
 const KindPeerState Kind = 4
 const KindRIB Kind = 1
 const KindWithdraw Kind = 3
+const PeerGlobal PeerType = 0
+const PeerLocRIB PeerType = 3
+const PeerLocal PeerType = 2
+const PeerRD PeerType = 1
 const StateActive State = 3
 const StateConnect State = 2
 const StateEstablished State = 6
@@ -43,6 +48,11 @@ const TypeOSPFv3 Type = 48
 const TypeOSPFv3ET Type = 49
 const TypeTableDump Type = 12
 const TypeTableDumpV2 Type = 13
+const ViewAdjRIBInPost View = 2
+const ViewAdjRIBInPre View = 1
+const ViewAdjRIBOutPost View = 4
+const ViewAdjRIBOutPre View = 3
+const ViewLocRIB View = 5
 var ErrMalformed = errors.New(…)
 var ErrTooLarge = errors.New(…)
 var ErrTruncated = errors.New(…)
@@ -90,10 +100,14 @@ type Peer struct
 	BGPID netip.Addr
 	Addr netip.Addr
 	AS bgp.ASN
+	Type PeerType
+	Distinguisher uint64
 type PeerIndexTable struct
 	CollectorID netip.Addr
 	ViewName string
 	Peers []Peer
+type PeerType uint8
+func (PeerType) String() string
 type RIB struct
 	Sequence uint32
 	Family bgp.Family
@@ -132,6 +146,8 @@ type Route struct
 	Originated time.Time
 	OldState State
 	NewState State
+	Router netip.Addr
+	View View
 type RoutesOptions struct
 	PeerStates bool
 	Interner *bgp.Interner
@@ -146,3 +162,5 @@ type TableDump struct
 	Peer Peer
 	Attrs bgp.Attrs
 type Type uint16
+type View uint8
+func (View) String() string
