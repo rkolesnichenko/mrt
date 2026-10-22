@@ -107,7 +107,8 @@ func basicCaps(as bgp.ASN, more ...[]byte) [][]byte {
 
 // up is a Peer Up for h with the given capabilities on each side.
 func (s *stream) up(h bmp.PeerHeader, sent, recv [][]byte) {
-	s.add(PeerUp(s.h(h), local(h), 179, uint16(40000+s.n), routerOpen(sent...), peerOpen(h, recv...)))
+	port := uint16(40000 + s.n) // before s.h advances n: argument order is unspecified
+	s.add(PeerUp(s.h(h), local(h), 179, port, routerOpen(sent...), peerOpen(h, recv...)))
 }
 
 // plainUp is a Peer Up with the basic capabilities and no ADD-PATH.
@@ -336,9 +337,16 @@ func noPeerUp() File {
 	var s stream
 	s.add(Initiation(TLV(bmp.TLVInitSysName, []byte("router2"))))
 	p, q := global(100, false), global(101, false)
+	// An End-of-RIB and an UPDATE that announces and withdraws nothing, then a route, all before the Peer Up.
+	s.add(RouteMonitoring(s.h(p), mrtgen.Update(nil, nil, nil, false)))
+	s.add(RouteMonitoring(s.h(p), mrtgen.Update(nil, nil, mrtgen.Attrs(mrtgen.Origin(bgp.OriginIGP),
+		mrtgen.ASPath(true, mrtgen.Seq(64501)), mrtgen.NextHop(nh4)), false)))
 	s.add(RouteMonitoring(s.h(p), ann(p, "198.51.100.0/24", false, 0)))
 	s.add(RouteMonitoring(s.h(q), ann(q, "203.0.113.0/24", false, 0)))
 	s.add(Stats(s.h(p), 1, TLV(uint16(bmp.StatRejectedPrefixes), u32(1))))
+	// The Peer Up comes late, with IPv4 ADD-PATH negotiated in the in direction.
+	s.up(p, basicCaps(routerAS, CapAddPath(ap(fam4, 1))), basicCaps(p.AS, CapAddPath(ap(fam4, 2))))
+	s.add(RouteMonitoring(s.h(p), ann(p, "198.51.100.0/24", true, 9)))
 	s.add(PeerDown(s.h(q), uint8(bmp.PeerDownRemoteNoData), nil))
 	return s.file("bmp-no-peer-up")
 }
@@ -392,6 +400,9 @@ func reUp() File {
 	s.add(PeerDown(s.h(p), uint8(bmp.PeerDownRemoteNoData), nil))
 	s.up(p, basicCaps(routerAS, CapAddPath(ap(fam4, 1))), basicCaps(p.AS, CapAddPath(ap(fam4, 2))))
 	s.add(RouteMonitoring(s.h(p), ann(p, "198.51.100.0/24", true, 8)))
+	// A re-Up with no Peer Down between replaces the state too.
+	s.plainUp(p)
+	s.add(RouteMonitoring(s.h(p), ann(p, "198.51.100.0/24", false, 0)))
 	return s.file("bmp-reup")
 }
 
@@ -477,6 +488,10 @@ func locRIBMulti() File {
 	s.add(RouteMonitoring(s.h(l), ann(l, "198.51.100.0/24", true, 1)))
 	s.add(RouteMonitoring(s.h(l), ann(l, "2001:db8:160::/48", false, 0)))
 	s.add(RouteMonitoring(s.h(l), wd("198.51.100.0/24", true, 1)))
+	// No Multiprotocol capability: IPv4 unicast (RFC 4760 section 8), here without ADD-PATH.
+	s.add(PeerUp(s.h(l), netip.Addr{}, 0, 0, routerOpen(CapAS4(64500)), routerOpen(CapAS4(64500)),
+		TLV(bmp.TLVPeerUpTableName, []byte("default"))))
+	s.add(RouteMonitoring(s.h(l), ann(l, "198.51.100.0/24", false, 0)))
 	return s.file("bmp-locrib-multi")
 }
 

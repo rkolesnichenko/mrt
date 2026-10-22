@@ -94,13 +94,18 @@ func TestGeneratedFiles(t *testing.T) {
 			if want.truncated != (len(errs) > 0 && errors.Is(errs[len(errs)-1], bmp.ErrTruncated)) {
 				t.Errorf("last error %v, truncated want %v", errs, want.truncated)
 			}
+			if f.Name == "bmp-garbage" {
+				checkGarbageErrors(t, errs)
+			}
 			// Lossless unless something was dropped.
 			if f.Name != "bmp-garbage" && !want.truncated {
 				var raw []byte
 				for m, err := range bmp.Messages(bytes.NewReader(disk)) {
 					if err != nil {
 						var me *bmp.MessageError
-						errors.As(err, &me)
+						if !errors.As(err, &me) {
+							t.Fatalf("error %v is not a *MessageError", err)
+						}
 						raw = append(raw, me.Raw...)
 						continue
 					}
@@ -264,5 +269,76 @@ func TestBadOpenCoverage(t *testing.T) {
 	}
 	if bodyErrs != 2 || errDiags != 1 || warnDiags != 2 {
 		t.Errorf("body errors %d, error diagnostics %d, warnings %d; want 2, 1, 2", bodyErrs, errDiags, warnDiags)
+	}
+}
+
+// checkGarbageErrors pins the five errors of bmp-garbage in order: length 3,
+// version 2, two zero headers and an oversize message.
+func checkGarbageErrors(t *testing.T, errs []error) {
+	t.Helper()
+	if len(errs) != 5 {
+		t.Fatalf("%d errors, want 5", len(errs))
+	}
+	var offs [5]int64
+	for i, err := range errs {
+		var me *bmp.MessageError
+		if !errors.As(err, &me) {
+			t.Fatalf("error %d is %T, not a *MessageError", i, err)
+		}
+		offs[i] = me.Offset
+		switch i {
+		case 0:
+			if !errors.Is(err, bmp.ErrMalformed) || me.Header.Length != 3 {
+				t.Errorf("error 0: %v, want malformed with length 3", err)
+			}
+		case 1:
+			if !errors.Is(err, bmp.ErrMalformed) || me.Header.Version != 2 {
+				t.Errorf("error 1: %v, want malformed version 2", err)
+			}
+		case 2, 3:
+			if !errors.Is(err, bmp.ErrMalformed) || me.Header.Length != 0 || len(me.Raw) != 6 {
+				t.Errorf("error %d: %v, want a malformed zero header", i, err)
+			}
+		default:
+			if !errors.Is(err, bmp.ErrTooLarge) {
+				t.Errorf("error 4: %v, want ErrTooLarge", err)
+			}
+		}
+	}
+	if offs[3]-offs[2] != 6 || !(offs[0] < offs[1] && offs[1] < offs[2] && offs[2] < offs[3]) {
+		t.Errorf("offsets %v: want increasing, the zero headers 6 apart", offs)
+	}
+}
+
+// TestStatsCoverage counts what the accessors say about bmp-stats.
+func TestStatsCoverage(t *testing.T) {
+	var ok, bad, errs, msgs int
+	for _, m := range fixture(t, "bmp-stats") {
+		sr, isStats := m.(bmp.StatsReport)
+		if !isStats {
+			continue
+		}
+		msgs++
+		for s, err := range sr.Stats() {
+			if err != nil {
+				errs++
+				continue
+			}
+			_, c := s.Counter()
+			_, g := s.Gauge()
+			_, _, f := s.FamilyGauge()
+			if c || g || f {
+				ok++
+			} else {
+				bad++
+			}
+		}
+	}
+	// ok: 42 registered stats of every type, 3 more, and the 3 in the
+	// mismatched-count messages. bad: type 9999, expired type 24 and the 3
+	// wrong lengths. errs: count 5 with 2 stats, count 0 with 1, and a TLV
+	// that runs past the message.
+	if msgs != 8 || ok != 48 || bad != 5 || errs != 3 {
+		t.Errorf("messages %d, registered %d, unreadable %d, errors %d; want 8, 48, 5, 3", msgs, ok, bad, errs)
 	}
 }
