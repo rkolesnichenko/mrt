@@ -386,6 +386,31 @@ func TestSessionInternerSurvivesBufferReuse(t *testing.T) {
 	}
 }
 
+// TestSessionRoutesAppliesWhenCalled is ruling (b): a Peer Up's state is
+// applied when Session.Routes is called, whether or not its sequence is
+// ranged over, and ranging a Route Monitoring's sequence twice over the same
+// bytes yields equal routes.
+func TestSessionRoutesAppliesWhenCalled(t *testing.T) {
+	h := at(global4(21), 0, 1)
+	s := bmp.NewSession(bmp.RoutesOptions{})
+	s.Routes(bmp.ParseMessage(peerUp(h, basicCaps(routerAS, bmpgen.CapAddPath(ap(fam4, 1))), basicCaps(h.AS, bmpgen.CapAddPath(ap(fam4, 2))))))
+	seq := s.Routes(bmp.ParseMessage(rm(h, announce(h, "198.51.100.0/24", true, 5))))
+	first := routesOf(t, collectResults(seq))
+	wantIDs(t, first, map[bgp.Family]uint32{fam4: 5})
+	if again := routesOf(t, collectResults(seq)); !reflect.DeepEqual(again, first) {
+		t.Errorf("ranging again: %+v, want %+v", again, first)
+	}
+}
+
+// collectResults ranges over seq once.
+func collectResults(seq func(func(mrt.Route, error) bool)) []result {
+	var out []result
+	for r, err := range seq {
+		out = append(out, result{r, err})
+	}
+	return out
+}
+
 func TestRoutesWithMatchesSession(t *testing.T) {
 	for name, data := range fixtures(t) {
 		for _, o := range optionSets() {

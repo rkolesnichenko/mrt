@@ -11,8 +11,11 @@ import (
 // router): each peer's ADD-PATH families from its last Peer Up (spec §7.5).
 // A peer is known from a Peer Up whose OPENs frame and parse without a
 // Warning until its Peer Down; before that, or after a damaged Peer Up, it is
-// unknown and its UPDATEs are decoded without ADD-PATH (§7.6). Termination
-// and Initiation change nothing. A Session is not safe for concurrent use.
+// unknown and its UPDATEs are decoded without ADD-PATH (§7.6). The one
+// exception: a Loc-RIB Peer Up whose only OPEN Warning is for an ADD-PATH
+// Mode outside 1-3 stays known, as RFC 9069 section 5.2 says to ignore the
+// ADD-PATH intent. Termination and Initiation change nothing. A Session is
+// not safe for concurrent use.
 type Session struct {
 	opts  RoutesOptions
 	peers map[peerKey]peerState

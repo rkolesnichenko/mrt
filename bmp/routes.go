@@ -107,11 +107,14 @@ func RoutesWith(msgs iter.Seq2[Message, error], opts RoutesOptions) iter.Seq2[mr
 // unchanged, once. The message's effect on the session (a Peer Up or Peer
 // Down) is applied when Routes is called, whether or not the sequence is
 // ranged over, and a Route Monitoring is decoded with the state as it is
-// then; ranging over the sequence again yields the same routes again.
+// then.
 //
-// Without an Interner the paths alias m's bytes, as Routes describes: a
-// caller that reuses the buffer it gave ParseMessage sets
-// RoutesOptions.Interner, or clones the paths it keeps.
+// The Route Monitoring itself is decoded each time the sequence is ranged
+// over, from m's bytes: range over it before reusing the buffer given to
+// ParseMessage. Ranging again while the bytes are unchanged yields
+// the same routes. Without an Interner the paths also alias m's bytes, as Routes
+// describes; an Interner (or Path.Clone) protects only the paths kept after
+// ranging, not a sequence ranged after the buffer changed.
 func (s *Session) Routes(m Message, err error) iter.Seq2[mrt.Route, error] {
 	st := s.apply(m, err)
 	return func(yield func(mrt.Route, error) bool) { s.emit(st, yield) }
