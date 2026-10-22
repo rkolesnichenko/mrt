@@ -50,7 +50,10 @@ func TestParseNotification(t *testing.T) {
 		if n.Code != 6 || !reflect.DeepEqual(n.Data, []byte{1}) {
 			t.Errorf("%+v", n)
 		}
-		_, d = ParseNotification(m[:20]) // cut before the subcode
+		n, d = ParseNotification(m[:20]) // cut before the subcode
 		wantCodes(t, d, DiagMessageTruncated, DiagMessageHeader)
+		if d[0].Severity != SeverityError || d[1].Severity != SeverityError || !reflect.DeepEqual(n, Notification{}) {
+			t.Errorf("cut before the subcode: %+v %+v, want two Errors and a zero Notification", d, n)
+		}
 	})
 }

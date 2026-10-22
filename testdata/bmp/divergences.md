@@ -255,11 +255,14 @@ and `UpdatePathAggregator4ByteAs`, which no other module can import), so the
 oracle's line shows the 2-byte attributes. mrt yields the effective path and
 aggregator. RFC 6793 section 4.2.3: "If the AS4_PATH attribute is also
 received, both of the attributes will be used to construct the exact AS path
-information"; and when both AGGREGATOR and AS4_AGGREGATOR are received and
-"the AS number in the AGGREGATOR attribute is" AS_TRANS, "the AGGREGATOR
-attribute SHALL be ignored, the AS4_AGGREGATOR attribute SHALL be taken as
-the information about the aggregating node, and the AS path information
-would need to be constructed".
+information". For the aggregator: "When both of the attributes are
+received, if the AS number in the AGGREGATOR attribute is not AS_TRANS,
+then: - the AS4_AGGREGATOR attribute and the AS4_PATH attribute SHALL be
+ignored, [...] Otherwise, - the AGGREGATOR attribute SHALL be ignored, - the
+AS4_AGGREGATOR attribute SHALL be taken as the information about the
+aggregating node, and - the AS path information would need to be
+constructed, as in all other cases." Here the AGGREGATOR's AS is 23456,
+AS_TRANS, so the "Otherwise" branch applies.
 
 Decides: RFC 6793, for mrt. bgpkit-parser gives mrt's line.
 

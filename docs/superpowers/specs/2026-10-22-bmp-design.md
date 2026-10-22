@@ -1037,6 +1037,10 @@ without `bmp/openbmp`), sharded as now:
 - **`TestRealData/bmp-*`** decodes the capture with `bmp`, the bgpkit
   harness and gobgp, and fails on any mismatch that `divergences.md` does not
   name. It runs alone under memguard, like the MRT real-data runs.
+  *Amended in the final review (2026-10-23):* the test is `TestRealDataBMP`
+  (`bmp/realdata_test.go`) and compares with bgpkit-bmp only, because the
+  root module cannot import gobgp (CLAUDE.md principle 3). gobgp on a capture
+  is `cd internal/compare && go run . -bmp FILE`, run by hand.
 
 ### 9.6 Benchmark
 

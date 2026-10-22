@@ -11,11 +11,14 @@ type Notification struct {
 const notificationFixedLen = 21 // header, error code, error subcode
 
 // ParseNotification reads the NOTIFICATION message msg, marker and header
-// included. A bad header, a message of another type or one too short for the
-// error code and subcode gives a zero Notification and one Error diagnostic
-// (DiagMessageHeader, DiagNotNotification). A message cut short of its
-// header's length is read as far as its bytes go, with one Error
-// (DiagMessageTruncated). Data aliases msg.
+// included. A bad header, a message of another type or one whose header
+// length is too short for the error code and subcode gives a zero
+// Notification and one Error diagnostic (DiagMessageHeader,
+// DiagNotNotification). A message cut short of its header's length is read
+// as far as its bytes go, with one Error (DiagMessageTruncated); cut below 21
+// bytes, it also gives a zero Notification and a second Error
+// (DiagMessageHeader). Bytes past the header's length are not read, with a
+// Warning (DiagMessageHeader). Data aliases msg.
 func ParseNotification(msg []byte) (Notification, []Diagnostic) {
 	hdr, err := ParseMessageHeader(msg)
 	if err != nil {
