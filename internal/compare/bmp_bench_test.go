@@ -40,7 +40,8 @@ func benchStream(b *testing.B) [][]byte {
 // with the Peer Up state of gobgpSession; it decodes every attribute and
 // NLRI). One iteration is the whole stream through one session. B/msg and
 // allocs/msg are TotalAlloc and Mallocs over the run per message decoded
-// (spec §9.6); routes/msg is what each side counted.
+// (spec §9.6); routes/msg is what each side counted, and msgs the number of
+// messages in the stream.
 func BenchmarkBMP(b *testing.B) {
 	streams := [][][]byte{benchStream(b)}
 	msgs := len(streams[0])
@@ -67,6 +68,7 @@ func BenchmarkBMP(b *testing.B) {
 			b.ReportMetric(float64(after.TotalAlloc-before.TotalAlloc)/n, "B/msg")
 			b.ReportMetric(float64(after.Mallocs-before.Mallocs)/n, "allocs/msg")
 			b.ReportMetric(float64(routes)/float64(msgs), "routes/msg")
+			b.ReportMetric(float64(msgs), "msgs")
 		})
 	}
 }
