@@ -288,9 +288,11 @@ is `iana.org/assignments/bmp-parameters`.
     then guesses from the bytes: `parse_nlri_list` (`src/parser/utils.rs`
     :283-313) reads a list as ADD-PATH when its first byte is 0, and retries
     without it if that fails. (Corrected 2026-10-22, during Task 9: the first
-    draft said only "ADD-PATH off".) So bgpkit gets path IDs below 2^24
-    right and misreads, for example, a 0.0.0.0/0 announcement from a peer
-    without ADD-PATH.
+    draft said only "ADD-PATH off".) Once on, the guess holds for the rest
+    of the list until an entry fails to parse. So bgpkit gets path IDs below
+    2^24 right, misreads a path ID of 2^24 or more on a peer that negotiated
+    ADD-PATH (its first byte is non-zero), and misreads a plain /0 only when
+    the bytes after it happen to parse as an ADD-PATH entry.
   - With the A flag set it keeps only the low 16 bits of the peer AS
     (`headers.rs`).
   - Peer types other than 0-3 are an error.
@@ -961,11 +963,12 @@ regenerated and checked by a test as in mrtgen:
   `bgpkit-parser = "=0.22.0"` with a committed `Cargo.lock`.
   `scripts/build-oracles.sh` builds it into `$HOME/.local/bin/bgpkit-bmp`
   next to the other two. It reads a `.bmp` or `.obmp` file and prints, per
-  message, a normalized JSON line:
-  - Route Monitoring: its elems, from `Elementor::bgp_to_elems` with the
-    per-peer timestamp, address and AS;
-  - Peer Up and Peer Down: their fields;
-  - every other message: its type.
+  message, the elems of each Route Monitoring (from `Elementor::bgp_to_elems`
+  with the per-peer timestamp, address and AS), one JSON line each, in
+  bgpkit-parser's `--json` elem form. Peer Up, Peer Down and the other
+  messages print nothing (amended during Task 9). Their parsing is not
+  compared with an oracle; the unit tests and fuzz targets cover it, and
+  the ADD-PATH it feeds is compared through the routes.
 
   Goldens are `testdata/golden/<fixture>.bgpkit-bmp.json`, recorded from the
   live harness (`MRT_GOLDEN_UPDATE=1`), never edited by hand.
