@@ -10,7 +10,9 @@ import (
 	"github.com/rkolesnichenko/mrt/bgp"
 )
 
-// Peer is a BGP peer, from a PEER_INDEX_TABLE or a legacy TABLE_DUMP record.
+// Peer is a BGP peer, from a PEER_INDEX_TABLE or a legacy TABLE_DUMP record,
+// a BGP4MP record (Addr and AS only), or, in package bmp, a BMP per-peer
+// header.
 type Peer struct {
 	BGPID netip.Addr // zero when the record does not carry one
 	Addr  netip.Addr

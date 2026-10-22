@@ -1,5 +1,7 @@
 package bmp
 const DefaultMaxMessageLen = 1 << 20
+const DiagAddPathUnknown = "bmp/addpath-unknown"
+const DiagPeerUpBody = "bmp/peer-up-body"
 const MirrorErroredPDU MirrorCode = 0
 const MirrorMessagesLost MirrorCode = 1
 const PeerDownDeconfigured PeerDownReason = 5
@@ -79,7 +81,10 @@ var ErrTooLarge = errors.New(…)
 var ErrTruncated = errors.New(…)
 func Messages(r io.Reader) iter.Seq2[Message, error]
 func MessagesWith(r io.Reader, opts Options) iter.Seq2[Message, error]
+func NewSession(opts RoutesOptions) *Session
 func ParseMessage(b []byte) (Message, error)
+func Routes(msgs iter.Seq2[Message, error]) iter.Seq2[mrt.Route, error]
+func RoutesWith(msgs iter.Seq2[Message, error], opts RoutesOptions) iter.Seq2[mrt.Route, error]
 type Header struct
 	Version uint8
 	Length uint32
@@ -140,6 +145,14 @@ type RouteMonitoring struct
 	Peer PeerHeader
 	Update []byte
 func (RouteMonitoring) MessageType() (bgp.MessageType, error)
+type RoutesOptions struct
+	Router netip.Addr
+	PeerStates bool
+	EndOfRIB bool
+	RequirePeerUp bool
+	Interner *bgp.Interner
+type Session struct
+func (*Session) Routes(m Message, err error) iter.Seq2[mrt.Route, error]
 type Stat struct
 	Type StatType
 	Value []byte

@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/rkolesnichenko/mrt"
+	"github.com/rkolesnichenko/mrt/bgp"
 	"github.com/rkolesnichenko/mrt/bmp"
 )
 
@@ -85,6 +89,48 @@ func FuzzMessages(f *testing.F) {
 		}
 		if !lossy && !bytes.Equal(raw, in) {
 			t.Fatalf("lossless violated: %d bytes back from %d", len(raw), len(in))
+		}
+	})
+}
+
+// FuzzBMPRoutes holds that Routes never panics and that, under every
+// combination of PeerStates, EndOfRIB and RequirePeerUp, an interner changes
+// nothing: routes and error texts are deeply equal with and without one.
+func FuzzBMPRoutes(f *testing.F) {
+	paths, err := filepath.Glob("../testdata/bmp/*.bmp")
+	if err != nil || len(paths) == 0 {
+		f.Fatalf("no seed files: %v", err)
+	}
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(b)
+	}
+	f.Fuzz(func(t *testing.T, in []byte) {
+		type outcome struct {
+			r   mrt.Route
+			err string
+		}
+		run := func(o bmp.RoutesOptions) []outcome {
+			var out []outcome
+			for r, err := range bmp.RoutesWith(bmp.MessagesWith(bytes.NewReader(in), bmp.Options{MaxMessageLen: 1 << 16}), o) {
+				oc := outcome{r: r}
+				if err != nil {
+					oc.err = err.Error()
+				}
+				out = append(out, oc)
+			}
+			return out
+		}
+		for i := range 8 {
+			o := bmp.RoutesOptions{PeerStates: i&1 != 0, EndOfRIB: i&2 != 0, RequirePeerUp: i&4 != 0}
+			want := run(o)
+			o.Interner = bgp.NewInterner()
+			if got := run(o); !reflect.DeepEqual(got, want) {
+				t.Fatalf("options %+v: routes with an interner differ from those without", o)
+			}
 		}
 	})
 }
