@@ -33,6 +33,7 @@ type StatsReport struct {
 	message
 	Peer  PeerHeader
 	Count uint32 // as stated
+	stats []byte // the stat TLVs after the count
 }
 
 // Stats walks the statistics in wire order. A TLV that runs past the
@@ -42,7 +43,7 @@ type StatsReport struct {
 func (m StatsReport) Stats() iter.Seq2[Stat, error] {
 	return func(yield func(Stat, error) bool) {
 		var n uint64
-		for t, err := range tlvs(m.raw[commonHeaderLen+peerHeaderLen+4:]) {
+		for t, err := range tlvs(m.stats) {
 			if err != nil {
 				yield(Stat{}, err)
 				return
@@ -100,8 +101,9 @@ func (m PeerDown) FSMEvent() (uint16, bool) {
 	return binary.BigEndian.Uint16(m.Data), true
 }
 
-// Info walks the TLVs of reason 6, and yields nothing for any other reason.
-// A TLV that runs past the message ends the walk with one error.
+// Info walks the Information TLVs of reason 6 (TLVPeerDownTableName, RFC
+// 9069 section 5.3), and yields nothing for any other reason. A TLV that runs
+// past the message ends the walk with one error.
 func (m PeerDown) Info() iter.Seq2[TLV, error] {
 	if m.Reason != PeerDownLocalTLV {
 		return tlvs(nil)
@@ -186,11 +188,14 @@ func (b PeerUpBody) TableName() (string, bool) {
 }
 
 // Initiation is an Initiation message (RFC 7854 section 4.3): TLVs only.
-type Initiation struct{ message }
+type Initiation struct {
+	message
+	info []byte // the TLVs
+}
 
 // Info walks the TLVs. A TLV that runs past the message ends the walk with
 // one error.
-func (m Initiation) Info() iter.Seq2[TLV, error] { return tlvs(m.raw[commonHeaderLen:]) }
+func (m Initiation) Info() iter.Seq2[TLV, error] { return tlvs(m.info) }
 
 // TerminationReason is a Termination reason code (RFC 7854 section 4.5).
 type TerminationReason uint16
@@ -205,11 +210,14 @@ const (
 )
 
 // Termination is a Termination message (RFC 7854 section 4.5): TLVs only.
-type Termination struct{ message }
+type Termination struct {
+	message
+	info []byte // the TLVs
+}
 
 // Info walks the TLVs. A TLV that runs past the message ends the walk with
 // one error.
-func (m Termination) Info() iter.Seq2[TLV, error] { return tlvs(m.raw[commonHeaderLen:]) }
+func (m Termination) Info() iter.Seq2[TLV, error] { return tlvs(m.info) }
 
 // Reason returns the reason of the first Reason TLV. It is false when there
 // is none before the TLVs end or break, or when that TLV's value is not
@@ -233,12 +241,13 @@ func (m Termination) Reason() (TerminationReason, bool) {
 type RouteMirroring struct {
 	message
 	Peer PeerHeader
+	tlvs []byte // the TLVs after the per-peer header
 }
 
 // TLVs walks the TLVs: Information codes and the mirrored BGP message. A TLV
 // that runs past the message ends the walk with one error.
 func (m RouteMirroring) TLVs() iter.Seq2[TLV, error] {
-	return tlvs(m.raw[commonHeaderLen+peerHeaderLen:])
+	return tlvs(m.tlvs)
 }
 
 // Other is every message whose type BMP v3 does not define (7-255). It is

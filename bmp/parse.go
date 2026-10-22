@@ -59,9 +59,9 @@ func decode(h Header, raw []byte) (Message, error) {
 	msg := message{hdr: h, raw: raw}
 	switch h.Type {
 	case TypeInitiation:
-		return Initiation{msg}, nil
+		return Initiation{message: msg, info: raw[commonHeaderLen:len(raw):len(raw)]}, nil
 	case TypeTermination:
-		return Termination{msg}, nil
+		return Termination{message: msg, info: raw[commonHeaderLen:len(raw):len(raw)]}, nil
 	case TypeRouteMonitoring, TypeStatsReport, TypePeerDown, TypePeerUp, TypeRouteMirroring:
 	default:
 		return Other{msg}, nil
@@ -79,7 +79,7 @@ func decode(h Header, raw []byte) (Message, error) {
 		if len(rest) < 4 {
 			return nil, short("statistics count")
 		}
-		return StatsReport{message: msg, Peer: peer, Count: binary.BigEndian.Uint32(rest)}, nil
+		return StatsReport{message: msg, Peer: peer, Count: binary.BigEndian.Uint32(rest), stats: rest[4:]}, nil
 	case TypePeerDown:
 		d := PeerDown{message: msg, Peer: peer}
 		if len(rest) > 0 {
@@ -89,5 +89,5 @@ func decode(h Header, raw []byte) (Message, error) {
 	case TypePeerUp:
 		return PeerUp{message: msg, Peer: peer, Data: rest}, nil
 	}
-	return RouteMirroring{message: msg, Peer: peer}, nil
+	return RouteMirroring{message: msg, Peer: peer, tlvs: rest}, nil
 }

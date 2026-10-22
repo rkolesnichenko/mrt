@@ -1,6 +1,6 @@
 package bmp
-const MirrorErroredPDU uint16 = 0
-const MirrorMessagesLost uint16 = 1
+const MirrorErroredPDU MirrorCode = 0
+const MirrorMessagesLost MirrorCode = 1
 const PeerDownDeconfigured PeerDownReason = 5
 const PeerDownLocalFSMEvent PeerDownReason = 2
 const PeerDownLocalNotification PeerDownReason = 1
@@ -54,6 +54,7 @@ const TLVInitSysDescr uint16 = 1
 const TLVInitSysName uint16 = 2
 const TLVMirrorBGPMessage uint16 = 0
 const TLVMirrorInformation uint16 = 1
+const TLVPeerDownTableName uint16 = 3
 const TLVPeerUpAdminLabel uint16 = 4
 const TLVPeerUpString uint16 = 0
 const TLVPeerUpTableName uint16 = 3
@@ -93,6 +94,7 @@ type MessageError struct
 	Err error
 func (*MessageError) Error() string
 func (*MessageError) Unwrap() error
+type MirrorCode uint16
 type Other struct
 type PeerDown struct
 	Peer PeerHeader

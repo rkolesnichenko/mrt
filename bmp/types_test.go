@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/rkolesnichenko/mrt"
 	"github.com/rkolesnichenko/mrt/bgp"
 )
 
@@ -174,7 +175,7 @@ func TestPeerDownReasons(t *testing.T) {
 		{"3 remote notification", down([]byte{3}, notif), notif, 0, false, nil, PeerDownRemoteNotification},
 		{"4 remote no data", down([]byte{4}), nil, 0, false, nil, PeerDownRemoteNoData},
 		{"5 deconfigured", down([]byte{5}), nil, 0, false, nil, PeerDownDeconfigured},
-		{"6 Loc-RIB TLVs", down([]byte{6}, tlv(3, []byte("vrf-a")...)), nil, 0, false, []TLV{{3, []byte("vrf-a")}}, PeerDownLocalTLV},
+		{"6 Loc-RIB TLVs", down([]byte{6}, tlv(TLVPeerDownTableName, []byte("vrf-a")...)), nil, 0, false, []TLV{{TLVPeerDownTableName, []byte("vrf-a")}}, PeerDownLocalTLV},
 		{"no reason", down(), nil, 0, false, nil, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -354,7 +355,7 @@ func TestInitiationInfo(t *testing.T) {
 }
 
 func TestRouteMirroringTLVs(t *testing.T) {
-	m := mustParse[RouteMirroring](t, bmpMsg(6, defaultPeer().bytes(), tlv(1, u16(MirrorMessagesLost)...), tlv(0, emptyUpdate...)))
+	m := mustParse[RouteMirroring](t, bmpMsg(6, defaultPeer().bytes(), tlv(TLVMirrorInformation, u16(uint16(MirrorMessagesLost))...), tlv(0, emptyUpdate...)))
 	tlvs, errs := walk(m.TLVs())
 	if len(errs) != 0 {
 		t.Errorf("TLVs errors %v", errs)
@@ -384,9 +385,77 @@ func TestWalkAllocations(t *testing.T) {
 // bytes are deeply equal.
 func TestMessagesAreValues(t *testing.T) {
 	b := bmpMsg(0, defaultPeer().bytes(), emptyUpdate)
-	m1, _ := ParseMessage(b)
-	m2, _ := ParseMessage(b)
+	m1, err1 := ParseMessage(b)
+	m2, err2 := ParseMessage(b)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("ParseMessage: %v, %v", err1, err2)
+	}
 	if !reflect.DeepEqual(m1, m2) {
 		t.Error("two parses differ")
+	}
+}
+
+// TestZeroValues: every accessor of every exported type works on its zero
+// value, without a panic: nothing reads Raw at a fixed offset.
+func TestZeroValues(t *testing.T) {
+	var (
+		rm  RouteMonitoring
+		sr  StatsReport
+		pd  PeerDown
+		pu  PeerUp
+		pub PeerUpBody
+		in  Initiation
+		te  Termination
+		mi  RouteMirroring
+		ot  Other
+		ph  PeerHeader
+		st  Stat
+	)
+	for _, m := range []Message{rm, sr, pd, pu, in, te, mi, ot} {
+		if m.Header() != (Header{}) || m.Raw() != nil {
+			t.Errorf("%T: Header %+v Raw % x", m, m.Header(), m.Raw())
+		}
+	}
+	if _, err := rm.MessageType(); err == nil {
+		t.Error("RouteMonitoring.MessageType: no error")
+	}
+	if stats, errs := walk(sr.Stats()); len(stats) != 0 || len(errs) != 0 {
+		t.Errorf("StatsReport.Stats: %v, %v", stats, errs)
+	}
+	if _, ok := pd.Notification(); ok {
+		t.Error("PeerDown.Notification ok")
+	}
+	if _, ok := pd.FSMEvent(); ok {
+		t.Error("PeerDown.FSMEvent ok")
+	}
+	if _, err := pu.Body(); !errors.Is(err, ErrMalformed) {
+		t.Errorf("PeerUp.Body: error %v", err)
+	}
+	if _, ok := pub.TableName(); ok {
+		t.Error("PeerUpBody.TableName ok")
+	}
+	if _, ok := te.Reason(); ok {
+		t.Error("Termination.Reason ok")
+	}
+	for name, seq := range map[string]iter.Seq2[TLV, error]{
+		"PeerDown.Info": pd.Info(), "PeerUpBody.Info": pub.Info(), "Initiation.Info": in.Info(),
+		"Termination.Info": te.Info(), "RouteMirroring.TLVs": mi.TLVs(),
+	} {
+		if tlvs, errs := walk(seq); len(tlvs) != 0 || len(errs) != 0 {
+			t.Errorf("%s: %v, %v", name, tlvs, errs)
+		}
+	}
+	if as4, known := ph.AS4(); !as4 || !known || ph.View() != mrt.ViewAdjRIBInPre || ph.Filtered() || ph.Peer() != (mrt.Peer{}) {
+		t.Errorf("PeerHeader: AS4 (%v, %v) View %v Filtered %v Peer %+v", as4, known, ph.View(), ph.Filtered(), ph.Peer())
+	}
+	_, cok := st.Counter()
+	_, gok := st.Gauge()
+	_, _, fok := st.FamilyGauge()
+	if cok || gok || fok { // type 0 is a counter, and 0 bytes are not its 4
+		t.Errorf("Stat: Counter %v Gauge %v FamilyGauge %v", cok, gok, fok)
+	}
+	var e MessageError
+	if e.Error() == "" || e.Unwrap() != nil {
+		t.Errorf("MessageError: %q, %v", e.Error(), e.Unwrap())
 	}
 }

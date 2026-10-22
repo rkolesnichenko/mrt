@@ -27,19 +27,25 @@ const (
 
 	// Route Mirroring (RFC 7854 section 4.7).
 	TLVMirrorBGPMessage  uint16 = 0 // a whole BGP PDU; it comes last
-	TLVMirrorInformation uint16 = 1 // a 2-byte Mirror information code
+	TLVMirrorInformation uint16 = 1 // a 2-byte MirrorCode
 
-	// Peer Up (RFC 9736); Peer Down reason 6 uses TLVPeerUpTableName
-	// (RFC 9069 section 5.3).
+	// Peer Up (RFC 9736).
 	TLVPeerUpString     uint16 = 0
 	TLVPeerUpTableName  uint16 = 3 // VRF/Table Name, 1-255 bytes
 	TLVPeerUpAdminLabel uint16 = 4 // RFC 8671 section 6.3.1
+
+	// Peer Down reason 6 (RFC 9069 section 5.3).
+	TLVPeerDownTableName uint16 = 3 // VRF/Table Name
 )
 
-// Route Mirroring information codes, the value of a TLVMirrorInformation TLV.
+// MirrorCode is a Route Mirroring information code (RFC 7854 section 4.7),
+// the value of a TLVMirrorInformation TLV.
+type MirrorCode uint16
+
+// Route Mirroring information codes.
 const (
-	MirrorErroredPDU   uint16 = 0
-	MirrorMessagesLost uint16 = 1
+	MirrorErroredPDU   MirrorCode = 0
+	MirrorMessagesLost MirrorCode = 1
 )
 
 // nextTLV reads the TLV at the front of b and returns the rest.

@@ -60,7 +60,7 @@ type MessageError struct {
 	Offset int64  // of the message's first byte in the stream; -1 when not known
 	Header Header // zero when the header was not read completely
 	Raw    []byte // nil when over MaxMessageLen and skipped, or truncated
-	Err    error  // ErrMalformed, ErrTooLarge, ErrTruncated
+	Err    error  // ErrMalformed, ErrTooLarge, ErrTruncated, ErrNoPeerUp
 }
 
 // Error says "bmp: message at offset N: cause", or "bmp: message (offset
