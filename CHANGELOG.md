@@ -45,16 +45,20 @@ shows all of them (254 added lines, none removed: `api/bgp.txt` 37, `api/bmp.txt
   routecheck uses keyed ones and builds and tests against this branch. For the
   same reason `bgp.Context`, which gained `AddPathFamilies`, breaks unkeyed
   `bgp.Context{...}` literals outside the package; routecheck builds.
+- The new fields make the values larger (`unsafe.Sizeof` on darwin/arm64,
+  Go 1.27.3, main d3b3cdd against this branch; log `.data/sizes-v0.4.log`):
+  `mrt.Route` 200 to 240 bytes, `mrt.Peer` 56 to 64, `bgp.Context` 3 to 4.
 
 ### Measured
 
 `BenchmarkBMP` (`internal/compare`) over the largest synthetic stream, 50,085
-messages, 5 runs, Go 1.27.2 on an Apple M3 Max, run with `GOMAXPROCS=4` and
-`MEMGUARD_NORMAL_PRIORITY=1` (log `.data/bmp-bench-v0.4.log`): mrt 704.0 to
-704.1 B/msg and 8.483 to 8.484 allocs/msg; gobgp (pkg/packet/bmp) 872.7 B/msg
-and 22.73 allocs/msg. mrt allocates less than gobgp per message (ratio 0.807
-by bytes, arithmetic: 704.0 / 872.7). Wall time per pass was 19.2 to 19.9 ms for
-mrt and 26.0 to 27.2 ms for gobgp; the gate is allocations.
+messages (its `msgs` metric), 5 runs, go1.27.3 darwin/arm64 on an Apple M3
+Max, run with `GOMAXPROCS=4` and `MEMGUARD_NORMAL_PRIORITY=1` (log
+`.data/bmp-bench-v0.4b.log`): mrt 704.0 to 704.1 B/msg and 8.483 allocs/msg;
+gobgp (pkg/packet/bmp) 872.7 B/msg and 22.73 allocs/msg. mrt allocates less
+than gobgp per message in all 5 runs (ratio 0.807 by bytes, arithmetic:
+704.1 / 872.7). Wall time per pass was 19.5 to 20.0 ms for mrt and 26.8 to
+27.6 ms for gobgp; the gate is allocations.
 
 Not measured: a real BMP feed. No capture exists yet (the user's decision), so
 the gobgp gate is re-checked on a capture once one exists, and the real-data
