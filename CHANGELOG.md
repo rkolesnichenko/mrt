@@ -8,7 +8,9 @@ a minor version may change the API.
 
 ## [Unreleased]
 
-v0.4.0 adds a BMP reader. The API additions are listed below; `git diff main -- api/`
+## [0.4.0] - 2026-10-23
+
+v0.4.0 adds a BMP reader. The API additions are listed below; `git diff v0.3.2 v0.4.0 -- api/`
 shows all of them (254 added lines, none removed: `api/bgp.txt` 37, `api/bmp.txt`
 174, `api/bmp_openbmp.txt` 25, `api/mrt.txt` 18).
 
@@ -638,7 +640,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/rkolesnichenko/mrt/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/rkolesnichenko/mrt/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/rkolesnichenko/mrt/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rkolesnichenko/mrt/compare/v0.2.1...v0.3.0
