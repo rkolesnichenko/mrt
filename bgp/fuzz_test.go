@@ -319,3 +319,58 @@ func TestHugeCountsAllocateLittle(t *testing.T) {
 		}
 	}
 }
+
+// openSeed frames an OPEN (My AS 23456, hold time 90, BGP ID 192.0.2.1) around optional parameters.
+func openSeed(params ...byte) []byte {
+	body := append([]byte{4, 0x5b, 0xa0, 0, 90, 192, 0, 2, 1, byte(len(params))}, params...)
+	n := 19 + len(body)
+	m := bytes.Repeat([]byte{0xFF}, 16)
+	return append(append(m, byte(n>>8), byte(n), 1), body...)
+}
+
+func FuzzParseOpen(f *testing.F) {
+	mp := []byte{1, 4, 0, 1, 0, 1, 1, 4, 0, 2, 0, 1}
+	as4 := []byte{65, 4, 0xfa, 0x56, 0xea, 0x00}
+	ap := []byte{69, 8, 0, 1, 1, 3, 0, 2, 1, 1}
+	seedOpens := [][]byte{
+		openSeed(append([]byte{2, byte(len(mp) + len(as4) + len(ap))}, append(append(mp, as4...), ap...)...)...),
+		openSeed(2, 6, 65, 3, 1, 2, 3),                                // capability 65 of 3 bytes
+		openSeed(2, 7, 69, 5, 0, 1, 1, 3, 0),                          // ADD-PATH of 5 bytes
+		openSeed(2, 10, 69, 8, 0, 1, 1, 0, 0, 2, 1, 4),                // invalid modes
+		openSeed(2, 8, 69, 4, 0, 1, 1, 2, 69, 0),                      // second ADD-PATH
+		openSeed(255, 0, 13, 2, 0, 10, 69, 8, 0, 1, 1, 3, 0, 2, 1, 1), // RFC 9072 form
+		openSeed(2, 200, 65, 4),                                       // parameter past the message
+		{},
+	}
+	for i, m := range seedOpens {
+		f.Add(m, seedOpens[(i+1)%len(seedOpens)]) // pairs, for the negotiation property
+	}
+	f.Fuzz(func(t *testing.T, a, b []byte) {
+		oa, _ := bgp.ParseOpen(a)
+		ob, _ := bgp.ParseOpen(b)
+		oa.AS()
+		oa.AS4()
+		oa.Multiprotocol()
+		for _, pair := range [][2]bgp.Open{{oa, ob}, {ob, oa}, {oa, oa}} {
+			set := bgp.AddPathFamilies(pair[0], pair[1])
+			for _, fam := range []bgp.Family{{AFI: 1, SAFI: 1}, {AFI: 1, SAFI: 2}, {AFI: 2, SAFI: 1}, {AFI: 2, SAFI: 2}} {
+				if !set.Has(fam) {
+					continue
+				}
+				if !hasFamily(pair[0].AddPath(), fam) || !hasFamily(pair[1].AddPath(), fam) {
+					t.Fatalf("family %v negotiated but not in both AddPath() lists", fam)
+				}
+			}
+		}
+		bgp.ParseNotification(a)
+	})
+}
+
+func hasFamily(tuples []bgp.AddPathFamily, f bgp.Family) bool {
+	for _, t := range tuples {
+		if t.Family == f {
+			return true
+		}
+	}
+	return false
+}

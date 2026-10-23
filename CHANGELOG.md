@@ -8,6 +8,64 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-23
+
+v0.4.0 adds a BMP reader. The API additions are listed below; `git diff v0.3.2 v0.4.0 -- api/`
+shows all of them (254 added lines, none removed: `api/bgp.txt` 37, `api/bmp.txt`
+174, `api/bmp_openbmp.txt` 25, `api/mrt.txt` 18).
+
+### Added
+
+- Package `bmp`: reads BMP (RFC 7854, RFC 8671 Adj-RIB-Out, RFC 9069 Loc-RIB,
+  RFC 9736 Peer Up TLVs, RFC 9972 statistics). `Messages`/`MessagesWith` yield
+  typed messages (each with its exact bytes in `Raw`), `ParseMessage` decodes
+  one, and `Routes`/`RoutesWith`/`NewSession` yield `mrt.Route`, the same type
+  `mrt.Routes` yields. A `Session` takes each peer's ADD-PATH state from its
+  Peer Up, per family and direction; a Route Monitoring with no usable Peer Up
+  is decoded without ADD-PATH and carries the Warning `bmp/addpath-unknown`
+  (`RoutesOptions.RequirePeerUp` refuses it with `ErrNoPeerUp`).
+- Package `bmp/openbmp`: the OpenBMP binary 1.7 envelope (`Frames`, `Parse`);
+  no other version and no text form.
+- `bgp.ParseOpen`, `bgp.ParseNotification`, `bgp.AddPathFamilies`, the `Open`,
+  `Notification`, `Capability` and `AddPathFamily` types, `bgp.FamilySet`, and
+  `Context.AddPathFamilies` (ADD-PATH per family instead of for the whole
+  message).
+- `mrt.Route` gains `Router` and `View`; `mrt.Peer` gains `Type` and
+  `Distinguisher`; new types `mrt.View` and `mrt.PeerType`; new `mrt.KindEndOfRIB`.
+- `internal/bmpgen` (synthetic BMP and OpenBMP fixtures in `testdata/bmp`),
+  the `bgpkit-bmp` oracle harness built by `scripts/build-oracles.sh`, a gobgp
+  BMP comparison in `internal/compare` (`go run . -bmp FILE`), and the opt-in
+  `scripts/fetch-bmp.sh` and `TestRealDataBMP` (not run: see below).
+
+### Changed
+
+- Nothing for MRT callers: `mrt.Routes` and `mrt.RoutesWith` yield the same
+  routes as in 0.3.2, with the new fields zero (`TestMRTRoutesHaveZeroBMPFields`),
+  and no existing exported signature changed. One compile-time effect: adding
+  fields to `mrt.Peer` breaks unkeyed `mrt.Peer{...}` composite literals
+  outside the package (`go vet` flags them). Keyed literals still build;
+  routecheck uses keyed ones and builds and tests against this branch. For the
+  same reason `bgp.Context`, which gained `AddPathFamilies`, breaks unkeyed
+  `bgp.Context{...}` literals outside the package; routecheck builds.
+- The new fields make the values larger (`unsafe.Sizeof` on darwin/arm64,
+  Go 1.27.3, main d3b3cdd against this branch; log `.data/sizes-v0.4.log`):
+  `mrt.Route` 200 to 240 bytes, `mrt.Peer` 56 to 64, `bgp.Context` 3 to 4.
+
+### Measured
+
+`BenchmarkBMP` (`internal/compare`) over the largest synthetic stream, 50,085
+messages (its `msgs` metric), 5 runs, go1.27.3 darwin/arm64 on an Apple M3
+Max, run with `GOMAXPROCS=4` and `MEMGUARD_NORMAL_PRIORITY=1` (log
+`.data/bmp-bench-v0.4b.log`): mrt 704.0 to 704.1 B/msg and 8.483 allocs/msg;
+gobgp (pkg/packet/bmp) 872.7 B/msg and 22.73 allocs/msg. mrt allocates less
+than gobgp per message in all 5 runs (ratio 0.807 by bytes, arithmetic:
+704.1 / 872.7). Wall time per pass was 19.5 to 20.0 ms for mrt and 26.8 to
+27.6 ms for gobgp; the gate is allocations.
+
+Not measured: a real BMP feed. No capture exists yet (the user's decision), so
+the gobgp gate is re-checked on a capture once one exists, and the real-data
+comparison against bgpkit-bmp has not run.
+
 ## [0.3.2] - 2026-10-21
 
 v0.3.2 closes the items v0.3.1 left open: the `mrtcut` slowdown on gzip, the
@@ -582,7 +640,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/rkolesnichenko/mrt/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/rkolesnichenko/mrt/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/rkolesnichenko/mrt/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rkolesnichenko/mrt/compare/v0.2.1...v0.3.0

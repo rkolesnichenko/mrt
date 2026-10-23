@@ -187,3 +187,68 @@ func TestParseUpdateTruncated(t *testing.T) {
 		t.Errorf("bad prefix length before the cut: %v", d)
 	}
 }
+
+// addPathUpdate is an UPDATE with one IPv4 prefix in its own NLRI field and
+// one IPv6 prefix in MP_REACH_NLRI. A path ID precedes each prefix named in v4id
+// and v6id.
+func addPathUpdate(v4id, v6id bool) []byte {
+	id := []byte{0, 0, 0, 7}
+	v4 := []byte{24, 192, 0, 2}
+	if v4id {
+		v4 = append(append([]byte(nil), id...), v4...)
+	}
+	v6 := []byte{32, 0x20, 0x01, 0x0d, 0xb8}
+	if v6id {
+		v6 = append(append([]byte(nil), id...), v6...)
+	}
+	mp := concat([]byte{0, 2, 1, 16}, b16(v6global), []byte{0}, v6)
+	attrs := concat(attr(0x40, 1, 0), attr(0x80, 14, mp...))
+	return msgOf(2, concat([]byte{0, 0, 0, byte(len(attrs))}, attrs, v4)...)
+}
+
+func TestParseUpdateAddPathFamilies(t *testing.T) {
+	v4, v6 := Family{AFIIPv4, SAFIUnicast}, Family{AFIIPv6, SAFIUnicast}
+	for _, tc := range []struct {
+		name       string
+		on         Family
+		v4id, v6id bool
+	}{
+		{"IPv4 on", v4, true, false},
+		{"IPv6 on", v6, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := Context{AS4: true, AddPathFamilies: FamilySet(0).With(tc.on)}
+			u, d := ParseUpdate(addPathUpdate(tc.v4id, tc.v6id), ctx)
+			if len(d) != 0 {
+				t.Fatalf("diagnostics %v", d)
+			}
+			if len(u.Announced) != 1 || u.Announced[0].HasPathID != tc.v4id ||
+				u.Announced[0].Prefix != netip.MustParsePrefix("192.0.2.0/24") {
+				t.Fatalf("IPv4 NLRI %+v, want HasPathID %v", u.Announced, tc.v4id)
+			}
+			p, d := u.Attrs.Decode()
+			if len(d) != 0 || p.MPReach == nil || len(p.MPReach.NLRI) != 1 {
+				t.Fatalf("MP_REACH %+v %v", p.MPReach, d)
+			}
+			n := p.MPReach.NLRI[0]
+			if n.HasPathID != tc.v6id || n.Prefix != netip.MustParsePrefix("2001:db8::/32") {
+				t.Fatalf("IPv6 NLRI %+v, want HasPathID %v", n, tc.v6id)
+			}
+		})
+	}
+}
+
+// TestParseUpdateAddPathFamiliesWithdrawn: the UPDATE's own withdrawn field
+// is IPv4 unicast, and the cut-message walk (wholeNLRI) follows the same setting.
+func TestParseUpdateAddPathFamiliesWithdrawn(t *testing.T) {
+	body := []byte{0, 8, 0, 0, 0, 7, 24, 192, 0, 2, 0, 0}
+	ctx := Context{AS4: true, AddPathFamilies: FamilySet(0).With(Family{AFIIPv4, SAFIUnicast})}
+	u, d := ParseUpdate(msgOf(2, body...), ctx)
+	if len(d) != 0 || len(u.Withdrawn) != 1 || !u.Withdrawn[0].HasPathID || u.Withdrawn[0].PathID != 7 {
+		t.Fatalf("%+v %v", u.Withdrawn, d)
+	}
+	_, d = ParseUpdate(msgOf(2, body...), Context{AS4: true, AddPathFamilies: FamilySet(0).With(Family{AFIIPv6, SAFIUnicast})})
+	if len(d) == 0 {
+		t.Error("IPv6-only ADD-PATH read an IPv4 withdrawn field with path IDs without complaint")
+	}
+}

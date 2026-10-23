@@ -330,3 +330,27 @@ func TestInternerHitAllocates(t *testing.T) {
 		}
 	}
 }
+
+// TestInternerKeyAddPathFamilies: AddPathFamilies is part of the key, so two
+// RIB-context blocks with equal bytes and different families never share a path.
+func TestInternerKeyAddPathFamilies(t *testing.T) {
+	raw := join(ibOrigin, nextHopAttr(1), ibComms)
+	ctxA := bgp.Context{AS4: true, RIB: true}
+	ctxB := ctxA
+	ctxB.AddPathFamilies = bgp.FamilySet(0).With(bgp.Family{AFI: bgp.AFIIPv6, SAFI: bgp.SAFIUnicast})
+	ctxC := ctxA
+	ctxC.AddPathFamilies = bgp.FamilySet(0).With(bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIUnicast})
+	in := bgp.NewInterner()
+	var got []*bgp.Path
+	for _, ctx := range []bgp.Context{ctxA, ctxB, ctxC} {
+		p, d := in.Decode(bgp.NewAttrs(append([]byte(nil), raw...), ctx))
+		checkFresh(t, "AddPathFamilies", raw, ctx, p, d)
+		got = append(got, p)
+	}
+	if got[0] == got[1] || got[0] == got[2] || got[1] == got[2] {
+		t.Errorf("different AddPathFamilies share a path: %p %p %p", got[0], got[1], got[2])
+	}
+	if again, _ := in.Decode(bgp.NewAttrs(append([]byte(nil), raw...), ctxB)); again != got[1] {
+		t.Error("same AddPathFamilies: not interned")
+	}
+}

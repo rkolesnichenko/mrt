@@ -25,3 +25,32 @@ func TestConstants(t *testing.T) {
 		t.Fatal("attr constants")
 	}
 }
+
+func TestFamilySet(t *testing.T) {
+	fams := []Family{{AFIIPv4, SAFIUnicast}, {AFIIPv4, SAFIMulticast}, {AFIIPv6, SAFIUnicast}, {AFIIPv6, SAFIMulticast}}
+	var s FamilySet
+	for i, f := range fams {
+		if s.Has(f) {
+			t.Errorf("empty set has %v", f)
+		}
+		s = s.With(f)
+		if want := FamilySet(1<<(i+1) - 1); s != want || !s.Has(f) {
+			t.Errorf("With(%v): set %04b, want %04b", f, s, FamilySet(1<<(i+1)-1))
+		}
+	}
+	if s != 0b1111 {
+		t.Errorf("all four: %04b", s)
+	}
+	for i, f := range fams {
+		if got := FamilySet(0).With(f); got != FamilySet(1<<i) {
+			t.Errorf("With(%v) alone = %04b, want bit %d", f, got, i)
+		}
+	}
+	vpn := Family{25, 70}
+	if got := s.With(vpn); got != s {
+		t.Errorf("With(%v) changed the set to %04b", vpn, got)
+	}
+	if got := FamilySet(0).With(vpn); got != 0 || FamilySet(0b1111).Has(vpn) {
+		t.Errorf("family without prefixes: With %04b, Has %v", got, FamilySet(0b1111).Has(vpn))
+	}
+}

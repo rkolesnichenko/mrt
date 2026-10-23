@@ -290,4 +290,7 @@ func TestRunMissingBinary(t *testing.T) {
 	if _, err := Bgpkit(filepath.Join(t.TempDir(), "no-such-bgpkit"), "x"); err == nil {
 		t.Error("Bgpkit with a missing binary: no error")
 	}
+	if _, err := BgpkitBMP(filepath.Join(t.TempDir(), "no-such-bgpkit-bmp"), "x"); err == nil {
+		t.Error("BgpkitBMP with a missing binary: no error")
+	}
 }

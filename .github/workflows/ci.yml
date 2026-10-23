@@ -35,9 +35,10 @@ jobs:
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@v0.8.2   # 2026.2.2
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
-      # The differential oracles (bgpdump, bgpkit-parser), so TestMatchesBgpdump
-      # and TestMatchesBgpkitLive run instead of skipping. The build is cached
-      # under a key that changes whenever build-oracles.sh (which pins both)
+      # The differential oracles (bgpdump, bgpkit-parser, bgpkit-bmp), so
+      # TestMatchesBgpdump, TestMatchesBgpkitLive and TestBMPMatchesBgpkitLive
+      # run instead of skipping. The build is cached under a key that changes
+      # whenever build-oracles.sh (which pins them) or the bgpkit-bmp harness
       # changes; the script itself skips what is already installed.
       - name: Cache the oracles
         id: oracles
@@ -47,7 +48,9 @@ jobs:
             ~/.local/bin/bgpdump
             ~/.local/bin/.bgpdump.stamp
             ~/.local/bin/bgpkit-parser
-          key: oracles-${{ runner.os }}-${{ hashFiles('scripts/build-oracles.sh') }}
+            ~/.local/bin/bgpkit-bmp
+            ~/.local/bin/.bgpkit-bmp.stamp
+          key: oracles-${{ runner.os }}-${{ hashFiles('scripts/build-oracles.sh', 'internal/oracle/bgpkit-bmp/Cargo.*', 'internal/oracle/bgpkit-bmp/src/**') }}
       - name: Install the oracles' build dependencies
         if: steps.oracles.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y autoconf automake zlib1g-dev libbz2-dev
@@ -58,8 +61,8 @@ jobs:
       - name: scripts/check.sh
         run: scripts/check.sh
         env:
-          # A missing oracle fails TestMatchesBgpdump/TestMatchesBgpkitLive
-          # here instead of skipping them.
+          # A missing oracle fails TestMatchesBgpdump, TestMatchesBgpkitLive
+          # and TestBMPMatchesBgpkitLive here instead of skipping them.
           MRT_ORACLES_REQUIRED: "1"
 
   # The release ships darwin and windows binaries, and the code converts

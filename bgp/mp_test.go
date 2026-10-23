@@ -185,3 +185,29 @@ func TestMPDuplicate(t *testing.T) {
 		t.Fatalf("%+v %v", p, d)
 	}
 }
+
+func TestMPUnreachAddPathFamilies(t *testing.T) {
+	v4, v6 := Family{AFIIPv4, SAFIUnicast}, Family{AFIIPv6, SAFIUnicast}
+	withID := []byte{0, 0, 0, 7, 32, 0x20, 0x01, 0x0d, 0xb8}
+	without := []byte{32, 0x20, 0x01, 0x0d, 0xb8}
+	for _, tc := range []struct {
+		name string
+		on   Family
+		wire []byte
+		id   bool
+	}{
+		{"IPv6 on", v6, withID, true},
+		{"IPv4 on", v4, without, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := Context{AS4: true, AddPathFamilies: FamilySet(0).With(tc.on)}
+			p, d := decodeMP(t, ctx, 15, concat([]byte{0, 2, 1}, tc.wire)...)
+			if len(d) != 0 || p.MPUnreach() == nil || len(p.MPUnreach().Withdrawn) != 1 {
+				t.Fatalf("%+v %v", p.MPUnreach(), d)
+			}
+			if n := p.MPUnreach().Withdrawn[0]; n.HasPathID != tc.id || n.Prefix != netip.MustParsePrefix("2001:db8::/32") {
+				t.Fatalf("withdrawn %+v, want HasPathID %v", n, tc.id)
+			}
+		})
+	}
+}

@@ -79,8 +79,9 @@ func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic) {
 		}
 		return append(diags, Diagnostic{SeverityError, DiagUpdateLength, off, 0, what})
 	}
+	ap4 := ctx.addPath(Family{AFIIPv4, SAFIUnicast}) // the UPDATE's own fields are IPv4 unicast
 	nlri := func(b []byte, base int) []NLRI {
-		out, nd := parseNLRI(b, AFIIPv4, ctx.AddPath)
+		out, nd := parseNLRI(b, AFIIPv4, ap4)
 		for _, d := range nd {
 			d.Offset += base
 			diags = append(diags, d)
@@ -96,7 +97,7 @@ func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic) {
 	if len(msg)-off < wl {
 		if cut {
 			b := msg[off:]
-			u.Withdrawn = nlri(b[:wholeNLRI(b, 32, ctx.AddPath)], off)
+			u.Withdrawn = nlri(b[:wholeNLRI(b, 32, ap4)], off)
 		}
 		return u, short(off, "withdrawn routes run past the message")
 	}
@@ -121,7 +122,7 @@ func ParseUpdate(msg []byte, ctx Context) (Update, []Diagnostic) {
 		return u, diags
 	}
 	b := msg[off:]
-	u.Announced = nlri(b[:wholeNLRI(b, 32, ctx.AddPath)], off)
+	u.Announced = nlri(b[:wholeNLRI(b, 32, ap4)], off)
 	return u, short(off, "")
 }
 

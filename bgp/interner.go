@@ -154,7 +154,7 @@ func appendKey(dst []byte, a Attrs, strip bool) (_ []byte, stripped bool) {
 	if a.ctx.RIB {
 		flags |= 4
 	}
-	dst = append(dst, flags)
+	dst = append(dst, flags, byte(a.ctx.AddPathFamilies))
 	raw := a.raw
 	if !strip || !a.ctx.RIB {
 		return append(dst, raw...), false

@@ -10,11 +10,19 @@ import (
 	"github.com/rkolesnichenko/mrt/bgp"
 )
 
-// Peer is a BGP peer, from a PEER_INDEX_TABLE or a legacy TABLE_DUMP record.
+// Peer is a BGP peer, from a PEER_INDEX_TABLE or a legacy TABLE_DUMP record,
+// a BGP4MP record (Addr and AS only), or, in package bmp, a BMP per-peer
+// header.
 type Peer struct {
 	BGPID netip.Addr // zero when the record does not carry one
 	Addr  netip.Addr
 	AS    bgp.ASN
+	// Type is the BMP peer type. BMP only: zero (the global instance) on
+	// every MRT peer.
+	Type PeerType
+	// Distinguisher is the BMP peer distinguisher. BMP only: zero on every
+	// MRT peer.
+	Distinguisher uint64
 }
 
 // PeerIndexTable is TABLE_DUMP_V2 PEER_INDEX_TABLE (RFC 6396 section 4.3.1).

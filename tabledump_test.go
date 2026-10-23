@@ -53,8 +53,8 @@ func TestPeerIndexTable(t *testing.T) {
 		t.Fatalf("%+v", p)
 	}
 	want := []Peer{
-		{netip.MustParseAddr("198.51.100.5"), netip.MustParseAddr("198.51.100.5"), 65541},
-		{netip.MustParseAddr("192.0.2.33"), netip.MustParseAddr("192.0.2.33"), 65542},
+		{BGPID: netip.MustParseAddr("198.51.100.5"), Addr: netip.MustParseAddr("198.51.100.5"), AS: 65541},
+		{BGPID: netip.MustParseAddr("192.0.2.33"), Addr: netip.MustParseAddr("192.0.2.33"), AS: 65542},
 	}
 	for i := range want {
 		if p.Peers[i] != want[i] {
@@ -73,10 +73,10 @@ func TestPeerIndexTable(t *testing.T) {
 	if p.ViewName != "view" || len(p.Peers) != 2 {
 		t.Fatalf("%+v", p)
 	}
-	if p.Peers[0] != (Peer{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("192.0.2.9"), 64512}) {
+	if p.Peers[0] != (Peer{BGPID: netip.MustParseAddr("1.1.1.1"), Addr: netip.MustParseAddr("192.0.2.9"), AS: 64512}) {
 		t.Errorf("peer0 %+v", p.Peers[0])
 	}
-	if p.Peers[1] != (Peer{netip.MustParseAddr("2.2.2.2"), netip.MustParseAddr("2001:db8::1"), 4200000000}) {
+	if p.Peers[1] != (Peer{BGPID: netip.MustParseAddr("2.2.2.2"), Addr: netip.MustParseAddr("2001:db8::1"), AS: 4200000000}) {
 		t.Errorf("peer1 %+v", p.Peers[1])
 	}
 

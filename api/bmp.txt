@@ -1,0 +1,174 @@
+package bmp
+const DefaultMaxMessageLen = 1 << 20
+const DiagAddPathUnknown = "bmp/addpath-unknown"
+const DiagPeerUpBody = "bmp/peer-up-body"
+const MirrorErroredPDU MirrorCode = 0
+const MirrorMessagesLost MirrorCode = 1
+const PeerDownDeconfigured PeerDownReason = 5
+const PeerDownLocalFSMEvent PeerDownReason = 2
+const PeerDownLocalNotification PeerDownReason = 1
+const PeerDownLocalTLV PeerDownReason = 6
+const PeerDownRemoteNoData PeerDownReason = 4
+const PeerDownRemoteNotification PeerDownReason = 3
+const StatASPathLoop StatType = 4
+const StatASPathTooLongIn StatType = 33
+const StatASPathTooLongOut StatType = 39
+const StatAdjRIBIn StatType = 7
+const StatAdjRIBInPost StatType = 20
+const StatAdjRIBInPre StatType = 18
+const StatAdjRIBOutPost StatType = 15
+const StatAdjRIBOutPre StatType = 14
+const StatClusterListLoop StatType = 3
+const StatConfedLoop StatType = 6
+const StatDuplicatePrefixes StatType = 1
+const StatDuplicateUpdates StatType = 13
+const StatDuplicateWithdraws StatType = 2
+const StatFamilyASPathTooLongIn StatType = 34
+const StatFamilyASPathTooLongOut StatType = 40
+const StatFamilyAdjRIBIn StatType = 9
+const StatFamilyAdjRIBInPost StatType = 21
+const StatFamilyAdjRIBInPre StatType = 19
+const StatFamilyAdjRIBOutPost StatType = 17
+const StatFamilyAdjRIBOutPre StatType = 16
+const StatFamilyDampened StatType = 26
+const StatFamilyInboundAccepted StatType = 23
+const StatFamilyInboundRejected StatType = 22
+const StatFamilyLicenseLeft StatType = 32
+const StatFamilyLocRIB StatType = 10
+const StatFamilyOutboundRejected StatType = 38
+const StatFamilyRPKIInvalidIn StatType = 35
+const StatFamilyRPKIInvalidOut StatType = 41
+const StatFamilyRPKINotFoundIn StatType = 37
+const StatFamilyRPKINotFoundOut StatType = 43
+const StatFamilyRPKIValidIn StatType = 36
+const StatFamilyRPKIValidOut StatType = 42
+const StatFamilyStaleGR StatType = 27
+const StatFamilyStaleLLGR StatType = 28
+const StatFamilyThresholdLeft StatType = 30
+const StatLicenseLeft StatType = 31
+const StatLocRIB StatType = 8
+const StatOriginatorIDLoop StatType = 5
+const StatRejectedPrefixes StatType = 0
+const StatThresholdLeft StatType = 29
+const StatTreatAsWithdrawPrefixes StatType = 12
+const StatTreatAsWithdrawUpdates StatType = 11
+const TLVInitString uint16 = 0
+const TLVInitSysDescr uint16 = 1
+const TLVInitSysName uint16 = 2
+const TLVMirrorBGPMessage uint16 = 0
+const TLVMirrorInformation uint16 = 1
+const TLVPeerDownTableName uint16 = 3
+const TLVPeerUpAdminLabel uint16 = 4
+const TLVPeerUpString uint16 = 0
+const TLVPeerUpTableName uint16 = 3
+const TLVTermReason uint16 = 1
+const TLVTermString uint16 = 0
+const TerminationAdminClosed TerminationReason = 0
+const TerminationOutOfResources TerminationReason = 2
+const TerminationPermanentlyClosed TerminationReason = 4
+const TerminationRedundant TerminationReason = 3
+const TerminationUnspecified TerminationReason = 1
+const TypeInitiation Type = 4
+const TypePeerDown Type = 2
+const TypePeerUp Type = 3
+const TypeRouteMirroring Type = 6
+const TypeRouteMonitoring Type = 0
+const TypeStatsReport Type = 1
+const TypeTermination Type = 5
+var ErrMalformed = errors.New(…)
+var ErrNoPeerUp = errors.New(…)
+var ErrTooLarge = errors.New(…)
+var ErrTruncated = errors.New(…)
+func Messages(r io.Reader) iter.Seq2[Message, error]
+func MessagesWith(r io.Reader, opts Options) iter.Seq2[Message, error]
+func NewSession(opts RoutesOptions) *Session
+func ParseMessage(b []byte) (Message, error)
+func Routes(msgs iter.Seq2[Message, error]) iter.Seq2[mrt.Route, error]
+func RoutesWith(msgs iter.Seq2[Message, error], opts RoutesOptions) iter.Seq2[mrt.Route, error]
+type Header struct
+	Version uint8
+	Length uint32
+	Type Type
+type Initiation struct
+func (Initiation) Info() iter.Seq2[TLV, error]
+type Message interface
+	Header() Header
+	Raw() []byte
+	isMessage()
+type MessageError struct
+	Offset int64
+	Header Header
+	Raw []byte
+	Err error
+func (*MessageError) Error() string
+func (*MessageError) Unwrap() error
+type MirrorCode uint16
+type Options struct
+	MaxMessageLen uint32
+type Other struct
+type PeerDown struct
+	Peer PeerHeader
+	Reason PeerDownReason
+	Data []byte
+func (PeerDown) FSMEvent() (uint16, bool)
+func (PeerDown) Info() iter.Seq2[TLV, error]
+func (PeerDown) Notification() ([]byte, bool)
+type PeerDownReason uint8
+type PeerHeader struct
+	Type mrt.PeerType
+	Flags uint8
+	Distinguisher uint64
+	Addr netip.Addr
+	AS bgp.ASN
+	BGPID netip.Addr
+	Time time.Time
+func (PeerHeader) AS4() (as4, known bool)
+func (PeerHeader) Filtered() bool
+func (PeerHeader) Peer() mrt.Peer
+func (PeerHeader) View() mrt.View
+type PeerUp struct
+	Peer PeerHeader
+	Data []byte
+func (PeerUp) Body() (PeerUpBody, error)
+type PeerUpBody struct
+	LocalAddr netip.Addr
+	LocalPort uint16
+	RemotePort uint16
+	SentOpen []byte
+	ReceivedOpen []byte
+func (PeerUpBody) Info() iter.Seq2[TLV, error]
+func (PeerUpBody) TableName() (string, bool)
+type RouteMirroring struct
+	Peer PeerHeader
+func (RouteMirroring) TLVs() iter.Seq2[TLV, error]
+type RouteMonitoring struct
+	Peer PeerHeader
+	Update []byte
+func (RouteMonitoring) MessageType() (bgp.MessageType, error)
+type RoutesOptions struct
+	Router netip.Addr
+	PeerStates bool
+	EndOfRIB bool
+	RequirePeerUp bool
+	Interner *bgp.Interner
+type Session struct
+func (*Session) Routes(m Message, err error) iter.Seq2[mrt.Route, error]
+type Stat struct
+	Type StatType
+	Value []byte
+func (Stat) Counter() (uint32, bool)
+func (Stat) FamilyGauge() (bgp.Family, uint64, bool)
+func (Stat) Gauge() (uint64, bool)
+type StatType uint16
+type StatsReport struct
+	Peer PeerHeader
+	Count uint32
+func (StatsReport) Stats() iter.Seq2[Stat, error]
+type TLV struct
+	Type uint16
+	Value []byte
+type Termination struct
+func (Termination) Info() iter.Seq2[TLV, error]
+func (Termination) Reason() (TerminationReason, bool)
+type TerminationReason uint16
+type Type uint8

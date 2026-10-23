@@ -87,7 +87,7 @@ func decodeMPReach(v []byte, ctx Context, off int) (r MPReach, ok bool, diags []
 	case ctx.RIB:
 	case r.Family.HasPrefixes():
 		var nd []Diagnostic
-		r.NLRI, nd = parseNLRI(rest, r.Family.AFI, ctx.AddPath)
+		r.NLRI, nd = parseNLRI(rest, r.Family.AFI, ctx.addPath(r.Family))
 		for _, d := range nd {
 			d.Offset, d.Attr = off, AttrMPReach
 			diags = append(diags, d)
@@ -109,7 +109,7 @@ func decodeMPUnreach(v []byte, ctx Context, off int) (r MPUnreach, ok bool, diag
 	rest := v[3:]
 	if r.Family.HasPrefixes() {
 		var nd []Diagnostic
-		r.Withdrawn, nd = parseNLRI(rest, r.Family.AFI, ctx.AddPath)
+		r.Withdrawn, nd = parseNLRI(rest, r.Family.AFI, ctx.addPath(r.Family))
 		for _, d := range nd {
 			d.Offset, d.Attr = off, AttrMPUnreach
 			diags = append(diags, d)

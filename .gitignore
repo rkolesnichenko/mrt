@@ -3,3 +3,4 @@
 *.prof
 .superpowers/
 .idea/
+internal/oracle/bgpkit-bmp/target/

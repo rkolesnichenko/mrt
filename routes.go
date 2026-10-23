@@ -19,13 +19,19 @@ const (
 	KindRIB      Kind = 1 // an entry of a RIB dump
 	KindAnnounce Kind = 2 // announced by an UPDATE
 	KindWithdraw Kind = 3 // withdrawn by an UPDATE
-	// KindPeerState is a session state change (BGP4MP STATE_CHANGE), yielded
-	// only with RoutesOptions.PeerStates. Only Time, Peer, OldState and
-	// NewState are set.
+	// KindPeerState is a session state change, yielded only with the
+	// PeerStates option. From MRT (BGP4MP STATE_CHANGE) only Time, Peer,
+	// OldState and NewState are set. From a BMP Peer Up or Peer Down, Router
+	// is set too, View for a Loc-RIB peer, and, for a Peer Up, Diagnostics
+	// (its OPENs').
 	KindPeerState Kind = 4
+	// KindEndOfRIB marks the end of the initial routing information of a
+	// peer and View (BMP only; no MRT code path yields it). Only Time,
+	// Router, Peer, View and Family are set.
+	KindEndOfRIB Kind = 5
 )
 
-// String returns "B", "A", "W" or "S", and "?" for the zero Kind or any other value.
+// String returns "B", "A", "W", "S" or "E", and "?" for the zero Kind or any other value.
 func (k Kind) String() string {
 	switch k {
 	case KindRIB:
@@ -36,6 +42,8 @@ func (k Kind) String() string {
 		return "W"
 	case KindPeerState:
 		return "S"
+	case KindEndOfRIB:
+		return "E"
 	}
 	return "?"
 }
@@ -51,7 +59,7 @@ type Route struct {
 	Prefix    netip.Prefix
 	PathID    uint32
 	HasPathID bool
-	Path      *bgp.Path // nil for KindWithdraw and KindPeerState; shared by every route from one UPDATE or RIB entry (and see RoutesOptions.Interner)
+	Path      *bgp.Path // nil for KindWithdraw, KindPeerState and KindEndOfRIB; shared by every route from one UPDATE or RIB entry (and see RoutesOptions.Interner)
 	// Diagnostics are from decoding the UPDATE or the entry's attributes,
 	// shared the same way. For an UPDATE's routes every Offset counts from
 	// the start of the BGP message (attribute diagnostics are rebased onto
@@ -63,6 +71,12 @@ type Route struct {
 	// OldState and NewState are the session states of a KindPeerState event,
 	// zero otherwise.
 	OldState, NewState State
+	// Router is the monitored router a BMP route came from, as given to the
+	// BMP reader. BMP only: zero on every MRT route.
+	Router netip.Addr
+	// View is the RIB a BMP route is in. BMP only: zero on every MRT route.
+	// A BMP table's key is (Router, Peer, View).
+	View View
 }
 
 // RoutesOptions are the options of RoutesWith.

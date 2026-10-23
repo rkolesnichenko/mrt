@@ -145,3 +145,27 @@ func TestRoutesInternerSameRoutes(t *testing.T) {
 		}
 	}
 }
+
+// The BMP fields on Route and Peer are zero on every MRT route, so no MRT
+// caller sees a change (spec section 7.3).
+func TestMRTRoutesHaveZeroBMPFields(t *testing.T) {
+	for _, f := range fixtures(t) {
+		t.Run(f.name, func(t *testing.T) {
+			r, err := mrt.Decompress(openFixture(t, f.path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := 0
+			for rt, err := range mrt.RoutesWith(mrt.Records(r), mrt.RoutesOptions{PeerStates: true}) {
+				if err != nil {
+					continue
+				}
+				n++
+				if rt.Router.IsValid() || rt.View != 0 || rt.Peer.Type != 0 || rt.Peer.Distinguisher != 0 {
+					t.Fatalf("route %d has BMP fields set: router %v view %d peer type %d distinguisher %d",
+						n, rt.Router, rt.View, rt.Peer.Type, rt.Peer.Distinguisher)
+				}
+			}
+		})
+	}
+}

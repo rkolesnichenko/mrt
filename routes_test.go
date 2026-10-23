@@ -49,12 +49,54 @@ func routesOf(t *testing.T, in []byte) (rs []Route, errs []error) {
 var origin = []byte{0x40, 0x01, 0x01, 0x00} // ORIGIN IGP
 
 func TestKindString(t *testing.T) {
-	if KindRIB.String() != "B" || KindAnnounce.String() != "A" || KindWithdraw.String() != "W" || Kind(0).String() != "?" {
+	if KindRIB.String() != "B" || KindAnnounce.String() != "A" || KindWithdraw.String() != "W" || Kind(0).String() != "?" || KindEndOfRIB.String() != "E" {
 		t.Error("Kind.String")
 	}
 	// The zero Kind is no route: what an error result carries.
-	if KindRIB != 1 || KindAnnounce != 2 || KindWithdraw != 3 {
-		t.Errorf("Kind values %d %d %d, want 1 2 3", KindRIB, KindAnnounce, KindWithdraw)
+	if KindRIB != 1 || KindAnnounce != 2 || KindWithdraw != 3 || KindEndOfRIB != 5 {
+		t.Errorf("Kind values %d %d %d %d, want 1 2 3 5", KindRIB, KindAnnounce, KindWithdraw, KindEndOfRIB)
+	}
+}
+
+func TestViewString(t *testing.T) {
+	for _, c := range []struct {
+		v    View
+		want string
+	}{
+		{0, "unknown"},
+		{ViewAdjRIBInPre, "adj-rib-in-pre"},
+		{ViewAdjRIBInPost, "adj-rib-in-post"},
+		{ViewAdjRIBOutPre, "adj-rib-out-pre"},
+		{ViewAdjRIBOutPost, "adj-rib-out-post"},
+		{ViewLocRIB, "loc-rib"},
+		{6, "unknown"},
+	} {
+		if got := c.v.String(); got != c.want {
+			t.Errorf("View(%d).String() = %q, want %q", uint8(c.v), got, c.want)
+		}
+	}
+	if ViewAdjRIBInPre != 1 || ViewAdjRIBInPost != 2 || ViewAdjRIBOutPre != 3 || ViewAdjRIBOutPost != 4 || ViewLocRIB != 5 {
+		t.Error("View values")
+	}
+}
+
+func TestPeerTypeString(t *testing.T) {
+	for _, c := range []struct {
+		p    PeerType
+		want string
+	}{
+		{PeerGlobal, "global"},
+		{PeerRD, "rd"},
+		{PeerLocal, "local"},
+		{PeerLocRIB, "loc-rib"},
+		{4, "unknown"},
+	} {
+		if got := c.p.String(); got != c.want {
+			t.Errorf("PeerType(%d).String() = %q, want %q", uint8(c.p), got, c.want)
+		}
+	}
+	if PeerGlobal != 0 || PeerRD != 1 || PeerLocal != 2 || PeerLocRIB != 3 {
+		t.Error("PeerType values")
 	}
 }
 
