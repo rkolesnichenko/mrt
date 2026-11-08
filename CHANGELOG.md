@@ -13,8 +13,8 @@ a minor version may change the API.
 - `bgp`: an AS_PATH or AS4_PATH that is one segment of up to 16 ASNs (most
   paths) is decoded into one allocation instead of two; any other path takes
   two, where it took one per segment plus the growth of the segment list.
-  Every segment's ASN capacity equals its length, as before, and so now does
-  the segment list's. A run of NLRI (UPDATE, MP_REACH,
+  As parsed, every segment's ASN capacity equals its length, as before, and
+  so now does the segment list's. A run of NLRI (UPDATE, MP_REACH,
   MP_UNREACH) is counted first and allocated once, exactly sized, where it
   grew by appending. Results are unchanged (goldens, `TestLossless`,
   `TestInternerMatchesDecode`); `TestAllocations` ceilings are lowered to
@@ -24,8 +24,10 @@ a minor version may change the API.
 
 go1.27.3 darwin/arm64, main (a2cdc8d) against this release:
 
-- Routes allocations (`testing.AllocsPerRun`, `.data/allocs-v042.log` and
-  `.data/bench-v042.log`): rv2-rib 126,623 → 94,841 (−25%), rv6-rib
+- Routes allocations (allocs/op of `BenchmarkRoutes -benchmem`,
+  `.data/bench-v042.log`; the same counts with `testing.AllocsPerRun` in
+  `.data/allocs-v041.log` for main and `.data/allocs-v042.log` for this
+  release): rv2-rib 126,623 → 94,841 (−25%), rv6-rib
   131,086 → 106,197 (−19%), rv2-updates-et 77,091 → 61,554 (−20%),
   rvwide-rib 54,254 → 41,494 (−24%); −7% to −25% over all eight fixtures.
 - Routes bytes per op (`BenchmarkRoutes -benchmem`, `.data/bench-v042.log`):

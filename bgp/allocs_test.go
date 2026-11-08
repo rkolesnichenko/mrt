@@ -16,28 +16,25 @@ func TestParseASPathAllocations(t *testing.T) {
 		return a
 	}
 	for _, tc := range []struct {
-		name string
-		v    []byte
-		want float64
+		name  string
+		width int
+		v     []byte
+		want  float64
 	}{
-		{"empty", nil, 0},
-		{"1 ASN", seg(4, ASSequence, asns(1)...), 1},
-		{"4 ASNs", seg(4, ASSequence, asns(4)...), 1},
-		{"5 ASNs", seg(4, ASSequence, asns(5)...), 1},
-		{"16 ASNs", seg(4, ASSequence, asns(16)...), 1},
-		{"17 ASNs", seg(4, ASSequence, asns(17)...), 2},
-		{"255 ASNs", seg(4, ASSequence, asns(255)...), 2},
-		{"sequence and set", concat(seg(4, ASSequence, asns(3)...), seg(4, ASSet, asns(2)...)), 2},
-		{"five segments", concat(seg(2, ASSequence, 1), seg(2, ASSet, 2), seg(2, ASSequence, 3), seg(2, ASConfedSet, 4), seg(2, ASSequence, 5)), 2},
+		{"empty", 4, nil, 0},
+		{"1 ASN", 4, seg(4, ASSequence, asns(1)...), 1},
+		{"4 ASNs", 4, seg(4, ASSequence, asns(4)...), 1},
+		{"5 ASNs", 4, seg(4, ASSequence, asns(5)...), 1},
+		{"16 ASNs", 4, seg(4, ASSequence, asns(16)...), 1},
+		{"17 ASNs", 4, seg(4, ASSequence, asns(17)...), 2},
+		{"255 ASNs", 4, seg(4, ASSequence, asns(255)...), 2},
+		{"sequence and set", 4, concat(seg(4, ASSequence, asns(3)...), seg(4, ASSet, asns(2)...)), 2},
+		{"five segments", 2, concat(seg(2, ASSequence, 1), seg(2, ASSet, 2), seg(2, ASSequence, 3), seg(2, ASConfedSet, 4), seg(2, ASSequence, 5)), 2},
 	} {
-		width := 4
-		if tc.name == "five segments" {
-			width = 2
-		}
-		if _, ok := parseASPath(tc.v, width); !ok {
+		if _, ok := parseASPath(tc.v, tc.width); !ok {
 			t.Fatalf("%s: does not parse", tc.name)
 		}
-		if got := testing.AllocsPerRun(100, func() { parseASPath(tc.v, width) }); got != tc.want {
+		if got := testing.AllocsPerRun(100, func() { parseASPath(tc.v, tc.width) }); got != tc.want {
 			t.Errorf("%s: %v allocations, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -70,10 +67,10 @@ func TestParseASPathSegmentsApart(t *testing.T) {
 		if got := fmt.Sprint(p); got != want {
 			t.Errorf("%d ASNs: appending changed the path: %s, was %s", n, got, want)
 		}
-		one, _ := parseASPath(seg(4, ASSequence, 1, 2), 4)
-		if s := one.Segments; cap(s) != len(s) || cap(s[0].ASNs) != len(s[0].ASNs) {
-			t.Errorf("single segment: Segments cap %d, ASNs cap %d", cap(s), cap(s[0].ASNs))
-		}
+	}
+	one, _ := parseASPath(seg(4, ASSequence, 1, 2), 4)
+	if s := one.Segments; cap(s) != len(s) || cap(s[0].ASNs) != len(s[0].ASNs) {
+		t.Errorf("single segment: Segments cap %d, ASNs cap %d", cap(s), cap(s[0].ASNs))
 	}
 }
 
