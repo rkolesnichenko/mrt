@@ -39,6 +39,9 @@ func parseNLRI(b []byte, afi AFI, addPath bool) ([]NLRI, []Diagnostic) {
 		out   []NLRI
 		diags []Diagnostic
 	)
+	if n := countNLRI(b, maxBits, addPath); n > 0 {
+		out = make([]NLRI, 0, n)
+	}
 	fail := func(off int, msg string) {
 		diags = append(diags, Diagnostic{SeverityError, DiagNLRILength, off, 0, msg})
 	}
@@ -83,4 +86,30 @@ func parseNLRI(b []byte, afi AFI, addPath bool) ([]NLRI, []Diagnostic) {
 		out = append(out, n)
 	}
 	return out, diags
+}
+
+// countNLRI is the number of whole prefixes parseNLRI yields from b: it
+// applies the same checks and stops where parseNLRI stops. Each prefix takes
+// at least one byte, so the count never exceeds len(b).
+func countNLRI(b []byte, maxBits int, addPath bool) int {
+	n := 0
+	for off := 0; off < len(b); n++ {
+		if addPath {
+			if len(b)-off < 5 {
+				break
+			}
+			off += 4
+		}
+		plen := int(b[off])
+		off++
+		if plen > maxBits {
+			break
+		}
+		nb := (plen + 7) / 8
+		if len(b)-off < nb {
+			break
+		}
+		off += nb
+	}
+	return n
 }
