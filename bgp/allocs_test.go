@@ -8,6 +8,9 @@ import (
 // TestParseASPathAllocations: a single segment of up to 16 ASNs is one
 // allocation, any other path two, whatever its number of segments.
 func TestParseASPathAllocations(t *testing.T) {
+	if raceEnabled {
+		t.Skip("the race detector makes allocation counts vary")
+	}
 	asns := func(n int) []uint32 {
 		a := make([]uint32, n)
 		for i := range a {
@@ -75,7 +78,8 @@ func TestParseASPathSegmentsApart(t *testing.T) {
 }
 
 // TestParseNLRIAllocations: the prefixes of a run are one allocation, sized
-// exactly, also when the run stops at a broken prefix.
+// exactly, also when the run stops at a broken prefix. The counts are not
+// checked under -race.
 func TestParseNLRIAllocations(t *testing.T) {
 	var v4, v6, addPath []byte
 	for i := range 50 {
@@ -101,6 +105,9 @@ func TestParseNLRIAllocations(t *testing.T) {
 		got, diags := parseNLRI(tc.b, tc.afi, tc.addPath)
 		if len(got) != tc.n || cap(got) != tc.n || len(diags) != tc.diags {
 			t.Errorf("%s: %d prefixes (cap %d), %d diagnostics; want %d, %d", tc.name, len(got), cap(got), len(diags), tc.n, tc.diags)
+		}
+		if raceEnabled {
+			continue // the counts vary under the race detector
 		}
 		want := 1.0
 		if tc.diags > 0 {
