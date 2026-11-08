@@ -61,9 +61,11 @@ func nextTLV(b []byte) (TLV, []byte, error) {
 }
 
 // tlvs walks the TLVs of b in order. When one runs past b it yields one
-// (TLV{}, err) wrapping ErrMalformed and stops.
-func tlvs(b []byte) iter.Seq2[TLV, error] {
+// (TLV{}, err) wrapping ErrMalformed and stops. Every range starts again at
+// the first TLV.
+func tlvs(all []byte) iter.Seq2[TLV, error] {
 	return func(yield func(TLV, error) bool) {
+		b := all
 		for len(b) > 0 {
 			t, rest, err := nextTLV(b)
 			if err != nil {

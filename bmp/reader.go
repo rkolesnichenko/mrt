@@ -60,9 +60,11 @@ func MessagesWith(r io.Reader, opts Options) iter.Seq2[Message, error] {
 				yield(nil, err)
 			}
 		}
+		// hb escapes to the heap (io.ReadFull takes an io.Reader), so it is
+		// declared once per range, not once per message.
+		var hb [commonHeaderLen]byte
 		for {
 			start := off
-			var hb [commonHeaderLen]byte
 			n, err := io.ReadFull(br, hb[:])
 			off += int64(n)
 			if err != nil {

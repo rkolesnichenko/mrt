@@ -8,6 +8,35 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-08
+
+### Fixed
+
+- `bmp`: `Initiation.Info`, `Termination.Info`, `PeerDown.Info`,
+  `PeerUpBody.Info` and `RouteMirroring.TLVs` yielded nothing when the same
+  sequence was ranged a second time; every range now starts at the first TLV.
+
+### Changed
+
+- `Records`/`RecordsWith` and `bmp.Messages`/`MessagesWith` allocate the
+  header buffer once per range instead of once per record, one allocation
+  less per record or message (Measured).
+- Tests: `TestAllocations` in the root and in `bmp` is an allocation gate.
+  Records and Messages stay at 2 allocations per record or message, and
+  Routes (with and without an `Interner`) stays under per-fixture ceilings.
+
+### Measured
+
+Allocation counts with `testing.AllocsPerRun`, go1.27.3 darwin/arm64, main
+(7242118) against this release (log `.data/allocs-v041.log`, which also has
+the go1.23.0 counts, within 1 of these for Records and Messages):
+
+- Records over rv2-rib.20261015.1200 (2,000 records): 6,010 → 4,010, so
+  3.00 → 2.00 per record; on every `testdata/mrt` fixture the count falls by
+  exactly the number of records.
+- `bmp.Messages` over the 16 `testdata/bmp/*.bmp` fixtures (185 messages,
+  5 errors): 705 → 516.
+
 ## [0.4.0] - 2026-10-23
 
 v0.4.0 adds a BMP reader. The API additions are listed below; `git diff v0.3.2 v0.4.0 -- api/`
@@ -640,7 +669,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/rkolesnichenko/mrt/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/rkolesnichenko/mrt/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/rkolesnichenko/mrt/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/rkolesnichenko/mrt/compare/v0.3.0...v0.3.1
