@@ -363,6 +363,29 @@ func TestRouteMirroringTLVs(t *testing.T) {
 	wantTLVs(t, tlvs, TLV{TLVMirrorInformation, []byte{0, 1}}, TLV{TLVMirrorBGPMessage, emptyUpdate})
 }
 
+// TestTLVSeqReusable: a TLV sequence yields the same TLVs every time it is
+// ranged, also after a range that stopped early.
+func TestTLVSeqReusable(t *testing.T) {
+	two := [][]byte{tlv(0, 'a'), tlv(1, 'b')}
+	want := []TLV{{0, []byte("a")}, {1, []byte("b")}}
+	for name, seq := range map[string]iter.Seq2[TLV, error]{
+		"tlvs":                tlvs(cat(two...)),
+		"Initiation.Info":     mustParse[Initiation](t, bmpMsg(4, two...)).Info(),
+		"Termination.Info":    mustParse[Termination](t, bmpMsg(5, two...)).Info(),
+		"RouteMirroring.TLVs": mustParse[RouteMirroring](t, bmpMsg(6, append([][]byte{defaultPeer().bytes()}, two...)...)).TLVs(),
+	} {
+		for range seq {
+			break
+		}
+		for pass := range 2 {
+			got, errs := walk(seq)
+			if len(errs) != 0 || !reflect.DeepEqual(got, want) {
+				t.Errorf("%s, range %d: %v, %v; want %v", name, pass+2, got, errs, want)
+			}
+		}
+	}
+}
+
 // TestWalkAllocations: a TLV walk allocates nothing per TLV.
 func TestWalkAllocations(t *testing.T) {
 	allocs := func(n int) float64 {
