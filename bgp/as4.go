@@ -15,8 +15,13 @@ type as4State struct {
 // is type(1) count(1) then count ASNs. The value must be consumed exactly; a
 // segment type outside 1–4, a count of 0, or bytes missing or left over makes
 // it malformed (ok false). An empty value is the empty path.
+//
+// A first pass validates and counts, so the path is one allocation when it is
+// a single segment of up to 16 ASNs (most paths) and two otherwise: the
+// segments, and every segment's ASNs in one array. Every slice's capacity is
+// its length, so an append to one segment never writes into the next.
 func parseASPath(v []byte, width int) (ASPath, bool) {
-	var segs []Segment
+	nsegs, nasns := 0, 0
 	for off := 0; off < len(v); {
 		if len(v)-off < 2 {
 			return ASPath{}, false
@@ -26,18 +31,67 @@ func parseASPath(v []byte, width int) (ASPath, bool) {
 		if typ < ASSet || typ > ASConfedSet || n == 0 || len(v)-off < n*width {
 			return ASPath{}, false
 		}
-		asns := make([]ASN, n)
-		for i := range asns {
+		off += n * width
+		nsegs++
+		nasns += n
+	}
+	if nsegs == 0 {
+		return ASPath{}, true
+	}
+	segs, asns := pathArrays(nsegs, nasns)
+	off := 0
+	for i := range segs {
+		typ, n := SegmentType(v[off]), int(v[off+1])
+		off += 2
+		s := asns[:n:n]
+		asns = asns[n:]
+		for j := range s {
 			if width == 2 {
-				asns[i] = ASN(v[off])<<8 | ASN(v[off+1])
+				s[j] = ASN(v[off])<<8 | ASN(v[off+1])
 			} else {
-				asns[i] = ASN(be32(v[off:]))
+				s[j] = ASN(be32(v[off:]))
 			}
 			off += width
 		}
-		segs = append(segs, Segment{typ, asns})
+		segs[i] = Segment{typ, s}
 	}
 	return ASPath{segs}, true
+}
+
+// pathArrays returns nsegs segments and nasns ASNs, zeroed, each with
+// capacity equal to its length. One segment of up to 16 ASNs comes from one
+// object, in four sizes (the 48, 64, 80 and 96-byte size classes on 64-bit),
+// so a path holds at most 3 unused ASN slots.
+func pathArrays(nsegs, nasns int) ([]Segment, []ASN) {
+	if nsegs == 1 {
+		switch {
+		case nasns <= 4:
+			b := new(struct {
+				s [1]Segment
+				a [4]ASN
+			})
+			return b.s[:], b.a[:nasns:nasns]
+		case nasns <= 8:
+			b := new(struct {
+				s [1]Segment
+				a [8]ASN
+			})
+			return b.s[:], b.a[:nasns:nasns]
+		case nasns <= 12:
+			b := new(struct {
+				s [1]Segment
+				a [12]ASN
+			})
+			return b.s[:], b.a[:nasns:nasns]
+		case nasns <= 16:
+			b := new(struct {
+				s [1]Segment
+				a [16]ASN
+			})
+			return b.s[:], b.a[:nasns:nasns]
+		}
+	}
+	return make([]Segment, nsegs), make([]ASN, nasns)
 }
 
 // mergeAS4 builds the AS path from AS_PATH and AS4_PATH by RFC 6793 §4.2.3.

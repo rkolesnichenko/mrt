@@ -35,17 +35,17 @@ func TestAllocations(t *testing.T) {
 	if strconv.IntSize != 64 {
 		t.Skip("the ceilings are measured on 64-bit platforms")
 	}
-	// Measured on darwin/arm64 at release-0.4.1, the higher of the two
-	// toolchains plus 5% (.data/allocs-v041.log).
+	// Measured on darwin/arm64 at release-0.4.2, the higher of the two
+	// toolchains plus 5% (.data/allocs-v042.log).
 	ceilings := map[string]struct{ routes, interner float64 }{
-		"rv2-rib.20261015.1200":         {132957, 30790},
-		"rv2-tabledump.20070601.0025":   {59043, 69686},
-		"rv2-updates-as2.20110601.1200": {89160, 130178},
-		"rv2-updates-et.20261015.1200":  {80948, 120934},
-		"rv6-rib.20261015.1200":         {137643, 104275},
-		"rv6-tabledump.20070601.0123":   {29483, 47003},
-		"rv6-updates-et.20261015.1200":  {4029, 6463},
-		"rvwide-rib.20261015.1200":      {56969, 24894},
+		"rv2-rib.20261015.1200":         {99586, 27883},
+		"rv2-tabledump.20070601.0025":   {48544, 63790},
+		"rv2-updates-as2.20110601.1200": {71769, 112800},
+		"rv2-updates-et.20261015.1200":  {64634, 104630},
+		"rv6-rib.20261015.1200":         {111509, 95452},
+		"rv6-tabledump.20070601.0123":   {24205, 42543},
+		"rv6-updates-et.20261015.1200":  {3731, 6165},
+		"rvwide-rib.20261015.1200":      {43571, 23149},
 	}
 	paths, err := filepath.Glob("testdata/mrt/*.gz")
 	if err != nil || len(paths) == 0 {
