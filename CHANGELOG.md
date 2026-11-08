@@ -8,6 +8,36 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+### Changed
+
+- `bgp`: an AS_PATH or AS4_PATH that is one segment of up to 16 ASNs (most
+  paths) is decoded into one allocation instead of two; any other path takes
+  two, where it took one per segment plus the growth of the segment list.
+  Every segment's ASN capacity equals its length, as before, and so now does
+  the segment list's. A run of NLRI (UPDATE, MP_REACH,
+  MP_UNREACH) is counted first and allocated once, exactly sized, where it
+  grew by appending. Results are unchanged (goldens, `TestLossless`,
+  `TestInternerMatchesDecode`); `TestAllocations` ceilings are lowered to
+  match.
+
+### Measured
+
+go1.27.3 darwin/arm64, main (a2cdc8d) against this release:
+
+- Routes allocations (`testing.AllocsPerRun`, `.data/allocs-v042.log` and
+  `.data/bench-v042.log`): rv2-rib 126,623 → 94,841 (−25%), rv6-rib
+  131,086 → 106,197 (−19%), rv2-updates-et 77,091 → 61,554 (−20%),
+  rvwide-rib 54,254 → 41,494 (−24%); −7% to −25% over all eight fixtures.
+- Routes bytes per op (`BenchmarkRoutes -benchmem`, `.data/bench-v042.log`):
+  −13.5% (rv2-updates-et) to +1.0% (rv2-rib); the RIB fixtures rise by
+  0.4–1.0% because a short path's ASN array is rounded up to 4, 8, 12 or 16.
+- Time (`BenchmarkRoutes`, three alternating rounds of `-count=2` under
+  memguard at normal priority, `.data/bench-v042.log`): the runs were noisy
+  (one main run of rv2-rib took 15.9 ms against a best of 4.77 ms), so only
+  the best run of each side is compared: 5.1% (rv2-tabledump) to 9.0%
+  (rv2-rib, 4.77 → 4.34 ms) faster on all eight fixtures. Means over the
+  six runs are not a reliable measure here.
+
 ## [0.4.1] - 2026-11-08
 
 ### Fixed
