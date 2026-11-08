@@ -14,17 +14,21 @@ import (
 	"github.com/rkolesnichenko/mrt/bgp"
 )
 
-// TestAllocations is the allocation gate: allocation counts are
-// deterministic, so a change that adds allocations to the decode path fails
-// here, where a timing benchmark would only drift. Records allocates two
-// objects per record (the record's bytes and the Record interface value);
-// Routes and Routes with an Interner are held to ceilings about 5% above the
-// counts measured with Go 1.23.0 and 1.27.3 on 64-bit. A change that lowers
-// a count should lower its ceiling.
+// TestAllocations is the allocation gate: allocation counts are nearly
+// deterministic (with an Interner, map growth depends on the hash seed by a
+// few allocations), so a change that adds allocations to the decode path
+// fails here, where a timing benchmark would only drift. Records allocates
+// two objects per record (the record's bytes and the Record interface
+// value) and at most perError per error; Routes and Routes with an Interner
+// are held to ceilings about 5% above the counts measured with Go 1.23.0 and
+// 1.27.3 on darwin/arm64. A change that lowers a count should lower its
+// ceiling; a new Go release that allocates more in the runtime or in fmt may
+// need new ceilings, measured with both toolchains again.
 //
 // The counts are for 64-bit platforms without the race detector, which
 // inflates allocation.
 func TestAllocations(t *testing.T) {
+	const perError = 8
 	if mrt.RaceEnabled {
 		t.Skip("the race detector inflates allocation")
 	}
@@ -32,7 +36,7 @@ func TestAllocations(t *testing.T) {
 		t.Skip("the ceilings are measured on 64-bit platforms")
 	}
 	// Measured on darwin/arm64 at release-0.4.1, the higher of the two
-	// toolchains plus 5%.
+	// toolchains plus 5% (.data/allocs-v041.log).
 	ceilings := map[string]struct{ routes, interner float64 }{
 		"rv2-rib.20261015.1200":         {132957, 30790},
 		"rv2-tabledump.20070601.0025":   {59043, 69686},
@@ -51,17 +55,21 @@ func TestAllocations(t *testing.T) {
 		name := strings.TrimSuffix(filepath.Base(p), ".gz")
 		t.Run(name, func(t *testing.T) {
 			d := gunzip(t, p)
-			records := 0
-			for range mrt.Records(bytes.NewReader(d)) {
-				records++
+			records, errs := 0, 0
+			for _, err := range mrt.Records(bytes.NewReader(d)) {
+				if err != nil {
+					errs++
+				} else {
+					records++
+				}
 			}
 			got := testing.AllocsPerRun(3, func() {
 				for range mrt.Records(bytes.NewReader(d)) {
 				}
 			})
 			// The constant covers the bufio.Reader and the iterator's state.
-			if limit := float64(2*records + 16); got > limit {
-				t.Errorf("Records: %.0f allocations for %d records, want at most %.0f (2 per record)", got, records, limit)
+			if limit := float64(2*records + perError*errs + 16); got > limit {
+				t.Errorf("Records: %.0f allocations for %d records and %d errors, want at most %.0f (2 per record, %d per error)", got, records, errs, limit, perError)
 			}
 			c, ok := ceilings[name]
 			if !ok {

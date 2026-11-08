@@ -368,8 +368,15 @@ func TestRouteMirroringTLVs(t *testing.T) {
 func TestTLVSeqReusable(t *testing.T) {
 	two := [][]byte{tlv(0, 'a'), tlv(1, 'b')}
 	want := []TLV{{0, []byte("a")}, {1, []byte("b")}}
+	open := openMsg(capParam(capMP))
+	up, err := mustParse[PeerUp](t, bmpMsg(3, defaultPeer().bytes(), make([]byte, 16), u16(179), u16(179), open, open, cat(two...))).Body()
+	if err != nil {
+		t.Fatalf("PeerUp.Body: %v", err)
+	}
 	for name, seq := range map[string]iter.Seq2[TLV, error]{
 		"tlvs":                tlvs(cat(two...)),
+		"PeerDown.Info":       mustParse[PeerDown](t, bmpMsg(2, defaultPeer().bytes(), []byte{byte(PeerDownLocalTLV)}, cat(two...))).Info(),
+		"PeerUpBody.Info":     up.Info(),
 		"Initiation.Info":     mustParse[Initiation](t, bmpMsg(4, two...)).Info(),
 		"Termination.Info":    mustParse[Termination](t, bmpMsg(5, two...)).Info(),
 		"RouteMirroring.TLVs": mustParse[RouteMirroring](t, bmpMsg(6, append([][]byte{defaultPeer().bytes()}, two...)...)).TLVs(),

@@ -17,12 +17,23 @@ a minor version may change the API.
 ### Changed
 
 - `Records`/`RecordsWith` and `bmp.Messages`/`MessagesWith` allocate the
-  header buffer once per range instead of once per record: Records makes 2
-  allocations per record instead of 3 (`TestAllocations`, every
-  `testdata/mrt` fixture).
+  header buffer once per range instead of once per record, one allocation
+  less per record or message (Measured).
 - Tests: `TestAllocations` in the root and in `bmp` is an allocation gate.
   Records and Messages stay at 2 allocations per record or message, and
   Routes (with and without an `Interner`) stays under per-fixture ceilings.
+
+### Measured
+
+Allocation counts with `testing.AllocsPerRun`, go1.27.3 darwin/arm64, main
+(7242118) against this release (log `.data/allocs-v041.log`, which also has
+the go1.23.0 counts, within 1 of these for Records and Messages):
+
+- Records over rv2-rib.20261015.1200 (2,000 records): 6,010 → 4,010, so
+  3.00 → 2.00 per record; on every `testdata/mrt` fixture the count falls by
+  exactly the number of records.
+- `bmp.Messages` over the 16 `testdata/bmp/*.bmp` fixtures (185 messages,
+  5 errors): 705 → 516.
 
 ## [0.4.0] - 2026-10-23
 
