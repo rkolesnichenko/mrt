@@ -84,9 +84,12 @@ func RecordsWith(r io.Reader, opts Options) iter.Seq2[Record, error] {
 				yield(nil, err)
 			}
 		}
+		// hb escapes to the heap (io.ReadFull takes an io.Reader), so it is
+		// declared once per range, not once per record. Each record reads
+		// only the bytes it has just written.
+		var hb [16]byte
 		for {
 			start := off
-			var hb [16]byte
 			n, err := io.ReadFull(br, hb[:12])
 			off += int64(n)
 			if err != nil {
