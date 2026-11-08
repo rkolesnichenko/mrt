@@ -8,6 +8,22 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+### Fixed
+
+- `bmp`: `Initiation.Info`, `Termination.Info`, `PeerDown.Info`,
+  `PeerUpBody.Info` and `RouteMirroring.TLVs` yielded nothing when the same
+  sequence was ranged a second time; every range now starts at the first TLV.
+
+### Changed
+
+- `Records`/`RecordsWith` and `bmp.Messages`/`MessagesWith` allocate the
+  header buffer once per range instead of once per record: Records makes 2
+  allocations per record instead of 3 (`TestAllocations`, every
+  `testdata/mrt` fixture).
+- Tests: `TestAllocations` in the root and in `bmp` is an allocation gate.
+  Records and Messages stay at 2 allocations per record or message, and
+  Routes (with and without an `Interner`) stays under per-fixture ceilings.
+
 ## [0.4.0] - 2026-10-23
 
 v0.4.0 adds a BMP reader. The API additions are listed below; `git diff v0.3.2 v0.4.0 -- api/`
