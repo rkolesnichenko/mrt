@@ -45,6 +45,7 @@ func MessagesWith(r io.Reader, opts Options) iter.Seq2[Message, error] {
 	if !ok {
 		br = bufio.NewReader(r)
 	}
+	s := &stream{br: br}
 	var (
 		off  int64 // of the next message in the stream
 		done bool  // the stream ended, at its end or with an error
@@ -60,12 +61,12 @@ func MessagesWith(r io.Reader, opts Options) iter.Seq2[Message, error] {
 				yield(nil, err)
 			}
 		}
-		// hb escapes to the heap (io.ReadFull takes an io.Reader), so it is
+		// hb escapes to the heap (bufio passes it to the underlying reader), so it is
 		// declared once per range, not once per message.
 		var hb [commonHeaderLen]byte
 		for {
 			start := off
-			n, err := io.ReadFull(br, hb[:])
+			n, err := s.readFull(hb[:])
 			off += int64(n)
 			if err != nil {
 				if n == 0 && err == io.EOF {
@@ -92,7 +93,7 @@ func MessagesWith(r io.Reader, opts Options) iter.Seq2[Message, error] {
 			}
 			bodyLen := int64(h.Length) - commonHeaderLen
 			if h.Length > limit {
-				n, err := io.CopyN(io.Discard, br, bodyLen)
+				n, err := s.discard(bodyLen)
 				off += n
 				if err != nil {
 					end(endErr(start, h, err))
@@ -103,7 +104,7 @@ func MessagesWith(r io.Reader, opts Options) iter.Seq2[Message, error] {
 				}
 				continue
 			}
-			raw, got, err := readMessage(br, hb[:], bodyLen)
+			raw, got, err := readMessage(s, hb[:], bodyLen)
 			off += got
 			if err != nil {
 				end(endErr(start, h, err))
@@ -135,6 +136,69 @@ func endErr(off int64, h Header, err error) error {
 	return fmt.Errorf("bmp: reading message at offset %d: %w", off, err)
 }
 
+// stream is the bufio.Reader that Messages reads, with the error that came
+// with the bytes completing a read held for the next read. It and its methods
+// are a copy of reader.go's in package mrt; change both, and openbmp's
+// frameReader, which holds errors the same way without bufio.
+type stream struct {
+	br  *bufio.Reader
+	err error
+}
+
+// readFull is io.ReadFull, except that an error the reader returns with the
+// bytes that complete p is held and returned by the next read, not dropped.
+// bufio does the same for the reads it buffers, but when its buffer is empty
+// it hands a read at least as long as the buffer straight to the underlying
+// reader and returns that reader's error with the bytes, once; io.ReadFull
+// drops it when the bytes complete p. So the message those bytes complete is
+// yielded, and the error comes after it, whichever way bufio read them.
+func (s *stream) readFull(p []byte) (int, error) {
+	if s.err != nil && len(p) > 0 {
+		err := s.err
+		s.err = nil
+		return 0, err
+	}
+	n := 0
+	for n < len(p) {
+		k, err := s.br.Read(p[n:])
+		n += k
+		if err != nil {
+			if n == len(p) {
+				s.err = err
+				return n, nil
+			}
+			if err == io.EOF && n > 0 {
+				err = io.ErrUnexpectedEOF
+			}
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+// discard skips n bytes, keeping a reader error as readFull does. io.CopyN
+// drops one that comes with the last bytes, and bufio.Reader.Discard refills
+// its buffer even while it holds an error, reading past it; Peek does not.
+// So each pass fills the buffer with Peek and discards only what it holds.
+func (s *stream) discard(n int64) (int64, error) {
+	if s.err != nil && n > 0 {
+		err := s.err
+		s.err = nil
+		return 0, err
+	}
+	var got int64
+	for got < n {
+		if s.br.Buffered() == 0 {
+			if _, err := s.br.Peek(1); err != nil {
+				return got, err
+			}
+		}
+		k, _ := s.br.Discard(int(min(n-got, int64(s.br.Buffered()))))
+		got += int64(k)
+	}
+	return got, nil
+}
+
 // smallBody is the largest body allocated in one piece before any of it is read.
 const smallBody = 64 << 10
 
@@ -144,11 +208,11 @@ const smallBody = 64 << 10
 // so a header that lies about its length allocates, in total, about four
 // times the bytes present, and under five.
 // It returns the number of body bytes consumed.
-func readMessage(br *bufio.Reader, hdr []byte, bodyLen int64) ([]byte, int64, error) {
+func readMessage(s *stream, hdr []byte, bodyLen int64) ([]byte, int64, error) {
 	if bodyLen <= smallBody {
 		raw := make([]byte, len(hdr)+int(bodyLen))
 		copy(raw, hdr)
-		n, err := io.ReadFull(br, raw[len(hdr):])
+		n, err := s.readFull(raw[len(hdr):])
 		return raw, int64(n), err
 	}
 	raw := make([]byte, len(hdr), len(hdr)+smallBody)
@@ -161,7 +225,7 @@ func readMessage(br *bufio.Reader, hdr []byte, bodyLen int64) ([]byte, int64, er
 		}
 		chunk = min(chunk, bodyLen-got)
 		raw = slices.Grow(raw, int(chunk))
-		n, err := io.ReadFull(br, raw[len(raw):len(raw)+int(chunk)])
+		n, err := s.readFull(raw[len(raw) : len(raw)+int(chunk)])
 		raw = raw[:len(raw)+n]
 		got += int64(n)
 		if err != nil {

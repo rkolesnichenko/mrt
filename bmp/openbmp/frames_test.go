@@ -1,15 +1,19 @@
 package openbmp_test
 
 import (
+	"bufio"
 	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/netip"
 	"runtime"
 	"strconv"
 	"testing"
+	"testing/iotest"
 
 	"github.com/rkolesnichenko/mrt/bmp/openbmp"
 )
@@ -97,20 +101,169 @@ func (e *errAt) Read(p []byte) (int, error) {
 	return e.r.Read(p)
 }
 
-// TestFramesReaderError: a reader error that comes with a frame's last bytes
-// ends the sequence with that error, and the frame is not yielded, whether or
-// not the reader returns the error again.
+// TestFramesReaderError: a reader error ends the sequence with that error,
+// whether or not the reader returns it again, and whether or not r is a
+// bufio.Reader. Every frame whose bytes came before the error, or with it, is
+// yielded first, as bufio does for the reads it buffers: it holds the error
+// for the next read.
 func TestFramesReaderError(t *testing.T) {
 	boom := errors.New("boom")
 	for _, size := range []int{100, 300 << 10} {
 		f := bigFrame(size)
 		in := bytes.Join([][]byte{f, f}, nil)
-		for _, sticky := range []bool{true, false} {
-			r := &errAt{r: bytes.NewReader(in), at: int64(len(f)), err: boom, sticky: sticky}
-			frames, errs := collect(t, r)
-			if len(frames) != 0 || len(errs) != 1 || errs[0] != boom {
-				t.Errorf("%d-byte message, sticky %v: %d frames, errors %v; want only %v", size, sticky, len(frames), errs, boom)
+		for _, c := range []struct {
+			name   string
+			at     int
+			frames int
+		}{
+			{"first prefix complete", 12, 0},
+			{"first frame complete", len(f), 1},
+			{"inside second prefix", len(f) + 5, 1},
+			{"second prefix complete", len(f) + 12, 1},
+			{"second frame complete", 2 * len(f), 2},
+		} {
+			for _, sticky := range []bool{true, false} {
+				for _, bufSize := range []int{0, 16, 64 << 10} {
+					var r io.Reader = &errAt{r: bytes.NewReader(in), at: int64(c.at), err: boom, sticky: sticky}
+					if bufSize != 0 {
+						r = bufio.NewReaderSize(r, bufSize)
+					}
+					frames, errs := collect(t, r)
+					if len(frames) != c.frames || len(errs) != 1 || errs[0] != boom {
+						t.Errorf("%d-byte message, error at %s (byte %d), sticky %v, bufio %d: %d frames, errors %v; want %d frames, then only %v",
+							size, c.name, c.at, sticky, bufSize, len(frames), errs, c.frames, boom)
+					}
+				}
 			}
+		}
+	}
+}
+
+// TestFramesReaderErrorResume: a range that breaks after the frame whose last
+// bytes came with the error, ranged again, yields the error once; a third
+// range yields nothing.
+func TestFramesReaderErrorResume(t *testing.T) {
+	boom := errors.New("boom")
+	f := bigFrame(100)
+	seq := openbmp.Frames(&errAt{r: bytes.NewReader(bytes.Join([][]byte{f, f}, nil)), at: int64(len(f)), err: boom})
+	first := 0
+	for _, err := range seq {
+		if err != nil {
+			t.Fatalf("first range: %v", err)
+		}
+		first++
+		break
+	}
+	frames := 0
+	var errs []error
+	for _, err := range seq {
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		frames++
+	}
+	third := 0
+	for range seq {
+		third++
+	}
+	if first != 1 || frames != 0 || len(errs) != 1 || errs[0] != boom || third != 0 {
+		t.Errorf("first range %d frames; second %d frames, errors %v; third %d results; want 1, then 0 and only %v, then 0", first, frames, errs, third, boom)
+	}
+}
+
+// TestFramesDataEOF: a reader that returns io.EOF with its last bytes
+// (iotest.DataErrReader) reads the same frames and the same truncation errors
+// as one that returns io.EOF on its own, and a stream that ends inside a
+// frame is ErrTruncated also when the reader says io.ErrUnexpectedEOF, as
+// compress/gzip does over a cut file.
+func TestFramesDataEOF(t *testing.T) {
+	f := bigFrame(100)
+	trunc := openbmp.ErrTruncated.Error()
+	for _, c := range []struct {
+		name   string
+		in     []byte
+		frames int
+		err    string // "" for no error
+	}{
+		{"two frames", bytes.Join([][]byte{f, f}, nil), 2, ""},
+		{"inside the prefix", f[:5], 0, trunc + ": 5 bytes of the 12-byte prefix"},
+		{"after the prefix", f[:12], 0, fmt.Sprintf("%s: 12 of %d bytes", trunc, len(f))},
+		{"inside the second prefix", append(bytes.Clone(f), f[:7]...), 1, trunc + ": 7 bytes of the 12-byte prefix"},
+		{"after the second prefix", append(bytes.Clone(f), f[:12]...), 1, fmt.Sprintf("%s: 12 of %d bytes", trunc, len(f))},
+		{"inside the frame", f[:len(f)-1], 0, fmt.Sprintf("%s: %d of %d bytes", trunc, len(f)-1, len(f))},
+		{"bad magic", append([]byte("OBMX"), f[4:12]...), 0, openbmp.ErrNotOpenBMP.Error()},
+		// A stream that ends with a prefix whose lengths are bad reports the
+		// lengths, not the cut.
+		{"bad header length", []byte("OBMP\x01\x07\x00\x10\x00\x00\x00\x00"), 0,
+			openbmp.ErrMalformed.Error() + ": stated header length 16 is below the minimum 78"},
+	} {
+		for _, r := range []struct {
+			name string
+			r    io.Reader
+		}{
+			{"plain", bytes.NewReader(c.in)},
+			{"data with EOF", iotest.DataErrReader(bytes.NewReader(c.in))},
+			{"one byte with EOF", iotest.DataErrReader(oneByte{bytes.NewReader(c.in)})},
+		} {
+			frames, errs := collect(t, r.r)
+			var got string
+			if len(errs) > 0 {
+				got = errs[0].Error()
+			}
+			if len(frames) != c.frames || len(errs) > 1 || got != c.err {
+				t.Errorf("%s, %s reader: %d frames, errors %v; want %d frames, error %q", c.name, r.name, len(frames), errs, c.frames, c.err)
+			}
+		}
+	}
+	two := bytes.Join([][]byte{f, f}, nil)
+	for _, c := range []struct {
+		name   string
+		at     int
+		frames int
+		err    string
+	}{
+		{"inside the prefix", 5, 0, trunc + ": 5 bytes of the 12-byte prefix"},
+		{"after the prefix", 12, 0, fmt.Sprintf("%s: 12 of %d bytes", trunc, len(f))},
+		{"inside the frame", len(f) - 1, 0, fmt.Sprintf("%s: %d of %d bytes", trunc, len(f)-1, len(f))},
+		{"after the frame", len(f), 1, trunc + ": 0 bytes of the 12-byte prefix"},
+	} {
+		r := &errAt{r: bytes.NewReader(two), at: int64(c.at), err: io.ErrUnexpectedEOF, sticky: true}
+		frames, errs := collect(t, r)
+		if len(frames) != c.frames || len(errs) != 1 || errs[0].Error() != c.err {
+			t.Errorf("io.ErrUnexpectedEOF %s: %d frames, errors %v; want %d frames, then %q", c.name, len(frames), errs, c.frames, c.err)
+		}
+	}
+}
+
+// TestFramesCutGzip: a gzip file cut anywhere yields every frame whose bytes
+// gzip still delivers, then one ErrTruncated.
+func TestFramesCutGzip(t *testing.T) {
+	var fs [][]byte
+	for _, size := range []int{100, 5000, 70000, 300 << 10} {
+		f := bigFrame(size)
+		rand.New(rand.NewSource(int64(size))).Read(f[len(f)-size:])
+		fs = append(fs, f)
+	}
+	var z bytes.Buffer
+	zw := gzip.NewWriter(&z)
+	zw.Write(bytes.Join(fs, nil))
+	zw.Close()
+	gz := z.Bytes()
+	for cut := 20; cut < len(gz); cut += len(gz) / 37 {
+		zr, err := gzip.NewReader(bytes.NewReader(gz[:cut]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := io.ReadAll(zr)
+		whole := 0
+		for n := 0; whole < len(fs) && n+len(fs[whole]) <= len(got); whole++ {
+			n += len(fs[whole])
+		}
+		zr, _ = gzip.NewReader(bytes.NewReader(gz[:cut]))
+		frames, errs := collect(t, zr)
+		if len(frames) != whole || len(errs) != 1 || !errors.Is(errs[0], openbmp.ErrTruncated) {
+			t.Errorf("gzip cut at %d of %d (%d bytes out): %d frames, errors %v; want %d frames, then ErrTruncated", cut, len(gz), len(got), len(frames), errs, whole)
 		}
 	}
 }
