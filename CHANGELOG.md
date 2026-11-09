@@ -8,6 +8,37 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+### Changed
+
+- `bmp`: `Session.Routes` no longer moves what it holds for the message to
+  the heap: one allocation less per message (Measured). It held a
+  Peer Up or Peer Down route by value, which made it larger than the Go
+  compiler copies into a closure; that route is now allocated only when
+  `PeerStates` yields it.
+- `openbmp`: `Frames` reads each frame into one buffer, sized exactly up to
+  64 KiB and doubling beyond, as `bmp.Messages` does; it allocated about four
+  objects per frame. A frame that states more bytes than follow still
+  allocates in proportion to the bytes present.
+- Tests: `TestSessionRoutesAllocations` (`bmp`) and `TestFramesAllocations`
+  (`openbmp`) gate both counts; `TestFramesLarge` and
+  `TestFramesClaimBoundedAlloc` cover frames over 64 KiB.
+
+### Measured
+
+go1.27.3 darwin/arm64, main (2923774) against this release:
+
+- `BenchmarkBMP/mrt` in `internal/compare` (`bmp.Session.Routes` over
+  `bmp.ParseMessage`, 50,085 messages; three alternating rounds of
+  `-count=2` under memguard at normal priority, `.data/bench-bmp-v043.log`):
+  7.950 → 6.949 allocations and 708.0 → 459.6 bytes per message (−35%).
+  Best run of each side 20.27 → 16.64 ms (−18%); one branch round took
+  59–73 ms, so means are not compared.
+- `testing.AllocsPerRun`, the new tests run against main's code and this
+  release's (`.data/allocs-bmp-v043.log`): `Session.Routes` of a message
+  that yields nothing 2 → 1; `openbmp.Frames` over
+  `testdata/bmp/obmp-v4-router.obmp` and `obmp-v6-router.obmp` (36 frames
+  each) 145 → 37 per file.
+
 ## [0.4.2] - 2026-11-08
 
 ### Changed
