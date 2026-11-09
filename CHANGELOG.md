@@ -8,6 +8,45 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+Tests and CI only; the module's code is unchanged.
+
+### Changed
+
+- CI keeps the fuzz corpus. Go grows it under `GOCACHE/fuzz`, which the fuzz
+  job's `setup-go` cache holds, but that cache is saved only when its key
+  misses: when `go.mod`, `scripts/fuzz.sh`, Go or the runner image changes,
+  and then by whichever of the two shards saves first (`gh cache list` showed
+  one entry per key and branch). The corpus now has a cache of its own, per
+  shard, under a key new on every run, saved when the job passes and
+  restored from the newest.
+- `FuzzDecompress` ran `DecompressWith` at Workers 2 only; it now takes
+  Workers 1 to 8 from the fuzz input. Its seeds read
+  `testdata/bzip2/zeros/zeros-1.bz2` (twelve blocks) at Workers 1, 2 and 8,
+  so plain `go test` covers both ends. A reader that started two goroutines
+  whatever Workers says passed the old target and fails the new one: a
+  panic at Workers 1, a hang at 8 (`.data/fuzzdecompress-sabotage-v046.log`,
+  `.data/fuzzdecompress-sabotage8-v046.log`). The changed signature makes Go
+  set aside the corpus cached for the old one.
+
+### Checked
+
+- `Decompress` reads bzip2 with the standard library's `compress/bzip2` and
+  `DecompressWith` (Workers > 0) with `internal/bzip2`, a copy of Go 1.27.2's.
+  The review asked whether they differ on older Go. They do not: the
+  decoder's four files are identical in Go 1.23.0, 1.24.0, 1.25.0, 1.26.0,
+  1.26.10 and 1.27.3 but for one doc comment in 1.23.0 and 1.24.0
+  (`.data/bzip2-stdlib-diff-v046.log`), and the bzip2 and decompress tests
+  pass under Go 1.23.0, 1.24.0 and 1.25.0 (`-run 'Bzip2|Decompress'`,
+  `.data/bzip2-oldgo-v046.log`).
+
+### Measured
+
+go1.27.3 darwin/arm64, `GOMAXPROCS=4`, 15 s under memguard, no failure:
+`FuzzDecompress` ran 20,209 executions from its seeds alone
+(`.data/fuzz-decompress-v046.log`) and 18,659 from the 47 inputs that run
+kept (`.data/fuzz-decompress2-v046.log`); the old target ran 43,777 from 363
+(`.data/check-v045c.log`). Peak RSS at most 548 MB.
+
 ## [0.4.5] - 2026-11-09
 
 ### Fixed
