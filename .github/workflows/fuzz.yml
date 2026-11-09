@@ -1,0 +1,104 @@
+name: fuzz
+
+# Every fuzz target, in two shards (scripts/fuzz.sh). ci.yml calls this for
+# each push and pull request, for 30s a target; the schedule runs it on main
+# once a day for longer, so that main's corpus grows between merges. Both
+# share the corpus cache: caches belong to a branch, not to a workflow.
+#
+# GitHub runs a schedule only on the default branch's latest commit, may
+# delay it or drop it under load, disables it after 60 days without activity
+# in a public repository, and tells only whoever last edited the cron line
+# when a scheduled run fails. Two runs on main at once both restore the same
+# corpus and save their own; the next restores the newer, so the other's
+# additions are lost (growth only, never a failure).
+#
+# The daily and manual runs fail a target whose baseline over the cached
+# corpus takes over 10s (FUZZ_BASELINE_MAX), a third of what a push or pull
+# request gives it: a corpus grown too large is reported by a failing daily
+# run (which saves no cache; pushes and pull requests, with no limit, still
+# do) well before pull requests fail. fuzz.sh says how to start a corpus
+# afresh.
+on:
+  workflow_call:
+    inputs:
+      fuzztime:
+        description: "FUZZTIME per target"
+        type: string
+        default: 30s
+  schedule:
+    - cron: "23 3 * * *" # 03:23 UTC daily, off the hour
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "FUZZTIME per target (six targets a shard, 45 minutes a job: at most 3m)"
+        type: string
+        default: 2m
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  fuzz:
+    name: fuzz (shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    # Six targets a shard: 2m each under the schedule, and their builds.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      # Actions are pinned by commit, which a moved tag cannot change.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+          # fuzz.sh in the key gives this job a cache of its own: fuzz-
+          # instrumented builds are of no use to the race and coverage builds.
+          cache-dependency-path: |
+            **/go.mod
+            scripts/fuzz.sh
+      # Go keeps the corpus a fuzz run grows under GOCACHE/fuzz. setup-go's
+      # cache holds a copy too, but is saved only when its key misses, so only
+      # when go.mod, fuzz.sh, Go or the runner image changes, and by whichever
+      # shard saves first. Here the corpus has a cache of its own, per shard
+      # and saved by every run that passes: the key is new each run, and
+      # restore-keys brings back the newest. setup-go's copy is removed first,
+      # so that this cache is the corpus's only source and deleting it starts
+      # the corpus afresh. A failing input is uploaded below.
+      - name: Find the fuzz corpus
+        id: corpus
+        run: |
+          gocache=$(go env GOCACHE)
+          test -n "$gocache"
+          rm -rf "$gocache/fuzz"
+          echo "dir=$gocache/fuzz" >> "$GITHUB_OUTPUT"
+      - name: Cache the fuzz corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.corpus.outputs.dir }}
+          key: fuzz-corpus-${{ runner.os }}-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ runner.os }}-${{ matrix.shard }}-
+      - name: scripts/fuzz.sh
+        run: scripts/fuzz.sh
+        env:
+          # A scheduled run has no inputs.
+          FUZZTIME: ${{ inputs.fuzztime || '2m' }}
+          FUZZ_SHARD: ${{ matrix.shard }}/2
+          # Called from ci.yml, github.event_name is the caller's (push or
+          # pull_request), and no limit applies.
+          FUZZ_BASELINE_MAX: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '10' || '' }}
+      # go test writes a failing input under testdata/fuzz and does not print
+      # it; without this the crash cannot be reproduced.
+      - name: Upload failing fuzz inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failures-${{ matrix.shard }}
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
