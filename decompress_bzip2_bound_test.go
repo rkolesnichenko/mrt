@@ -22,7 +22,10 @@ func TestWindowBoundSaturates(t *testing.T) {
 	}
 	limit := big.NewInt(math.MaxInt)
 	prev := 0
-	for _, w := range []int{0, 1, 14, 507, 508, 509, 1 << 20, math.MaxInt >> 22, math.MaxInt>>22 + 1, math.MaxInt / 4, math.MaxInt / 2, math.MaxInt} {
+	// The last count whose bound fits, and the first that saturates.
+	const fixed = 2*(maxSegment+chainSlack) + fillSize
+	edge := (math.MaxInt - fixed) / (2 << 21)
+	for _, w := range []int{0, 1, 14, 507, 508, 509, 1 << 20, edge, edge + 1, math.MaxInt >> 22, math.MaxInt>>22 + 1, math.MaxInt / 4, math.MaxInt / 2, math.MaxInt} {
 		want := exact(w)
 		if want.Cmp(limit) > 0 {
 			want = limit
@@ -47,6 +50,24 @@ func TestGrowDoublesAtManyWorkers(t *testing.T) {
 		z.grow()
 		if cap(z.win) < 2<<20 {
 			t.Errorf("workers %d: a full 1 MiB window grew to %d, want at least %d", w, cap(z.win), 2<<20)
+		}
+	}
+}
+
+// TestGrowCapSaturates: the doubling in growCap saturates too, so a window
+// past half of math.MaxInt (over 1 GiB on 32-bit platforms) still grows to
+// the bound, not by one read's room.
+func TestGrowCapSaturates(t *testing.T) {
+	for _, c := range []struct{ n, c, bound, want int }{
+		{0, 0, 1 << 30, fillSize},
+		{1 << 20, 1 << 20, 1 << 30, 2 << 20},
+		{1 << 20, 1 << 20, 3 << 19, 3 << 19},
+		{math.MaxInt / 2, math.MaxInt / 2, math.MaxInt, math.MaxInt / 2 * 2},
+		{math.MaxInt/2 + 1, math.MaxInt/2 + 1, math.MaxInt, math.MaxInt},
+		{math.MaxInt/2 + 1, math.MaxInt/2 + 1, math.MaxInt - 1, math.MaxInt - 1},
+	} {
+		if got := growCap(c.n, c.c, c.bound); got != c.want {
+			t.Errorf("growCap(%d, %d, %d) = %d, want %d", c.n, c.c, c.bound, got, c.want)
 		}
 	}
 }

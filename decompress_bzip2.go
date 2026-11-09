@@ -571,14 +571,25 @@ func (z *parallelBzip2) fill() {
 // never past windowBound, which the window never needs: append's own growth
 // would carry it up to a quarter past what it needs, and so past the bound.
 func (z *parallelBzip2) grow() {
-	need := len(z.win) + fillSize
-	if need <= cap(z.win) {
+	if len(z.win)+fillSize <= cap(z.win) {
 		return
 	}
-	c := min(max(2*cap(z.win), need), max(windowBound(z.workers), need))
-	win := make([]byte, len(z.win), c)
+	win := make([]byte, len(z.win), growCap(len(z.win), cap(z.win), windowBound(z.workers)))
 	copy(win, z.win)
 	z.win = win
+}
+
+// growCap is the capacity grow gives a window of length n and capacity c
+// that has no room for a read: double, but at least room for the read and at
+// most bound unless the read needs more. The doubling saturates, as the bound
+// does: wrapped negative, it would leave only the read's room.
+func growCap(n, c, bound int) int {
+	need := n + fillSize
+	dbl := math.MaxInt
+	if c <= math.MaxInt/2 {
+		dbl = 2 * c
+	}
+	return min(max(dbl, need), max(bound, need))
 }
 
 // windowBound is the most bytes the window needs at the given Workers, from

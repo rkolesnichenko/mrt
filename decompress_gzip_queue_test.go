@@ -28,7 +28,11 @@ func TestGzipReadaheadChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := newGzipReadahead(zr, context.Background())
+	// Cancelled when the test ends, so that a failure mid-stream leaves no
+	// goroutine behind.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g := newGzipReadahead(zr, ctx)
 	bufs := map[*byte]bool{}
 	var got []byte
 	p := make([]byte, 1000)
