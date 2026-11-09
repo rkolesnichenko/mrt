@@ -158,19 +158,131 @@ func (s *seeds) bgp4mp(body []byte, sub uint16, nMsg, nAttr *int) {
 	}
 }
 
+// FuzzParseUpdate holds, under each of the four contexts (AS4, ADD-PATH):
+//   - R17a: one DiagMessageTruncated Error, at the cut, exactly when the
+//     header states more bytes than msg holds;
+//   - a message whose framing is sound at its full length (no
+//     DiagUpdateLength), cut anywhere past the header, gives withdrawn
+//     routes, attributes and NLRI that are leading parts of the full ones;
+//   - the interner invariant: decoding the attributes through one interner
+//     shared by all four contexts, twice so the second is a hit, deep-equals
+//     Attrs.Decode.
 func FuzzParseUpdate(f *testing.F) {
 	for _, m := range loadSeeds(f).msgs {
 		f.Add(m)
 	}
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, msg []byte) {
+		in := bgp.NewInterner()
 		for bits := 0; bits < 4; bits++ {
 			ctx := bgp.Context{AS4: bits&1 != 0, AddPath: bits&2 != 0}
-			u, _ := bgp.ParseUpdate(msg, ctx)
-			u.Attrs.Decode()
+			u, diags := bgp.ParseUpdate(msg, ctx)
+			checkTruncated(t, msg, diags)
+			checkInterner(t, in, u.Attrs)
+			checkCuts(t, msg, ctx)
 		}
 		bgp.ParseMessageHeader(msg)
 	})
+}
+
+// isUpdate reports whether msg has a valid header of type UPDATE, and its
+// stated length.
+func isUpdate(msg []byte) (int, bool) {
+	h, err := bgp.ParseMessageHeader(msg)
+	return h.Length, err == nil && h.Type == bgp.MessageUpdate
+}
+
+func checkTruncated(t *testing.T, msg []byte, diags []bgp.Diagnostic) {
+	t.Helper()
+	n, ok := isUpdate(msg)
+	cut := ok && n > len(msg)
+	var got []bgp.Diagnostic
+	for _, d := range diags {
+		if d.Code == bgp.DiagMessageTruncated {
+			got = append(got, d)
+		}
+	}
+	switch {
+	case !cut && len(got) > 0:
+		t.Fatalf("message of %d bytes stating %d: %d %s diagnostics, want none", len(msg), n, len(got), bgp.DiagMessageTruncated)
+	case cut && (len(got) != 1 || got[0].Severity != bgp.SeverityError || got[0].Offset != len(msg)):
+		t.Fatalf("message cut at %d of %d bytes: %s diagnostics %+v, want one Error at %d", len(msg), n, bgp.DiagMessageTruncated, got, len(msg))
+	}
+}
+
+func checkInterner(t *testing.T, in *bgp.Interner, a bgp.Attrs) {
+	t.Helper()
+	want, wantD := a.Decode()
+	for round := range 2 {
+		p, d := in.Decode(a)
+		if !reflect.DeepEqual(*p, want) || !reflect.DeepEqual(d, wantD) {
+			t.Fatalf("block %x, round %d: interner gives %+v %v, Decode %+v %v", a.Raw(), round, *p, d, want, wantD)
+		}
+	}
+}
+
+// checkCuts restates msg's length as its byte count and, when the result
+// frames soundly, compares it with up to 16 cuts of itself (R17a).
+func checkCuts(t *testing.T, msg []byte, ctx bgp.Context) {
+	t.Helper()
+	if _, ok := isUpdate(msg); !ok || len(msg) > 0xffff {
+		return
+	}
+	full := bytes.Clone(msg)
+	binary.BigEndian.PutUint16(full[16:], uint16(len(full)))
+	fu, fd := bgp.ParseUpdate(full, ctx)
+	for _, d := range fd {
+		if d.Code == bgp.DiagUpdateLength {
+			return
+		}
+	}
+	step := max(1, (len(full)-19)/16)
+	for k := 19; k < len(full); k += step {
+		cu, cd := bgp.ParseUpdate(full[:k], ctx)
+		if !isLeading(cu.Withdrawn, fu.Withdrawn) || !isLeading(cu.Announced, fu.Announced) ||
+			!bytes.HasPrefix(fu.Attrs.Raw(), cu.Attrs.Raw()) {
+			t.Fatalf("cut at %d of %d: withdrawn %v, attributes %x, NLRI %v are not leading parts of %v, %x, %v",
+				k, len(full), cu.Withdrawn, cu.Attrs.Raw(), cu.Announced, fu.Withdrawn, fu.Attrs.Raw(), fu.Announced)
+		}
+		// Only whole attributes and whole prefixes are read: the cut adds no
+		// framing fault the full message does not have.
+		if wholeAttrs(fu.Attrs) && !wholeAttrs(cu.Attrs) {
+			t.Fatalf("cut at %d of %d: attributes %x hold a partial attribute", k, len(full), cu.Attrs.Raw())
+		}
+		if count(cd, bgp.DiagNLRILength) > count(fd, bgp.DiagNLRILength) {
+			t.Fatalf("cut at %d of %d: %s diagnostics %+v, the full message has %d", k, len(full), bgp.DiagNLRILength, cd, count(fd, bgp.DiagNLRILength))
+		}
+		checkTruncated(t, full[:k], cd)
+	}
+}
+
+// isLeading reports whether a is a leading part of b.
+func isLeading(a, b []bgp.NLRI) bool {
+	if len(a) == 0 {
+		return true
+	}
+	return len(a) <= len(b) && reflect.DeepEqual(a, b[:len(a)])
+}
+
+// wholeAttrs reports whether a's attributes all frame.
+func wholeAttrs(a bgp.Attrs) bool {
+	for _, err := range a.All() {
+		if err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// count is the number of diagnostics with code c.
+func count(ds []bgp.Diagnostic, c string) int {
+	n := 0
+	for _, d := range ds {
+		if d.Code == c {
+			n++
+		}
+	}
+	return n
 }
 
 func ctxFromBits(b uint8) bgp.Context {
@@ -190,6 +302,7 @@ func FuzzDecodeAttrs(f *testing.F) {
 		if !reflect.DeepEqual(p1, p2) || !reflect.DeepEqual(d1, d2) {
 			t.Fatalf("Decode twice differs")
 		}
+		checkInterner(t, bgp.NewInterner(), attrs)
 		for range attrs.All() {
 		}
 	})

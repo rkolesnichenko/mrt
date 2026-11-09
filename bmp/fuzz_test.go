@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,8 @@ import (
 	"github.com/rkolesnichenko/mrt"
 	"github.com/rkolesnichenko/mrt/bgp"
 	"github.com/rkolesnichenko/mrt/bmp"
+	"github.com/rkolesnichenko/mrt/internal/bmpgen"
+	"github.com/rkolesnichenko/mrt/internal/mrtgen"
 )
 
 // fuzzMsg builds a version 3 BMP message of type typ around body.
@@ -130,6 +133,94 @@ func FuzzBMPRoutes(f *testing.F) {
 			o.Interner = bgp.NewInterner()
 			if got := run(o); !reflect.DeepEqual(got, want) {
 				t.Fatalf("options %+v: routes with an interner differ from those without", o)
+			}
+		}
+	})
+}
+
+// FuzzBMPMatchesMRT holds that one UPDATE gives the same routes, paths and
+// diagnostics, and an error in the same place, whether it arrives in a BMP
+// Route Monitoring after the peer's Peer Up or in an MRT BGP4MP message of
+// the matching subtype. flags bit 0 is 2-byte ASNs (the per-peer A flag;
+// BGP4MP_MESSAGE); bit 1 is ADD-PATH for every prefix family (both OPENs of
+// the Peer Up, both ways; the _ADDPATH subtypes, which apply to all
+// families). lenAdj is added to the length in the BGP header, so the message
+// can be cut short of it (R17a) or carry bytes past it.
+func FuzzBMPMatchesMRT(f *testing.F) {
+	h := at(global4(10), flagL, 7)
+	for _, u := range [][]byte{
+		announce(h, "203.0.113.0/24", false, 0),
+		announce(h, "2001:db8:2::/48", false, 0),
+		announce(h, "203.0.113.0/24", true, 9),
+		mrtgen.Update([]bgp.NLRI{nlri("198.51.100.0/24", false, 0)}, []bgp.NLRI{nlri("203.0.113.0/24", false, 0)},
+			mrtgen.Attrs(mrtgen.Origin(bgp.OriginIGP), mrtgen.Origin(bgp.OriginEGP),
+				mrtgen.ASPath(true, mrtgen.Seq(64510, 64511)), mrtgen.NextHop(nh4),
+				mrtgen.MPUnreach(fam6, []bgp.NLRI{nlri("2001:db8:1::/48", false, 0)}, false),
+				mrtgen.MPReach(fam6, []netip.Addr{nh6}, []bgp.NLRI{nlri("2001:db8:3::/48", false, 0)}, false)), false),
+	} {
+		for flags := range uint8(4) {
+			f.Add(u[19:], flags, int16(0))
+		}
+		f.Add(u[19:], uint8(0), int16(9))
+		f.Add(u[19:], uint8(1), int16(-3))
+	}
+	// Multicast as well as basicCaps' unicast, and one ADD-PATH capability:
+	// send and receive for every prefix family.
+	mc4, mc6 := bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIMulticast}, bgp.Family{AFI: bgp.AFIIPv6, SAFI: bgp.SAFIMulticast}
+	caps := [][]byte{bmpgen.CapMP(mc4), bmpgen.CapMP(mc6),
+		bmpgen.CapAddPath(ap(fam4, 3), ap(fam6, 3), ap(mc4, 3), ap(mc6, 3))}
+	f.Fuzz(func(t *testing.T, body []byte, flags uint8, lenAdj int16) {
+		if len(body) > 4000 {
+			return
+		}
+		as2, addPath := flags&1 != 0, flags&2 != 0
+		n := min(max(19+len(body)+int(lenAdj), 0), 0xffff)
+		msg := append(bytes.Repeat([]byte{0xff}, 16), byte(n>>8), byte(n), byte(bgp.MessageUpdate))
+		msg = append(msg, body...)
+
+		hh, st := h, mrt.SubMessageAS4
+		if as2 {
+			hh, st = at(global4(10), flagL|flagA, 7), mrt.SubMessage
+		}
+		up := plainUp(hh)
+		if addPath {
+			up = peerUp(hh, basicCaps(routerAS, caps...), basicCaps(hh.AS, caps...))
+			st = mrt.SubMessageAS4AddPath
+			if as2 {
+				st = mrt.SubMessageAddPath
+			}
+		}
+		got := feed(bmp.RoutesOptions{}, up, rm(hh, msg))
+		rec := mrtgen.Header(mrt.TypeBGP4MP, st, epoch, mrtgen.BGP4MP(st, hh.AS, routerAS, hh.Addr, local4, msg))
+		var want []result
+		for r, err := range mrt.Routes(mrt.Records(bytes.NewReader(rec))) {
+			want = append(want, result{r, err})
+		}
+
+		if len(got) != len(want) {
+			t.Fatalf("bmp gives %d results, mrt %d\nbmp %+v\nmrt %+v", len(got), len(want), got, want)
+		}
+		for i := range got {
+			g, w := got[i], want[i]
+			if (g.err == nil) != (w.err == nil) {
+				t.Fatalf("result %d: bmp error %v, mrt error %v", i, g.err, w.err)
+			}
+			if g.err != nil {
+				if errors.Is(g.err, bmp.ErrMalformed) != errors.Is(w.err, mrt.ErrMalformed) {
+					t.Fatalf("result %d: bmp error %v, mrt error %v: only one is malformed", i, g.err, w.err)
+				}
+				continue
+			}
+			gr, wr := g.r, w.r
+			if gr.Kind != wr.Kind || gr.Family != wr.Family || gr.Prefix != wr.Prefix || gr.PathID != wr.PathID || gr.HasPathID != wr.HasPathID {
+				t.Fatalf("route %d: bmp %v %v %v %d/%v, mrt %v %v %v %d/%v", i, gr.Kind, gr.Family, gr.Prefix, gr.PathID, gr.HasPathID,
+					wr.Kind, wr.Family, wr.Prefix, wr.PathID, wr.HasPathID)
+			}
+			if !reflect.DeepEqual(gr.Path, wr.Path) {
+				t.Fatalf("route %d: paths differ\nbmp %+v\nmrt %+v", i, gr.Path, wr.Path)
+			}
+			if !reflect.DeepEqual(gr.Diagnostics, wr.Diagnostics) {
+				t.Fatalf("route %d: diagnostics differ\nbmp %+v\nmrt %+v", i, gr.Diagnostics, wr.Diagnostics)
 			}
 		}
 	})
