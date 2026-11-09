@@ -8,6 +8,55 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-09
+
+### Changed
+
+- `bgp.Interner.Decode` no longer copies what `Attrs.Decode` has just made.
+  It cloned the whole path, every AS path and community array, and then
+  dropped the copies for the held ones it found. It now keeps `Decode`'s
+  arrays and copies only the parts that alias the block (`Unknown()`
+  values and the raw NLRI of MP_REACH and MP_UNREACH), all into one new
+  array. Every slice of a returned path still has capacity equal to its
+  length, as a clone's had (`Decode`'s merged AS paths, an AS4_PATH with a
+  confederation segment dropped and the `Unknown()` list are clipped where
+  they are), so an append to a shared array cannot write into what another
+  holder sees. A path still holds none of the bytes it was decoded from,
+  and still deep-equals `Attrs.Decode`'s (principle 8). On a block it does
+  not index whole and whose components it already holds, `Decode` now
+  costs one allocation more than `Attrs.Decode`, or two with such parts,
+  instead of 7 to 11 more (`TestInternerMissAllocations`).
+  - `Routes` with an `Interner` over `testdata/mrt` (go1.27.3 darwin/arm64,
+    median of 5 passes each; `.data/interner-allocs-v051-summary.txt`):
+    allocations −20% to −38% on every fixture (rv2-updates-et 99,554 →
+    68,475, rv2-rib 26,474 → 18,010), bytes −6% to −27%. On update and
+    table-dump files the interner cost 31% to 75% more allocations than
+    `Routes` without one and now costs −1% to +26%; on RIB files it saves
+    more than before. Time not measured.
+  - Held memory, every path kept with the `Interner` alive, is 0.3% to 0.8%
+    higher on six of the fixtures, whose three runs each agree within 0.5%;
+    on rv6-rib and rv6-tabledump runs vary by 2.1% to 3.4%, more than any
+    change (`.data/held-interner-v051-summary.txt`). A kept path now has
+    `Decode`'s arrays, whose allocations may be larger than their length
+    (an AS path's object is sized to an allocation class, with up to three
+    unused ASN slots), where the clone's were exact.
+  - The `TestAllocations` ceilings for `Routes` with an `Interner` are
+    lowered to the new counts, the higher of Go 1.23.0 and 1.27.3 plus 5%
+    (`.data/allocs-v051.log`).
+- Tests: `TestInternerPathsOwnTheirArrays` walks every field of the paths
+  the `Interner` returns, by reflection as the `Clone` guard does, over
+  blocks that set every reference field, AS4 merges (one of three
+  segments), dropped confederation segments, broken framing, duplicates,
+  malformed attributes and a RIB block held whole: every slice must have
+  capacity equal to its length and no byte slice may point into the block.
+  `TestInternerCopiesOwnArrays` requires the copied parts to point outside
+  the block, empty values included (a zero-length slice of the block would
+  keep it alive). Leaving out the copies, the empty-value rule, the copies'
+  clip, or the clip of the segment lists, their ASNs or the `Unknown()`
+  list, each fails them
+  (`.data/interner-sabotage-v051.log`); the other clips guard against a
+  future `Decode` that leaves spare capacity, which it does not today.
+
 ## [0.5.0] - 2026-11-09
 
 ### Added
@@ -927,7 +976,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/rkolesnichenko/mrt/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/rkolesnichenko/mrt/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/rkolesnichenko/mrt/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/rkolesnichenko/mrt/compare/v0.4.4...v0.4.5

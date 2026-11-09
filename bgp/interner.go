@@ -4,9 +4,10 @@ import "sync"
 
 // Interner decodes attribute blocks into paths that share memory: equal RIB
 // blocks give one *Path, and paths that differ share their equal AS paths and
-// community lists. Every path it returns is a Clone, so none holds the bytes
-// it was decoded from, and each deep-equals what Attrs.Decode gives for the
-// same block. It is safe for concurrent use and grows until it is dropped.
+// community lists. No path it returns holds the bytes it was decoded from
+// (the parts that would are copied), and each deep-equals what Attrs.Decode
+// gives for the same block. It is safe for concurrent use and grows until it
+// is dropped.
 //
 // Returned paths and diagnostics may be shared with other callers: treat them
 // as read-only.
@@ -61,8 +62,8 @@ func (in *Interner) Decode(a Attrs) (*Path, []Diagnostic) {
 			return p, diags
 		}
 	}
-	p, diags := a.Decode()
-	c := p.Clone()
+	c, diags := a.Decode()
+	c.detach()
 	whole := a.ctx.RIB
 	for _, d := range diags {
 		whole = whole && d.Severity == SeverityInfo
@@ -179,7 +180,8 @@ func appendKey(dst []byte, a Attrs, strip bool) (_ []byte, stripped bool) {
 }
 
 // shareParts replaces c's AS paths and community lists with equal ones held
-// before, or holds c's. c is a Clone owned by the caller. in.mu must be held.
+// before, or holds c's. c is a path Decode made, detached, and owned by the
+// caller. in.mu must be held.
 func (in *Interner) shareParts(c *Path) {
 	if in.asPaths == nil {
 		in.asPaths = make(map[string][]Segment)

@@ -244,6 +244,79 @@ func (r *pathRare) clone() *pathRare {
 	return &c
 }
 
+// detach makes p, as Decode returned it, hold none of the bytes it was
+// decoded from, with every slice's capacity equal to its length, as a
+// Clone's. Only the Unknown values and the raw NLRI of MP_REACH and
+// MP_UNREACH alias the bytes; Decode makes everything else afresh. Those are
+// copied into one new array, each clipped, and an empty value becomes an
+// empty slice of no array. Every other slice is clipped where it is. p's
+// arrays, rare part and MPReach must be its own, as Decode's are.
+// TestInternerPathsOwnTheirArrays walks every field to hold this.
+func (p *Path) detach() {
+	n := 0
+	if p.MPReach != nil {
+		n += len(p.MPReach.RawNLRI)
+	}
+	r := p.rare
+	if r != nil {
+		if r.mpUnreach != nil {
+			n += len(r.mpUnreach.RawNLRI)
+		}
+		for _, a := range r.unknown {
+			n += len(a.Value)
+		}
+	}
+	var buf []byte
+	if n > 0 {
+		buf = make([]byte, 0, n)
+	}
+	take := func(b []byte) []byte {
+		switch {
+		case b == nil:
+			return nil
+		case len(b) == 0:
+			return []byte{}
+		}
+		i := len(buf)
+		buf = append(buf, b...)
+		return buf[i:len(buf):len(buf)]
+	}
+	p.ASPath.clip()
+	p.Communities = clip(p.Communities)
+	p.LargeCommunities = clip(p.LargeCommunities)
+	if p.MPReach != nil {
+		p.MPReach.NLRI = clip(p.MPReach.NLRI)
+		p.MPReach.RawNLRI = take(p.MPReach.RawNLRI)
+	}
+	if r != nil {
+		r.receivedASPath.clip()
+		r.as4Path.clip()
+		r.extCommunities = clip(r.extCommunities)
+		r.clusterList = clip(r.clusterList)
+		if r.mpUnreach != nil {
+			r.mpUnreach.Withdrawn = clip(r.mpUnreach.Withdrawn)
+			r.mpUnreach.RawNLRI = take(r.mpUnreach.RawNLRI)
+		}
+		r.unknown = clip(r.unknown)
+		for i := range r.unknown {
+			r.unknown[i].Value = take(r.unknown[i].Value)
+		}
+	}
+}
+
+// clip returns s with capacity equal to its length, as a Clone's slices
+// have: the Interner shares them, and an append to a shared slice with room
+// to spare would write into what another holder sees.
+func clip[T any](s []T) []T { return s[:len(s):len(s)] }
+
+// clip clips p's segment list and each segment's ASNs (see clip).
+func (p *ASPath) clip() {
+	p.Segments = clip(p.Segments)
+	for i := range p.Segments {
+		p.Segments[i].ASNs = clip(p.Segments[i].ASNs)
+	}
+}
+
 // cloneSlice copies s, keeping nil as nil and empty as empty non-nil.
 func cloneSlice[T any](s []T) []T {
 	if s == nil {

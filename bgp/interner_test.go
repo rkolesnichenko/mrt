@@ -1,9 +1,11 @@
 package bgp_test
 
 import (
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/rkolesnichenko/mrt/bgp"
 )
@@ -352,5 +354,75 @@ func TestInternerKeyAddPathFamilies(t *testing.T) {
 	}
 	if again, _ := in.Decode(bgp.NewAttrs(append([]byte(nil), raw...), ctxB)); again != got[1] {
 		t.Error("same AddPathFamilies: not interned")
+	}
+}
+
+// TestInternerMissAllocations: decoding a block the interner has not held
+// costs what Attrs.Decode costs, one allocation for the returned path, and
+// one more when the block has parts that would alias its bytes (Unknown
+// values and raw NLRI), which are copied together. The components Decode
+// made are kept or dropped for held ones, never copied. The second round
+// holds every component already, so map growth does not count.
+func TestInternerMissAllocations(t *testing.T) {
+	if bgp.RaceEnabled {
+		t.Skip("the race detector inflates allocation")
+	}
+	mp := rawAttr(0x80, 14, 0, 1, 128, 4, 192, 0, 2, 9, 0, 0xAA, 0xBB, 0xCC)
+	mpu := rawAttr(0x80, 15, 0, 1, 128, 0xDD, 0xEE)
+	unknown := rawAttr(0xC0, 99, 1, 2, 3, 4)
+	for _, c := range []struct {
+		name  string
+		raw   []byte
+		ctx   bgp.Context
+		extra float64 // allocations beyond Decode's
+	}{
+		{"update", join(ibOrigin, ibASPath4, nextHopAttr(1), ibComms, ibLarge, ibExt), bgp.Context{AS4: true}, 1},
+		{"update, AS4_PATH", join(ibOrigin, rawAttr(0x40, 2, 2, 2, 0xFB, 0xF4, 0xFB, 0xF5), ibAS4Path, nextHopAttr(1), ibComms), bgp.Context{}, 1},
+		{"update, raw parts", join(ibOrigin, ibASPath4, nextHopAttr(1), ibComms, mp, mpu, unknown), bgp.Context{AS4: true}, 2},
+		{"rib, Warning", join(ibOrigin, ibASPath4, rawAttr(0x40, 3, 192, 0, 2), ibComms), bgp.Context{AS4: true, RIB: true}, 2},
+	} {
+		in := bgp.NewInterner()
+		a := bgp.NewAttrs(c.raw, c.ctx)
+		in.Decode(a)
+		decode := testing.AllocsPerRun(100, func() { a.Decode() })
+		got := testing.AllocsPerRun(100, func() { in.Decode(a) })
+		if got != decode+c.extra {
+			t.Errorf("%s: Interner.Decode %v allocations, Attrs.Decode %v; want %v more", c.name, got, decode, c.extra)
+		}
+	}
+}
+
+// TestInternerCopiesOwnArrays: the parts of a path that would alias its
+// block (Unknown values, MP_REACH and MP_UNREACH raw NLRI) point outside the
+// block, empty ones included (a zero-length slice of the block would still
+// keep it alive), and each has capacity equal to its length, so that an
+// append to one cannot write into the next.
+func TestInternerCopiesOwnArrays(t *testing.T) {
+	mp := rawAttr(0x80, 14, 0, 1, 128, 4, 192, 0, 2, 9, 0, 0xAA, 0xBB, 0xCC)
+	mpu := rawAttr(0x80, 15, 0, 1, 128, 0xDD, 0xEE)
+	raw := join(ibOrigin, ibASPath4, nextHopAttr(1), mp, mpu,
+		rawAttr(0xC0, 99, 1, 2, 3, 4), rawAttr(0xC0, 100), rawAttr(0xC0, 101, 5, 6))
+	lo := uintptr(unsafe.Pointer(unsafe.SliceData(raw)))
+	hi := lo + uintptr(len(raw))
+	p, _ := bgp.NewInterner().Decode(bgp.NewAttrs(raw, bgp.Context{AS4: true}))
+	check := func(what string, b []byte) {
+		if b == nil {
+			t.Errorf("%s is nil", what)
+			return
+		}
+		if at := uintptr(unsafe.Pointer(unsafe.SliceData(b))); at >= lo && at <= hi {
+			t.Errorf("%s points into the block", what)
+		}
+		if cap(b) != len(b) {
+			t.Errorf("%s: capacity %d, length %d", what, cap(b), len(b))
+		}
+	}
+	if p.MPReach == nil || p.MPUnreach() == nil || len(p.Unknown()) != 3 {
+		t.Fatalf("the block decodes to MPReach %v, MPUnreach %v, %d Unknown; the case does not test them", p.MPReach, p.MPUnreach(), len(p.Unknown()))
+	}
+	check("MPReach.RawNLRI", p.MPReach.RawNLRI)
+	check("MPUnreach().RawNLRI", p.MPUnreach().RawNLRI)
+	for _, a := range p.Unknown() {
+		check(fmt.Sprintf("Unknown value of attribute %d", a.Code), a.Value)
 	}
 }
