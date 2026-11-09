@@ -8,6 +8,37 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+Tests only; the module's code is unchanged.
+
+### Added
+
+- `FuzzBMPMatchesMRT` (`bmp`), the twelfth fuzz target: one fuzzed UPDATE,
+  passed through a BMP Route Monitoring after the peer's Peer Up and through
+  an MRT BGP4MP record of the matching subtype, gives the same routes, paths,
+  diagnostics and error places. It covers 2- and 4-byte ASNs, ADD-PATH for
+  every prefix family or none, and a BGP header length cut short of the
+  bytes or followed by more.
+
+### Changed
+
+- `FuzzParseUpdate` held only that nothing panics. Under each of its four
+  contexts it now also holds:
+  - R17a: one `bgp/message-truncated` Error, at the cut, exactly when the
+    header states more bytes than the message holds;
+  - a message that frames soundly at its full length, cut at up to 16
+    places, gives leading parts of its withdrawn routes, attributes and
+    NLRI, and no partial attribute or prefix;
+  - one `Interner`, shared by the contexts and hit twice, deep-equals
+    `Attrs.Decode` (principle 8).
+- `FuzzDecodeAttrs` also checks the interner.
+
+### Measured
+
+go1.27.3 darwin/arm64, `GOMAXPROCS=4`, 2 minutes each under memguard, no
+failure: `FuzzBMPMatchesMRT` 1,166,073 executions
+(`.data/fuzz-bmpmrt-v044.log`), `FuzzParseUpdate` 1,508,325 and
+`FuzzDecodeAttrs` 2,429,869 (`.data/fuzz-bgp-v044.log`).
+
 ## [0.4.3] - 2026-11-09
 
 ### Changed
