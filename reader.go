@@ -188,7 +188,8 @@ func endErr(off int64, h Header, err error) error {
 
 // stream is the bufio.Reader that Records reads, with the error that came
 // with the bytes completing a read held for the next read.
-// bmp/reader.go has a copy of it and its methods; change both.
+// bmp/reader.go has a copy of it and its methods; change both, and
+// openbmp's frameReader, which holds errors the same way without bufio.
 type stream struct {
 	br  *bufio.Reader
 	err error
