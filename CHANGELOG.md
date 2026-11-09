@@ -8,6 +8,36 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+Tests and CI only; the module's code is unchanged.
+
+### Changed
+
+- `scripts/fuzz.sh` fails a target that fuzzed nothing. Go starts the
+  `-fuzztime` clock before the run over the cached corpus that gathers
+  baseline coverage (`src/internal/fuzz/fuzz.go`, go1.27.3), so a corpus
+  that takes all of `FUZZTIME` ends the run there, and it passed: at
+  `FUZZTIME=2s`, `FuzzDecompress` stopped at 143 of 203 baseline inputs,
+  with no execution, and reported PASS (`.data/fuzztime-baseline-v052.log`).
+  Such a run now fails, saying so (`.data/fuzzsh-guard-v052.log`). In CI,
+  with the corpus kept since v0.4.6, baselines take 0 to 2 s of each
+  target's 30 s, `FuzzDecompress` the most (210 inputs;
+  `.data/ci-baseline-1ac719c.txt`).
+- The fuzz job moved to `.github/workflows/fuzz.yml`, which `ci.yml` calls
+  for every push and pull request (30 s a target, as before) and which also
+  runs on main once a day at 03:23 UTC, 2 minutes a target, or by hand.
+  Caches belong to a branch, not a workflow, so main's corpus now grows
+  daily, not only when something is merged. The check is named
+  `fuzz / fuzz (shard i/2)`; branch protection requires only `ci ok`.
+- `compare -bmp` fails when its `Session.Each` pass counts other routes or
+  errors than its `Session.Routes` pass (a walk made to drop one route
+  fails `TestRunBMP`; `.data/compare-tests-v052.log`).
+
+### Not done
+
+- Pruning the fuzz corpus cache, which nothing does: each shard's cache is
+  102 KB to 264 KB, and the 26 in the repository total 4.2 MB
+  (`.data/gh-cache-corpus-v052.log`).
+
 ## [0.5.1] - 2026-11-09
 
 ### Changed

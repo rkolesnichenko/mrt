@@ -310,6 +310,11 @@ func runBMP(path string, w io.Writer) int {
 		fmt.Fprintf(w, "%-30s %12s %14d %12d %10.1f %10.2f  %s\n", r.name, r.wall.Round(time.Microsecond), r.totalAlloc, r.mallocs,
 			float64(r.totalAlloc)/float64(msgs), float64(r.mallocs)/float64(msgs), r.summary)
 	}
+	// The two mrt passes decode the same messages, so they must count alike.
+	if r, e := results[0], results[1]; e.items != r.items || e.errs != r.errs {
+		fmt.Fprintf(w, "MISMATCH: %s counted %d routes and %d errors, %s %d and %d\n", e.name, e.items, e.errs, r.name, r.items, r.errs)
+		return 1
+	}
 	fmt.Fprintf(w, "\nmrt lines %d, gobgp lines %d\n", len(ours), len(theirs))
 	onlyOurs, onlyTheirs := oracle.Diff(ours, theirs)
 	if len(onlyOurs)+len(onlyTheirs) > 0 {

@@ -36,6 +36,11 @@ bad() { echo "FAIL: $*"; fail=1; }
 # found nothing with "context deadline exceeded" when a worker is slow to stop
 # at -fuzztime; a real crash always prints "Failing input written to". So a run
 # that fails that way without a failing input is retried once.
+#
+# Go starts the -fuzztime clock before the run over the cached corpus that
+# gathers baseline coverage, and a run whose corpus takes all of FUZZTIME ends
+# there and passes, having fuzzed nothing. Such a run fails here instead: Go
+# prints "now fuzzing" once the baseline is complete.
 fuzz() {
 	out=$(cd "$1" && go test -run='^$' -fuzz="^$3\$" -fuzztime="$FUZZTIME" -fuzzminimizetime="$FUZZMINIMIZETIME" "$2" 2>&1)
 	rc=$?
@@ -43,8 +48,13 @@ fuzz() {
 	if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "context deadline exceeded" &&
 		! printf '%s' "$out" | grep -q "Failing input written"; then
 		step "fuzz $3: harness deadline without a failing input; retrying once"
-		(cd "$1" && go test -run='^$' -fuzz="^$3\$" -fuzztime="$FUZZTIME" -fuzzminimizetime="$FUZZMINIMIZETIME" "$2")
+		out=$(cd "$1" && go test -run='^$' -fuzz="^$3\$" -fuzztime="$FUZZTIME" -fuzzminimizetime="$FUZZMINIMIZETIME" "$2" 2>&1)
 		rc=$?
+		printf '%s\n' "$out"
+	fi
+	if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q "now fuzzing"; then
+		echo "fuzz $3: FUZZTIME $FUZZTIME ended before the baseline coverage of the cached corpus did; nothing was fuzzed"
+		return 1
 	fi
 	return "$rc"
 }
