@@ -8,6 +8,8 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-09
+
 ### Changed
 
 - `bgp.Interner.Decode` no longer copies what `Attrs.Decode` has just made.
@@ -974,7 +976,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/rkolesnichenko/mrt/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/rkolesnichenko/mrt/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/rkolesnichenko/mrt/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/rkolesnichenko/mrt/compare/v0.4.4...v0.4.5
