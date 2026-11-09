@@ -8,6 +8,37 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+### Changed
+
+- `bgp.Interner.Decode` no longer copies what `Attrs.Decode` has just made.
+  It cloned the whole path, every AS path and community array, and then
+  dropped the copies for the held ones it found. It now keeps `Decode`'s
+  arrays and copies only the parts that alias the block (`Unknown()`
+  values and the raw NLRI of MP_REACH and MP_UNREACH), all into one new
+  array, each with capacity equal to its length. A path still holds none of
+  the bytes it was decoded from, and still deep-equals `Attrs.Decode`'s
+  (principle 8). On a block it has not held, `Decode` now costs one
+  allocation more than `Attrs.Decode`, or two with such parts, instead of
+  7 to 11 more (`TestInternerMissAllocations`).
+  - `Routes` with an `Interner` over `testdata/mrt` (go1.27.3 darwin/arm64,
+    median of 5 passes; `.data/interner-allocs-v051-summary.txt`):
+    allocations −20% to −38% on every fixture (rv2-updates-et 99,554 →
+    68,475, rv2-rib 26,474 → 18,010), bytes −6% to −27%. On update and
+    table-dump files the interner cost 31% to 75% more allocations than
+    `Routes` without one and now costs −1% to +26%; on RIB files it saves
+    more than before. Time not measured.
+  - Held memory, every path kept with the `Interner` alive, is 0.3% to 0.8%
+    higher on the same fixtures (`.data/held-interner-v051.log`): a kept AS
+    path now has `Decode`'s array, sized to an allocation class with up to
+    three unused ASN slots, where the clone was exact.
+  - The `TestAllocations` ceilings for `Routes` with an `Interner` are
+    lowered to the new counts, the higher of Go 1.23.0 and 1.27.3 plus 5%
+    (`.data/allocs-v051.log`).
+- Tests: `TestInternerCopiesOwnArrays` requires the copied parts to point
+  outside the block, empty values included (a zero-length slice of the
+  block would keep it alive), with capacity equal to length; sabotages of
+  each are caught (`.data/interner-sabotage-v051.log`).
+
 ## [0.5.0] - 2026-11-09
 
 ### Added

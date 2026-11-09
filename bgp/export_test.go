@@ -7,3 +7,6 @@ func HasRare(p Path) bool { return p.rare != nil }
 
 // RareSize is unsafe.Sizeof of the unexported rare part (for TestPathRareSize).
 func RareSize() uintptr { return unsafe.Sizeof(pathRare{}) }
+
+// RaceEnabled is raceEnabled, for the allocation tests in package bgp_test.
+const RaceEnabled = raceEnabled

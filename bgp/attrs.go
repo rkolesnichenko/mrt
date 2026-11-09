@@ -244,6 +244,54 @@ func (r *pathRare) clone() *pathRare {
 	return &c
 }
 
+// detach makes p, as Decode returned it, hold none of the bytes it was
+// decoded from. Only the Unknown values and the raw NLRI of MP_REACH and
+// MP_UNREACH alias them; Decode makes everything else afresh. Those are
+// copied into one new array, each with capacity equal to its length, and an
+// empty value becomes an empty slice of no array. p's rare part and MPReach
+// must be its own, as Decode's are.
+func (p *Path) detach() {
+	n := 0
+	if p.MPReach != nil {
+		n += len(p.MPReach.RawNLRI)
+	}
+	r := p.rare
+	if r != nil {
+		if r.mpUnreach != nil {
+			n += len(r.mpUnreach.RawNLRI)
+		}
+		for _, a := range r.unknown {
+			n += len(a.Value)
+		}
+	}
+	var buf []byte
+	if n > 0 {
+		buf = make([]byte, 0, n)
+	}
+	take := func(b []byte) []byte {
+		switch {
+		case b == nil:
+			return nil
+		case len(b) == 0:
+			return []byte{}
+		}
+		i := len(buf)
+		buf = append(buf, b...)
+		return buf[i:len(buf):len(buf)]
+	}
+	if p.MPReach != nil {
+		p.MPReach.RawNLRI = take(p.MPReach.RawNLRI)
+	}
+	if r != nil {
+		if r.mpUnreach != nil {
+			r.mpUnreach.RawNLRI = take(r.mpUnreach.RawNLRI)
+		}
+		for i := range r.unknown {
+			r.unknown[i].Value = take(r.unknown[i].Value)
+		}
+	}
+}
+
 // cloneSlice copies s, keeping nil as nil and empty as empty non-nil.
 func cloneSlice[T any](s []T) []T {
 	if s == nil {
