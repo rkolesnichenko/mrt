@@ -23,7 +23,8 @@ Tests and CI only; the module's code is unchanged.
   Workers 1 to 8 from the fuzz input. Its seeds read
   `testdata/bzip2/zeros/zeros-1.bz2` (twelve blocks) at Workers 1, 2 and 8,
   so plain `go test` covers both ends. A reader that started two goroutines
-  whatever Workers says passed the old target and fails the new one: a
+  whatever Workers says passed the old target
+  (`.data/fuzzdecompress-sabotage-old-v046.log`) and fails the new one: a
   panic at Workers 1, a hang at 8 (`.data/fuzzdecompress-sabotage-v046.log`,
   `.data/fuzzdecompress-sabotage8-v046.log`). The changed signature makes Go
   set aside the corpus cached for the old one.
@@ -44,7 +45,7 @@ Tests and CI only; the module's code is unchanged.
 go1.27.3 darwin/arm64, `GOMAXPROCS=4`, 15 s under memguard, no failure:
 `FuzzDecompress` ran 20,209 executions from its seeds alone
 (`.data/fuzz-decompress-v046.log`) and 18,659 from the 47 inputs that run
-kept (`.data/fuzz-decompress2-v046.log`); the old target ran 43,777 from 363
+kept (`.data/fuzz-decompress2-v046.log`); the old target ran 43,777 from 332
 (`.data/check-v045c.log`). Peak RSS at most 548 MB.
 
 ## [0.4.5] - 2026-11-09

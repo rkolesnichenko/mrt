@@ -304,8 +304,10 @@ func FuzzDecompress(f *testing.F) {
 		f.Add(b, byte(1))
 	}
 	// zeros1 is twelve blocks in 388 bytes, the one small input on which the
-	// number of workers matters; plain go test runs these seeds, so every
-	// test run reads it at the two ends of the range and at 2.
+	// number of workers matters: the 4 MiB read ends inside its first block,
+	// while the workers decode the blocks after it and are then cancelled.
+	// Plain go test runs these seeds, so every test run reads it at Workers
+	// 1, 2 and 8.
 	zeros, err := os.ReadFile(zeros1)
 	if err != nil {
 		f.Fatal(err)
