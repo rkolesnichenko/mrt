@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -283,12 +284,13 @@ func TestHugeCountsAllocateLittle(t *testing.T) {
 	}
 }
 
-// FuzzDecompress checks spec §6.4 at Workers 2 on arbitrary bytes: the bytes
-// Decompress gives and a failure exactly where it fails (as
-// TestDecompressWithMatchesDecompress checks it), and no goroutine left once
-// the read has returned io.EOF or an error. An output is read up to 4 MiB, so
-// that an input expanding to hundreds of MB stays quick: past that, only the
-// common prefix is compared, and the read is ended by cancelling.
+// FuzzDecompress checks spec §6.4 on arbitrary bytes at Workers 1 to 8, taken
+// from the fuzz input: the bytes Decompress gives and a failure exactly where
+// it fails (as TestDecompressWithMatchesDecompress checks it), and no
+// goroutine left once the read has returned io.EOF or an error. An output is
+// read up to 4 MiB, so that an input expanding to hundreds of MB stays quick:
+// past that, only the common prefix is compared, and the read is ended by
+// cancelling.
 func FuzzDecompress(f *testing.F) {
 	paths, err := filepath.Glob("testdata/bzip2/*.bz2")
 	if err != nil {
@@ -299,14 +301,27 @@ func FuzzDecompress(f *testing.F) {
 		if err != nil {
 			f.Fatal(err)
 		}
-		f.Add(b)
+		f.Add(b, byte(1))
+	}
+	// zeros1 is twelve blocks in 388 bytes, the one small input on which the
+	// number of workers matters: the 4 MiB read ends inside its first block,
+	// while the workers decode the blocks after it and are then cancelled.
+	// Plain go test runs these seeds, so every test run reads it at Workers
+	// 1, 2 and 8.
+	zeros, err := os.ReadFile(zeros1)
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, w := range []byte{0, 1, 7} {
+		f.Add(zeros, w)
 	}
 	bench, err := os.ReadFile(benchBz2)
 	if err != nil {
 		f.Fatal(err)
 	}
-	f.Add(bench[:4096])
-	f.Add([]byte("BZh9"))
+	f.Add(bench[:4096], byte(0))
+	f.Add(bench[:4096], byte(7))
+	f.Add([]byte("BZh9"), byte(1))
 	raw, err := os.ReadFile("testdata/synthetic/state-changes.mrt")
 	if err != nil {
 		f.Fatal(err)
@@ -315,13 +330,14 @@ func FuzzDecompress(f *testing.F) {
 	zw := gzip.NewWriter(&gz)
 	zw.Write(raw)
 	zw.Close()
-	f.Add(gz.Bytes())
-	f.Add(gz.Bytes()[:gz.Len()/2])
-	f.Add(twoMemberGzip(f))
-	f.Add([]byte{})
+	f.Add(gz.Bytes(), byte(1))
+	f.Add(gz.Bytes()[:gz.Len()/2], byte(1))
+	f.Add(twoMemberGzip(f), byte(1))
+	f.Add([]byte{}, byte(1))
 	const limit = 4 << 20
 	read := func(r io.Reader) ([]byte, error) { return io.ReadAll(io.LimitReader(r, limit+1)) }
-	f.Fuzz(func(t *testing.T, in []byte) {
+	f.Fuzz(func(t *testing.T, in []byte, w byte) {
+		workers := 1 + int(w)%8
 		var want []byte
 		r, wantErr := mrt.Decompress(bytes.NewReader(in))
 		if wantErr == nil {
@@ -331,26 +347,27 @@ func FuzzDecompress(f *testing.F) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		var got []byte
-		r, gotErr := mrt.DecompressWith(bytes.NewReader(in), mrt.DecompressOptions{Workers: 2, Context: ctx})
+		r, gotErr := mrt.DecompressWith(bytes.NewReader(in), mrt.DecompressOptions{Workers: workers, Context: ctx})
 		if gotErr == nil {
 			got, gotErr = read(r)
 		}
+		what := fmt.Sprintf("workers %d", workers)
 		wantCapped, gotCapped := len(want) > limit, len(got) > limit
 		if !wantCapped && !gotCapped {
-			checkSame(t, "workers 2", got, gotErr, want, wantErr)
+			checkSame(t, what, got, gotErr, want, wantErr)
 		} else {
 			n := min(len(got), len(want))
 			if !bytes.Equal(got[:n], want[:n]) {
-				t.Errorf("past %d bytes: the first %d bytes differ", limit, n)
+				t.Errorf("%s, past %d bytes: the first %d bytes differ", what, limit, n)
 			}
 			// The shorter must be capped too.
 			if wantCapped != gotCapped {
-				t.Errorf("Decompress: %d bytes, error %v; DecompressWith: %d bytes, error %v (read up to %d)", len(want), wantErr, len(got), gotErr, limit+1)
+				t.Errorf("%s: Decompress: %d bytes, error %v; DecompressWith: %d bytes, error %v (read up to %d)", what, len(want), wantErr, len(got), gotErr, limit+1)
 			}
 			if gotCapped {
 				cancel()
 				if _, err := r.Read(make([]byte, 1)); err == nil {
-					t.Errorf("Read after cancel: no error")
+					t.Errorf("%s: Read after cancel: no error", what)
 				}
 			}
 		}
@@ -363,7 +380,7 @@ func FuzzDecompress(f *testing.F) {
 			n = runtime.NumGoroutine()
 		}
 		if n > base {
-			t.Errorf("%d goroutines after the read, %d before", n, base)
+			t.Errorf("%s: %d goroutines after the read, %d before", what, n, base)
 		}
 	})
 }

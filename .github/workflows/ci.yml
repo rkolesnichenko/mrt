@@ -131,6 +131,21 @@ jobs:
           cache-dependency-path: |
             **/go.mod
             scripts/fuzz.sh
+      # Go keeps the corpus a fuzz run grows under GOCACHE/fuzz. setup-go's
+      # cache holds it too, but is saved only when its key misses, so only
+      # when go.mod, fuzz.sh, Go or the runner image changes, and by whichever
+      # shard saves first. Here the corpus has a cache of its own, per shard
+      # and saved by every run that passes: the key is new each run, and
+      # restore-keys brings back the newest. A failing input is uploaded below.
+      - name: Find the fuzz corpus
+        id: corpus
+        run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+      - name: Cache the fuzz corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.corpus.outputs.dir }}
+          key: fuzz-corpus-${{ runner.os }}-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ runner.os }}-${{ matrix.shard }}-
       - name: scripts/fuzz.sh
         run: scripts/fuzz.sh
         env:
