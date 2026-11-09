@@ -8,6 +8,8 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-09
+
 ### Changed
 
 - `bmp`: `Session.Routes` no longer moves what it holds for the message to
@@ -739,7 +741,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/rkolesnichenko/mrt/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/rkolesnichenko/mrt/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/rkolesnichenko/mrt/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/rkolesnichenko/mrt/compare/v0.3.2...v0.4.0
