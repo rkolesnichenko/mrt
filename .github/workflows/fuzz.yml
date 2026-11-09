@@ -14,9 +14,10 @@ name: fuzz
 #
 # The daily and manual runs fail a target whose baseline over the cached
 # corpus takes over 10s (FUZZ_BASELINE_MAX), a third of what a push or pull
-# request gives it: a corpus grown too large then stops the daily run, which
-# saves no cache, before it can fail pull requests. fuzz.sh says how to start
-# a corpus afresh.
+# request gives it: a corpus grown too large is reported by a failing daily
+# run (which saves no cache; pushes and pull requests, with no limit, still
+# do) well before pull requests fail. fuzz.sh says how to start a corpus
+# afresh.
 on:
   workflow_call:
     inputs:
@@ -63,14 +64,20 @@ jobs:
             **/go.mod
             scripts/fuzz.sh
       # Go keeps the corpus a fuzz run grows under GOCACHE/fuzz. setup-go's
-      # cache holds it too, but is saved only when its key misses, so only
+      # cache holds a copy too, but is saved only when its key misses, so only
       # when go.mod, fuzz.sh, Go or the runner image changes, and by whichever
       # shard saves first. Here the corpus has a cache of its own, per shard
       # and saved by every run that passes: the key is new each run, and
-      # restore-keys brings back the newest. A failing input is uploaded below.
+      # restore-keys brings back the newest. setup-go's copy is removed first,
+      # so that this cache is the corpus's only source and deleting it starts
+      # the corpus afresh. A failing input is uploaded below.
       - name: Find the fuzz corpus
         id: corpus
-        run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+        run: |
+          gocache=$(go env GOCACHE)
+          test -n "$gocache"
+          rm -rf "$gocache/fuzz"
+          echo "dir=$gocache/fuzz" >> "$GITHUB_OUTPUT"
       - name: Cache the fuzz corpus
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

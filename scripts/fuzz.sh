@@ -73,7 +73,7 @@ fuzz() {
 	fi
 	if ! printf '%s' "$out" | grep -q "now fuzzing"; then
 		echo "fuzz $3: FUZZTIME $FUZZTIME ended before the baseline coverage of the cached corpus did; nothing was fuzzed"
-		corpus_help "$3"
+		corpus_help "$3" "or raise FUZZTIME (and FUZZ_BASELINE_MAX in fuzz.yml with it)."
 		return 1
 	fi
 	# Seconds the baseline took: Go prints "fuzz: elapsed: 1m3s, gathering
@@ -84,20 +84,27 @@ fuzz() {
 			if (match(n, /[0-9]+m/)) t += substr(n, RSTART, RLENGTH - 1) * 60
 			if (match(n, /[0-9]+s/)) t += substr(n, RSTART, RLENGTH - 1)
 			print t }')
-	if [ -n "$FUZZ_BASELINE_MAX" ] && [ "${took:-0}" -gt "$FUZZ_BASELINE_MAX" ]; then
+	[ -n "$FUZZ_BASELINE_MAX" ] || return 0
+	if [ -z "$took" ]; then
+		echo "fuzz $3: could not read how long the baseline coverage took (has Go's output changed?)"
+		return 1
+	fi
+	if [ "$took" -gt "$FUZZ_BASELINE_MAX" ]; then
 		echo "fuzz $3: baseline coverage of the cached corpus took ${took}s, over FUZZ_BASELINE_MAX ${FUZZ_BASELINE_MAX}s"
-		corpus_help "$3"
+		corpus_help "$3" "or raise FUZZ_BASELINE_MAX in fuzz.yml with ci.yml's fuzztime."
 		return 1
 	fi
 	return 0
 }
 
-# corpus_help says how to start a target's cached corpus afresh.
+# corpus_help says how to start target $1's cached corpus afresh; $2 is the
+# other way out.
 corpus_help() {
 	echo "  The corpus Go keeps in \$(go env GOCACHE)/fuzz has grown too large."
 	echo "  Locally: remove \$(go env GOCACHE)/fuzz/<package path>/$1."
-	echo "  In CI: delete the corpus caches, gh cache list --key fuzz-corpus- then gh cache delete <key>,"
-	echo "  or raise FUZZTIME."
+	echo "  In CI: delete the corpus caches (gh cache list --key fuzz-corpus-, then gh cache delete"
+	echo "  each key; fuzz.yml removes setup-go's copy of the corpus, so these are the only source),"
+	echo "  $2"
 }
 
 # One target per line: "<dir> <pkg> <FuzzName>".
