@@ -8,6 +8,8 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-09
+
 Tests and CI only; the module's code is unchanged.
 
 ### Changed
@@ -886,7 +888,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/rkolesnichenko/mrt/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/rkolesnichenko/mrt/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/rkolesnichenko/mrt/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/rkolesnichenko/mrt/compare/v0.4.2...v0.4.3
