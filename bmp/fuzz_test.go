@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/rkolesnichenko/mrt"
@@ -138,20 +139,23 @@ func FuzzBMPRoutes(f *testing.F) {
 	})
 }
 
-// FuzzBMPMatchesMRT holds that one UPDATE gives the same routes, paths and
-// diagnostics, and an error in the same place, whether it arrives in a BMP
-// Route Monitoring after the peer's Peer Up or in an MRT BGP4MP message of
-// the matching subtype. flags bit 0 is 2-byte ASNs (the per-peer A flag;
+// FuzzBMPMatchesMRT holds that one UPDATE gives the same routes (prefix,
+// path ID, peer address and AS, path, diagnostics) and the same errors, in
+// the same places and with the same cause, whether it arrives in a BMP Route
+// Monitoring after the peer's Peer Up or in an MRT BGP4MP message of the
+// matching subtype. flags bit 0 is 2-byte ASNs (the per-peer A flag;
 // BGP4MP_MESSAGE); bit 1 is ADD-PATH for every prefix family (both OPENs of
 // the Peer Up, both ways; the _ADDPATH subtypes, which apply to all
-// families). lenAdj is added to the length in the BGP header, so the message
-// can be cut short of it (R17a) or carry bytes past it.
+// families); bits 2 and 3 decode the bmp and the mrt side through an
+// Interner (principle 8). lenAdj is added to the length in the BGP header, so
+// that it can state more bytes than are present (a cut message, R17a) or
+// fewer (trailing bytes).
 func FuzzBMPMatchesMRT(f *testing.F) {
-	h := at(global4(10), flagL, 7)
+	h4, h2 := at(global4(10), flagL, 7), at(global4(10), flagL|flagA, 7)
 	for _, u := range [][]byte{
-		announce(h, "203.0.113.0/24", false, 0),
-		announce(h, "2001:db8:2::/48", false, 0),
-		announce(h, "203.0.113.0/24", true, 9),
+		announce(h4, "203.0.113.0/24", false, 0),
+		announce(h4, "2001:db8:2::/48", false, 0),
+		announce(h4, "203.0.113.0/24", true, 9),
 		mrtgen.Update([]bgp.NLRI{nlri("198.51.100.0/24", false, 0)}, []bgp.NLRI{nlri("203.0.113.0/24", false, 0)},
 			mrtgen.Attrs(mrtgen.Origin(bgp.OriginIGP), mrtgen.Origin(bgp.OriginEGP),
 				mrtgen.ASPath(true, mrtgen.Seq(64510, 64511)), mrtgen.NextHop(nh4),
@@ -161,39 +165,48 @@ func FuzzBMPMatchesMRT(f *testing.F) {
 		for flags := range uint8(4) {
 			f.Add(u[19:], flags, int16(0))
 		}
-		f.Add(u[19:], uint8(0), int16(9))
+		f.Add(u[19:], uint8(4), int16(0))
+		f.Add(u[19:], uint8(8), int16(9))
 		f.Add(u[19:], uint8(1), int16(-3))
 	}
-	// Multicast as well as basicCaps' unicast, and one ADD-PATH capability:
-	// send and receive for every prefix family.
+	// The four sessions, by flags&3: the peer header, its Peer Up and the
+	// BGP4MP subtype. ADD-PATH adds multicast to basicCaps' unicast and one
+	// ADD-PATH capability: send and receive for every prefix family.
 	mc4, mc6 := bgp.Family{AFI: bgp.AFIIPv4, SAFI: bgp.SAFIMulticast}, bgp.Family{AFI: bgp.AFIIPv6, SAFI: bgp.SAFIMulticast}
 	caps := [][]byte{bmpgen.CapMP(mc4), bmpgen.CapMP(mc6),
 		bmpgen.CapAddPath(ap(fam4, 3), ap(fam6, 3), ap(mc4, 3), ap(mc6, 3))}
+	type session struct {
+		h  bmp.PeerHeader
+		up []byte
+		st mrt.Subtype
+	}
+	sessions := [4]session{
+		{h4, plainUp(h4), mrt.SubMessageAS4},
+		{h2, plainUp(h2), mrt.SubMessage},
+		{h4, peerUp(h4, basicCaps(routerAS, caps...), basicCaps(h4.AS, caps...)), mrt.SubMessageAS4AddPath},
+		{h2, peerUp(h2, basicCaps(routerAS, caps...), basicCaps(h2.AS, caps...)), mrt.SubMessageAddPath},
+	}
 	f.Fuzz(func(t *testing.T, body []byte, flags uint8, lenAdj int16) {
 		if len(body) > 4000 {
 			return
 		}
-		as2, addPath := flags&1 != 0, flags&2 != 0
 		n := min(max(19+len(body)+int(lenAdj), 0), 0xffff)
 		msg := append(bytes.Repeat([]byte{0xff}, 16), byte(n>>8), byte(n), byte(bgp.MessageUpdate))
 		msg = append(msg, body...)
 
-		hh, st := h, mrt.SubMessageAS4
-		if as2 {
-			hh, st = at(global4(10), flagL|flagA, 7), mrt.SubMessage
+		ss := sessions[flags&3]
+		var bo bmp.RoutesOptions
+		var mo mrt.RoutesOptions
+		if flags&4 != 0 {
+			bo.Interner = bgp.NewInterner()
 		}
-		up := plainUp(hh)
-		if addPath {
-			up = peerUp(hh, basicCaps(routerAS, caps...), basicCaps(hh.AS, caps...))
-			st = mrt.SubMessageAS4AddPath
-			if as2 {
-				st = mrt.SubMessageAddPath
-			}
+		if flags&8 != 0 {
+			mo.Interner = bgp.NewInterner()
 		}
-		got := feed(bmp.RoutesOptions{}, up, rm(hh, msg))
-		rec := mrtgen.Header(mrt.TypeBGP4MP, st, epoch, mrtgen.BGP4MP(st, hh.AS, routerAS, hh.Addr, local4, msg))
+		got := feed(bo, ss.up, rm(ss.h, msg))
+		rec := mrtgen.Header(mrt.TypeBGP4MP, ss.st, epoch, mrtgen.BGP4MP(ss.st, ss.h.AS, routerAS, ss.h.Addr, local4, msg))
 		var want []result
-		for r, err := range mrt.Routes(mrt.Records(bytes.NewReader(rec))) {
+		for r, err := range mrt.RoutesWith(mrt.Records(bytes.NewReader(rec)), mo) {
 			want = append(want, result{r, err})
 		}
 
@@ -206,15 +219,17 @@ func FuzzBMPMatchesMRT(f *testing.F) {
 				t.Fatalf("result %d: bmp error %v, mrt error %v", i, g.err, w.err)
 			}
 			if g.err != nil {
-				if errors.Is(g.err, bmp.ErrMalformed) != errors.Is(w.err, mrt.ErrMalformed) {
-					t.Fatalf("result %d: bmp error %v, mrt error %v: only one is malformed", i, g.err, w.err)
+				if gc, wc := cause(g.err, bmp.ErrMalformed), cause(w.err, mrt.ErrMalformed); gc != wc {
+					t.Fatalf("result %d: bmp error %v, mrt error %v: causes differ", i, g.err, w.err)
 				}
 				continue
 			}
 			gr, wr := g.r, w.r
-			if gr.Kind != wr.Kind || gr.Family != wr.Family || gr.Prefix != wr.Prefix || gr.PathID != wr.PathID || gr.HasPathID != wr.HasPathID {
-				t.Fatalf("route %d: bmp %v %v %v %d/%v, mrt %v %v %v %d/%v", i, gr.Kind, gr.Family, gr.Prefix, gr.PathID, gr.HasPathID,
-					wr.Kind, wr.Family, wr.Prefix, wr.PathID, wr.HasPathID)
+			if gr.Kind != wr.Kind || gr.Family != wr.Family || gr.Prefix != wr.Prefix || gr.PathID != wr.PathID || gr.HasPathID != wr.HasPathID ||
+				gr.Peer.Addr != wr.Peer.Addr || gr.Peer.AS != wr.Peer.AS {
+				t.Fatalf("route %d: bmp %v %v %v %d/%v from %v AS%d, mrt %v %v %v %d/%v from %v AS%d", i,
+					gr.Kind, gr.Family, gr.Prefix, gr.PathID, gr.HasPathID, gr.Peer.Addr, gr.Peer.AS,
+					wr.Kind, wr.Family, wr.Prefix, wr.PathID, wr.HasPathID, wr.Peer.Addr, wr.Peer.AS)
 			}
 			if !reflect.DeepEqual(gr.Path, wr.Path) {
 				t.Fatalf("route %d: paths differ\nbmp %+v\nmrt %+v", i, gr.Path, wr.Path)
@@ -224,4 +239,19 @@ func FuzzBMPMatchesMRT(f *testing.F) {
 			}
 		}
 	})
+}
+
+// cause is what err says about the UPDATE itself: the text of the inner
+// error of a *bmp.MessageError or *mrt.RecordError, after the package's
+// ErrMalformed.
+func cause(err, malformed error) string {
+	var me *bmp.MessageError
+	var re *mrt.RecordError
+	switch {
+	case errors.As(err, &me):
+		err = me.Err
+	case errors.As(err, &re):
+		err = re.Err
+	}
+	return strings.TrimPrefix(err.Error(), malformed.Error())
 }

@@ -14,10 +14,12 @@ Tests only; the module's code is unchanged.
 
 - `FuzzBMPMatchesMRT` (`bmp`), the twelfth fuzz target: one fuzzed UPDATE,
   passed through a BMP Route Monitoring after the peer's Peer Up and through
-  an MRT BGP4MP record of the matching subtype, gives the same routes, paths,
-  diagnostics and error places. It covers 2- and 4-byte ASNs, ADD-PATH for
-  every prefix family or none, and a BGP header length cut short of the
-  bytes or followed by more.
+  an MRT BGP4MP record of the matching subtype, gives the same routes
+  (prefix, path ID, peer address and AS, path, diagnostics) and the same
+  errors, in the same places and with the same cause. It covers 2- and
+  4-byte ASNs, ADD-PATH for every prefix family or none, an `Interner` on
+  either side, and a BGP header length beyond the bytes present (a cut
+  message, R17a) or short of them (trailing bytes).
 
 ### Changed
 
@@ -25,19 +27,22 @@ Tests only; the module's code is unchanged.
   contexts it now also holds:
   - R17a: one `bgp/message-truncated` Error, at the cut, exactly when the
     header states more bytes than the message holds;
-  - a message that frames soundly at its full length, cut at up to 16
-    places, gives leading parts of its withdrawn routes, attributes and
-    NLRI, and no partial attribute or prefix;
-  - one `Interner`, shared by the contexts and hit twice, deep-equals
-    `Attrs.Decode` (principle 8).
-- `FuzzDecodeAttrs` also checks the interner.
+  - R17a's "as far as whole fields go": a message that frames soundly at its
+    full length, cut at up to 16 places, gives exactly the withdrawn
+    prefixes, attributes and NLRI of the full message that end at or before
+    the cut, and no NLRI fault the full message lacks;
+  - the attributes decoded through an `Interner`, twice so that the second
+    reuses its AS paths and community lists, deep-equal `Attrs.Decode`
+    (principle 8).
+- `FuzzDecodeAttrs` also decodes each block through one `Interner` under all
+  eight contexts, twice each, and requires each result to equal that
+  context's `Decode`; this covers the interner keeping RIB contexts apart.
 
 ### Measured
 
 go1.27.3 darwin/arm64, `GOMAXPROCS=4`, 2 minutes each under memguard, no
-failure: `FuzzBMPMatchesMRT` 1,166,073 executions
-(`.data/fuzz-bmpmrt-v044.log`), `FuzzParseUpdate` 1,508,325 and
-`FuzzDecodeAttrs` 2,429,869 (`.data/fuzz-bgp-v044.log`).
+failure (`.data/fuzz-v044.log`): `FuzzBMPMatchesMRT` 1,844,202 executions,
+`FuzzParseUpdate` 1,876,788, `FuzzDecodeAttrs` 1,021,900.
 
 ## [0.4.3] - 2026-11-09
 
