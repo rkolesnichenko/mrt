@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net/netip"
 	"runtime"
@@ -68,8 +69,49 @@ func TestFramesLarge(t *testing.T) {
 		}
 	}
 	frames, errs := collect(t, bytes.NewReader(in[:len(small)+len(big)-1]))
-	if len(frames) != 1 || len(errs) != 1 || !errors.Is(errs[0], openbmp.ErrTruncated) {
-		t.Errorf("cut inside the large frame: %d frames, errors %v; want 1 frame and ErrTruncated", len(frames), errs)
+	want := fmt.Sprintf("openbmp: truncated frame: %d of %d bytes", len(big)-1, len(big))
+	if len(frames) != 1 || len(errs) != 1 || !errors.Is(errs[0], openbmp.ErrTruncated) || errs[0].Error() != want {
+		t.Errorf("cut inside the large frame: %d frames, errors %v; want 1 frame and %q", len(frames), errs, want)
+	}
+}
+
+// errAt reads r and returns err with the read that reaches offset at. When
+// sticky it returns err from then on; otherwise later reads go on.
+type errAt struct {
+	r             *bytes.Reader
+	at            int64
+	err           error
+	sticky, fired bool
+}
+
+func (e *errAt) Read(p []byte) (int, error) {
+	if e.fired && e.sticky {
+		return 0, e.err
+	}
+	pos := e.r.Size() - int64(e.r.Len())
+	if !e.fired && pos < e.at && pos+int64(len(p)) >= e.at {
+		n, _ := e.r.Read(p[:e.at-pos])
+		e.fired = true
+		return n, e.err
+	}
+	return e.r.Read(p)
+}
+
+// TestFramesReaderError: a reader error that comes with a frame's last bytes
+// ends the sequence with that error, and the frame is not yielded, whether or
+// not the reader returns the error again.
+func TestFramesReaderError(t *testing.T) {
+	boom := errors.New("boom")
+	for _, size := range []int{100, 300 << 10} {
+		f := bigFrame(size)
+		in := bytes.Join([][]byte{f, f}, nil)
+		for _, sticky := range []bool{true, false} {
+			r := &errAt{r: bytes.NewReader(in), at: int64(len(f)), err: boom, sticky: sticky}
+			frames, errs := collect(t, r)
+			if len(frames) != 0 || len(errs) != 1 || errs[0] != boom {
+				t.Errorf("%d-byte message, sticky %v: %d frames, errors %v; want only %v", size, sticky, len(frames), errs, boom)
+			}
+		}
 	}
 }
 

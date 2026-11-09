@@ -221,9 +221,15 @@ func readRest(r io.Reader, head []byte, total int) ([]byte, error) {
 			copy(g, f)
 			f = g
 		}
-		n, err := io.ReadFull(r, f[len(f):cap(f)])
+		// r.Read, not io.ReadFull: ReadFull drops an error that comes with
+		// the bytes that fill the buffer, and a reader that does not repeat
+		// it would lose it.
+		n, err := r.Read(f[len(f):cap(f)])
 		f = f[:len(f)+n]
-		if err == io.ErrUnexpectedEOF || err == io.EOF {
+		if err == io.EOF {
+			if len(f) == total {
+				break
+			}
 			return nil, fmt.Errorf("%w: %d of %d bytes", ErrTruncated, len(f), total)
 		}
 		if err != nil {

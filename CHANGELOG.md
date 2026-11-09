@@ -14,14 +14,18 @@ a minor version may change the API.
   the heap: one allocation less per message (Measured). It held a
   Peer Up or Peer Down route by value, which made it larger than the Go
   compiler copies into a closure; that route is now allocated only when
-  `PeerStates` yields it.
+  `PeerStates` yields it. `RoutesWith` with `PeerStates`, which never
+  allocated it, now does so once per Peer Up or Peer Down.
 - `openbmp`: `Frames` reads each frame into one buffer, sized exactly up to
   64 KiB and doubling beyond, as `bmp.Messages` does; it allocated about four
-  objects per frame. A frame that states more bytes than follow still
-  allocates in proportion to the bytes present.
+  objects per frame. A frame that states more bytes than follow allocates at
+  most 64 KiB or under four times the bytes present, whichever is larger.
+  Errors are unchanged, including a reader error returned with a frame's
+  last bytes.
 - Tests: `TestSessionRoutesAllocations` (`bmp`) and `TestFramesAllocations`
   (`openbmp`) gate both counts; `TestFramesLarge` and
-  `TestFramesClaimBoundedAlloc` cover frames over 64 KiB.
+  `TestFramesClaimBoundedAlloc` cover frames over 64 KiB, and
+  `TestFramesReaderError` a reader error at a frame's end.
 
 ### Measured
 
@@ -30,7 +34,8 @@ go1.27.3 darwin/arm64, main (2923774) against this release:
 - `BenchmarkBMP/mrt` in `internal/compare` (`bmp.Session.Routes` over
   `bmp.ParseMessage`, 50,085 messages; three alternating rounds of
   `-count=2` under memguard at normal priority, `.data/bench-bmp-v043.log`):
-  7.950 → 6.949 allocations and 708.0 → 459.6 bytes per message (−35%).
+  7.950 → 6.949 allocations per message (−12.6%) and 708.0 → 459.6 bytes
+  per message (−35.1%).
   Best run of each side 20.27 → 16.64 ms (−18%); one branch round took
   59–73 ms, so means are not compared.
 - `testing.AllocsPerRun`, the new tests run against main's code and this
