@@ -12,9 +12,9 @@ import (
 // has capacity equal to its length, as a Clone's does, so that an append by
 // one holder of a shared array cannot write into what another sees; and no
 // byte slice points into the block. The blocks are cloneBlocks' (every
-// reference field set), an AS4_PATH with a confederation segment discarded,
-// broken framing, a duplicate, a malformed attribute, and a RIB block held
-// whole, decoded twice.
+// reference field set), AS4_PATHs with a confederation segment discarded, a
+// merge of three segments, broken framing, a duplicate, a malformed
+// attribute, and a RIB block held whole, decoded twice.
 func TestInternerPathsOwnTheirArrays(t *testing.T) {
 	type block struct {
 		name string
@@ -30,6 +30,20 @@ func TestInternerPathsOwnTheirArrays(t *testing.T) {
 			attr(0x40, 1, 0),
 			asPathAttr(seg(2, ASSequence, 23456, 23456, 64500)),
 			as4PathAttr(seg(4, ASConfedSequence, 65000), seg(4, ASSequence, 65536, 65537), seg(4, ASSet, 1, 2, 3)),
+		), Context{}},
+		// The merged path differs from AS4_PATH, so the AS4_PATH left
+		// after the discard, its segment list shorter than its array, is
+		// held as its own.
+		block{"AS4_PATH confederation discarded, merge differs", concat(
+			attr(0x40, 1, 0),
+			asPathAttr(seg(2, ASSequence, 23456, 23456, 64500, 64501)),
+			as4PathAttr(seg(4, ASConfedSequence, 65000), seg(4, ASSequence, 65536, 65537), seg(4, ASSet, 1, 2, 3)),
+		), Context{}},
+		// A merge of three segments: mergeAS4's list grows by append.
+		block{"merge of three segments", concat(
+			attr(0x40, 1, 0),
+			asPathAttr(seg(2, ASSet, 7, 8), seg(2, ASSequence, 23456, 64500), seg(2, ASSet, 1, 2)),
+			as4PathAttr(seg(4, ASSequence, 65536, 64500), seg(4, ASSet, 1, 2)),
 		), Context{}},
 		block{"broken framing", concat(attr(0x40, 1, 0), []byte{0xC0, 8, 40, 1, 2, 3}), Context{AS4: true}},
 		block{"duplicate and malformed", concat(

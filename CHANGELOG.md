@@ -32,25 +32,28 @@ a minor version may change the API.
     `Routes` without one and now costs −1% to +26%; on RIB files it saves
     more than before. Time not measured.
   - Held memory, every path kept with the `Interner` alive, is 0.3% to 0.8%
-    higher on six of the fixtures, whose three runs each agree within 0.4%;
-    on rv6-rib and rv6-tabledump runs vary by 2% to 3%, more than any change
-    (`.data/held-interner-v051-summary.txt`). A kept path now has `Decode`'s
-    arrays, whose allocations may be larger than
-    their length (an AS path's object is sized to an allocation class, with
-    up to three unused ASN slots), where the clone's were exact.
+    higher on six of the fixtures, whose three runs each agree within 0.5%;
+    on rv6-rib and rv6-tabledump runs vary by 2.1% to 3.4%, more than any
+    change (`.data/held-interner-v051-summary.txt`). A kept path now has
+    `Decode`'s arrays, whose allocations may be larger than their length
+    (an AS path's object is sized to an allocation class, with up to three
+    unused ASN slots), where the clone's were exact.
   - The `TestAllocations` ceilings for `Routes` with an `Interner` are
     lowered to the new counts, the higher of Go 1.23.0 and 1.27.3 plus 5%
     (`.data/allocs-v051.log`).
 - Tests: `TestInternerPathsOwnTheirArrays` walks every field of the paths
   the `Interner` returns, by reflection as the `Clone` guard does, over
-  blocks that set every reference field, AS4 merges, a dropped
-  confederation segment, broken framing, duplicates, malformed attributes
-  and a RIB block held whole: every slice must have capacity equal to its
-  length and no byte slice may point into the block.
+  blocks that set every reference field, AS4 merges (one of three
+  segments), dropped confederation segments, broken framing, duplicates,
+  malformed attributes and a RIB block held whole: every slice must have
+  capacity equal to its length and no byte slice may point into the block.
   `TestInternerCopiesOwnArrays` requires the copied parts to point outside
   the block, empty values included (a zero-length slice of the block would
-  keep it alive). Sabotages of each are caught
-  (`.data/interner-sabotage-v051.log`).
+  keep it alive). Leaving out the copies, the empty-value rule, the copies'
+  clip, or the clip of the segment lists, their ASNs or the `Unknown()`
+  list, each fails them
+  (`.data/interner-sabotage-v051.log`); the other clips guard against a
+  future `Decode` that leaves spare capacity, which it does not today.
 
 ## [0.5.0] - 2026-11-09
 
