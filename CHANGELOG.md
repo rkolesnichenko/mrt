@@ -15,29 +15,40 @@ a minor version may change the API.
   dropped the copies for the held ones it found. It now keeps `Decode`'s
   arrays and copies only the parts that alias the block (`Unknown()`
   values and the raw NLRI of MP_REACH and MP_UNREACH), all into one new
-  array, each with capacity equal to its length. A path still holds none of
-  the bytes it was decoded from, and still deep-equals `Attrs.Decode`'s
-  (principle 8). On a block it has not held, `Decode` now costs one
-  allocation more than `Attrs.Decode`, or two with such parts, instead of
-  7 to 11 more (`TestInternerMissAllocations`).
+  array. Every slice of a returned path still has capacity equal to its
+  length, as a clone's had (`Decode`'s merged AS paths, an AS4_PATH with a
+  confederation segment dropped and the `Unknown()` list are clipped where
+  they are), so an append to a shared array cannot write into what another
+  holder sees. A path still holds none of the bytes it was decoded from,
+  and still deep-equals `Attrs.Decode`'s (principle 8). On a block it does
+  not index whole and whose components it already holds, `Decode` now
+  costs one allocation more than `Attrs.Decode`, or two with such parts,
+  instead of 7 to 11 more (`TestInternerMissAllocations`).
   - `Routes` with an `Interner` over `testdata/mrt` (go1.27.3 darwin/arm64,
-    median of 5 passes; `.data/interner-allocs-v051-summary.txt`):
+    median of 5 passes each; `.data/interner-allocs-v051-summary.txt`):
     allocations −20% to −38% on every fixture (rv2-updates-et 99,554 →
     68,475, rv2-rib 26,474 → 18,010), bytes −6% to −27%. On update and
     table-dump files the interner cost 31% to 75% more allocations than
     `Routes` without one and now costs −1% to +26%; on RIB files it saves
     more than before. Time not measured.
   - Held memory, every path kept with the `Interner` alive, is 0.3% to 0.8%
-    higher on the same fixtures (`.data/held-interner-v051.log`): a kept AS
-    path now has `Decode`'s array, sized to an allocation class with up to
-    three unused ASN slots, where the clone was exact.
+    higher on the same fixtures (`.data/held-interner-v051.log`): a kept
+    path now has `Decode`'s arrays, whose allocations may be larger than
+    their length (an AS path's object is sized to an allocation class, with
+    up to three unused ASN slots), where the clone's were exact.
   - The `TestAllocations` ceilings for `Routes` with an `Interner` are
     lowered to the new counts, the higher of Go 1.23.0 and 1.27.3 plus 5%
     (`.data/allocs-v051.log`).
-- Tests: `TestInternerCopiesOwnArrays` requires the copied parts to point
-  outside the block, empty values included (a zero-length slice of the
-  block would keep it alive), with capacity equal to length; sabotages of
-  each are caught (`.data/interner-sabotage-v051.log`).
+- Tests: `TestInternerPathsOwnTheirArrays` walks every field of the paths
+  the `Interner` returns, by reflection as the `Clone` guard does, over
+  blocks that set every reference field, AS4 merges, a dropped
+  confederation segment, broken framing, duplicates, malformed attributes
+  and a RIB block held whole: every slice must have capacity equal to its
+  length and no byte slice may point into the block.
+  `TestInternerCopiesOwnArrays` requires the copied parts to point outside
+  the block, empty values included (a zero-length slice of the block would
+  keep it alive). Sabotages of each are caught
+  (`.data/interner-sabotage-v051.log`).
 
 ## [0.5.0] - 2026-11-09
 
