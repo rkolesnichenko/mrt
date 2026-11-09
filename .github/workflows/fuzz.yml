@@ -4,6 +4,19 @@ name: fuzz
 # each push and pull request, for 30s a target; the schedule runs it on main
 # once a day for longer, so that main's corpus grows between merges. Both
 # share the corpus cache: caches belong to a branch, not to a workflow.
+#
+# GitHub runs a schedule only on the default branch's latest commit, may
+# delay it or drop it under load, disables it after 60 days without activity
+# in a public repository, and tells only whoever last edited the cron line
+# when a scheduled run fails. Two runs on main at once both restore the same
+# corpus and save their own; the next restores the newer, so the other's
+# additions are lost (growth only, never a failure).
+#
+# The daily and manual runs fail a target whose baseline over the cached
+# corpus takes over 10s (FUZZ_BASELINE_MAX), a third of what a push or pull
+# request gives it: a corpus grown too large then stops the daily run, which
+# saves no cache, before it can fail pull requests. fuzz.sh says how to start
+# a corpus afresh.
 on:
   workflow_call:
     inputs:
@@ -16,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       fuzztime:
-        description: "FUZZTIME per target"
+        description: "FUZZTIME per target (six targets a shard, 45 minutes a job: at most 3m)"
         type: string
         default: 2m
 
@@ -70,6 +83,9 @@ jobs:
           # A scheduled run has no inputs.
           FUZZTIME: ${{ inputs.fuzztime || '2m' }}
           FUZZ_SHARD: ${{ matrix.shard }}/2
+          # Called from ci.yml, github.event_name is the caller's (push or
+          # pull_request), and no limit applies.
+          FUZZ_BASELINE_MAX: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '10' || '' }}
       # go test writes a failing input under testdata/fuzz and does not print
       # it; without this the crash cannot be reproduced.
       - name: Upload failing fuzz inputs

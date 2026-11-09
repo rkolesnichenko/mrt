@@ -18,25 +18,36 @@ Tests and CI only; the module's code is unchanged.
   that takes all of `FUZZTIME` ends the run there, and it passed: at
   `FUZZTIME=2s`, `FuzzDecompress` stopped at 143 of 203 baseline inputs,
   with no execution, and reported PASS (`.data/fuzztime-baseline-v052.log`).
-  Such a run now fails, saying so (`.data/fuzzsh-guard-v052.log`). In CI,
-  with the corpus kept since v0.4.6, baselines take 0 to 2 s of each
-  target's 30 s, `FuzzDecompress` the most (210 inputs;
-  `.data/ci-baseline-1ac719c.txt`).
+  Such a run now fails, saying so and how to start the corpus afresh
+  (`.data/fuzzsh-guard-v052.log`). In CI, with the corpus kept since
+  v0.4.6, baselines take 0 to 2 s of each target's 30 s, `FuzzDecompress`
+  the most (210 inputs; `.data/ci-baseline-1ac719c.txt`). A target name that
+  matches no fuzz test, which passed, now fails too.
+- `FUZZ_BASELINE_MAX` (seconds) in `scripts/fuzz.sh` fails a target whose
+  baseline took longer (`.data/fuzzsh-guard2-v052.log`).
 - The fuzz job moved to `.github/workflows/fuzz.yml`, which `ci.yml` calls
   for every push and pull request (30 s a target, as before) and which also
   runs on main once a day at 03:23 UTC, 2 minutes a target, or by hand.
   Caches belong to a branch, not a workflow, so main's corpus now grows
-  daily, not only when something is merged. The check is named
-  `fuzz / fuzz (shard i/2)`; branch protection requires only `ci ok`.
+  daily, not only when something is merged. The daily and manual runs set
+  `FUZZ_BASELINE_MAX=10`, a third of a pull request's 30 s: a corpus grown
+  too large stops the daily run, which then saves no cache, before it can
+  fail a pull request. GitHub's limits on schedules (default branch only,
+  disabled after 60 days without activity, failures reported to whoever
+  last edited the cron line) are noted in `fuzz.yml`. The check should be
+  named `fuzz / fuzz (shard i/2)`; branch protection requires only `ci ok`.
 - `compare -bmp` fails when its `Session.Each` pass counts other routes or
   errors than its `Session.Routes` pass (a walk made to drop one route
   fails `TestRunBMP`; `.data/compare-tests-v052.log`).
 
 ### Not done
 
-- Pruning the fuzz corpus cache, which nothing does: each shard's cache is
-  102 KB to 264 KB, and the 26 in the repository total 4.2 MB
-  (`.data/gh-cache-corpus-v052.log`).
+- Pruning the fuzz corpus, which nothing does. The caches are small (each
+  shard's 102 KB to 264 KB, the 26 in the repository 4.2 MB;
+  `.data/gh-cache-corpus-v052.log`); what a corpus that grows too large
+  costs is time, which `FUZZ_BASELINE_MAX` turns into a failing daily run
+  with the steps to start it afresh. How fast a 2-minute daily run grows it
+  is not yet measured.
 
 ## [0.5.1] - 2026-11-09
 

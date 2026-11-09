@@ -287,11 +287,9 @@ func runBMP(path string, w io.Writer) int {
 			return walk{fmt.Sprintf("%d routes, %d errors", routes, errs), routes, errs}, nil
 		})
 	}
-	results := []result{
-		pass("mrt bmp.Session.Routes", walkMrtBMP),
-		pass("mrt bmp.Session.Each", walkMrtBMPEach),
-		pass("gobgp ParseBMPMessage", walkGobgpBMP),
-	}
+	routes := pass("mrt bmp.Session.Routes", walkMrtBMP)
+	each := pass("mrt bmp.Session.Each", walkMrtBMPEach)
+	results := []result{routes, each, pass("gobgp ParseBMPMessage", walkGobgpBMP)}
 	var ours, theirs []string
 	for _, s := range streams {
 		ours = append(ours, mrtBMPRoutes(s)...)
@@ -311,8 +309,8 @@ func runBMP(path string, w io.Writer) int {
 			float64(r.totalAlloc)/float64(msgs), float64(r.mallocs)/float64(msgs), r.summary)
 	}
 	// The two mrt passes decode the same messages, so they must count alike.
-	if r, e := results[0], results[1]; e.items != r.items || e.errs != r.errs {
-		fmt.Fprintf(w, "MISMATCH: %s counted %d routes and %d errors, %s %d and %d\n", e.name, e.items, e.errs, r.name, r.items, r.errs)
+	if each.items != routes.items || each.errs != routes.errs {
+		fmt.Fprintf(w, "MISMATCH: %s counted %d routes and %d errors, %s %d and %d\n", each.name, each.items, each.errs, routes.name, routes.items, routes.errs)
 		return 1
 	}
 	fmt.Fprintf(w, "\nmrt lines %d, gobgp lines %d\n", len(ours), len(theirs))
