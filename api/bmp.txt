@@ -152,6 +152,7 @@ type RoutesOptions struct
 	RequirePeerUp bool
 	Interner *bgp.Interner
 type Session struct
+func (*Session) Each(m Message, err error, yield func(mrt.Route, error) bool) bool
 func (*Session) Routes(m Message, err error) iter.Seq2[mrt.Route, error]
 type Stat struct
 	Type StatType

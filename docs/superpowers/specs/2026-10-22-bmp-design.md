@@ -717,6 +717,10 @@ func NewSession(opts RoutesOptions) *Session
 // is the whole Kafka step; a non-nil err is yielded unchanged.
 func (s *Session) Routes(m Message, err error) iter.Seq2[mrt.Route, error]
 
+// Each is Routes with a callback in place of the sequence (added 2026-11-09,
+// v0.5.0: it allocates less per message).
+func (s *Session) Each(m Message, err error, yield func(mrt.Route, error) bool) bool
+
 func Routes(msgs iter.Seq2[Message, error]) iter.Seq2[mrt.Route, error]
 func RoutesWith(msgs iter.Seq2[Message, error], opts RoutesOptions) iter.Seq2[mrt.Route, error]
 ```

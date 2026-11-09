@@ -402,6 +402,57 @@ func TestSessionRoutesAppliesWhenCalled(t *testing.T) {
 	}
 }
 
+// collectEach is collect over what s.Each passes to its yield.
+func collectEach(s *bmp.Session, m bmp.Message, err error) []outcome {
+	var out []outcome
+	s.Each(m, err, func(r mrt.Route, err error) bool {
+		o := outcome{r: r}
+		if err != nil {
+			o.err = err.Error()
+		}
+		out = append(out, o)
+		return true
+	})
+	return out
+}
+
+// TestSessionEach: Each returns false, and passes nothing more, once yield
+// returns false; the message has been applied to the session all the same,
+// and the session goes on with the next message.
+func TestSessionEach(t *testing.T) {
+	h := at(global4(31), 0, 1)
+	three := mrtgen.Update(nil, []bgp.NLRI{nlri("198.51.100.0/24", true, 1), nlri("198.51.101.0/24", true, 2), nlri("198.51.102.0/24", true, 3)},
+		mrtgen.Attrs(mrtgen.Origin(bgp.OriginIGP), mrtgen.ASPath(true, mrtgen.Seq(64501)), mrtgen.NextHop(nh4)), true)
+	s := bmp.NewSession(bmp.RoutesOptions{PeerStates: true})
+	// The Peer Up's KindPeerState route is refused at once; its ADD-PATH
+	// state still applies to the messages after it.
+	var calls int
+	stop := func(mrt.Route, error) bool { calls++; return false }
+	m, err := bmp.ParseMessage(peerUp(h, basicCaps(routerAS, bmpgen.CapAddPath(ap(fam4, 1))), basicCaps(h.AS, bmpgen.CapAddPath(ap(fam4, 2)))))
+	if s.Each(m, err, stop) || calls != 1 {
+		t.Errorf("Each of a Peer Up, yield stops: returned true or called yield %d times, want false and once", calls)
+	}
+	// Three routes; yield stops at the first.
+	calls = 0
+	m, err = bmp.ParseMessage(rm(h, three))
+	if s.Each(m, err, stop) || calls != 1 {
+		t.Errorf("Each of three routes, yield stops: returned true or called yield %d times, want false and once", calls)
+	}
+	var got []mrt.Route
+	all := func(r mrt.Route, err error) bool {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, r)
+		return true
+	}
+	m, err = bmp.ParseMessage(rm(h, announce(h, "203.0.113.0/24", true, 9)))
+	if !s.Each(m, err, all) {
+		t.Error("Each with a yield that never stops returned false")
+	}
+	wantIDs(t, got, map[bgp.Family]uint32{fam4: 9})
+}
+
 // collectResults ranges over seq once.
 func collectResults(seq func(func(mrt.Route, error) bool)) []result {
 	var out []result
@@ -422,6 +473,14 @@ func TestRoutesWithMatchesSession(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("%s %+v: Session.Routes per message differs from RoutesWith", name, o)
+			}
+			s = bmp.NewSession(o)
+			got = nil
+			for m, err := range bmp.Messages(bytes.NewReader(data)) {
+				got = append(got, collectEach(s, m, err)...)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("%s %+v: Session.Each per message differs from RoutesWith", name, o)
 			}
 		}
 		if !reflect.DeepEqual(collect(bmp.Routes(bmp.Messages(bytes.NewReader(data)))),
@@ -467,6 +526,14 @@ func TestSessionErrorPassThrough(t *testing.T) {
 		}
 		if len(got) != 1 || got[0].err != e || !reflect.DeepEqual(got[0].r, mrt.Route{}) {
 			t.Errorf("Routes(nil, %v) yields %+v, want the error once and unchanged", e, got)
+		}
+		got = nil
+		bmp.NewSession(bmp.RoutesOptions{PeerStates: true, EndOfRIB: true}).Each(nil, e, func(r mrt.Route, err error) bool {
+			got = append(got, result{r, err})
+			return true
+		})
+		if len(got) != 1 || got[0].err != e || !reflect.DeepEqual(got[0].r, mrt.Route{}) {
+			t.Errorf("Each(nil, %v) passes %+v, want the error once and unchanged", e, got)
 		}
 	}
 }

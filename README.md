@@ -191,7 +191,9 @@ for frame, err := range openbmp.Frames(f) { // or one Kafka message per frame
 
 The example runs under `go test` over a committed synthetic OpenBMP stream. A message's bytes
 alias the buffer it was parsed from, so range over its routes before reusing
-the buffer. On a plain byte stream, such as a router's TCP session, one session
+the buffer. `s.Each(m, err, yield)` does the same step with a callback in
+place of the sequence, and allocates less (`ExampleSession_Each`); the buffer
+may be reused once it returns. On a plain byte stream, such as a router's TCP session, one session
 is implied (abridged from `ExampleRoutesWith`, same file):
 
 ```go

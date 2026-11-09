@@ -63,6 +63,48 @@ func ExampleSession_Routes() {
 	// 1 routers, 32 routes, 0 errors
 }
 
+// ExampleSession_Each is ExampleSession_Routes's loop with Session.Each,
+// which takes a callback where Routes returns a sequence, and allocates
+// less. The callback is made once, outside the loop.
+func ExampleSession_Each() {
+	f, err := os.Open("../testdata/bmp/obmp-v4-router.obmp")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+
+	sessions := make(map[[16]byte]*bmp.Session)
+	var n, bad int
+	count := func(route mrt.Route, err error) bool {
+		if err != nil {
+			bad++ // a bad message is reported and the stream goes on
+			return true
+		}
+		n++
+		return true // false would stop at this route
+	}
+	for frame, err := range openbmp.Frames(f) {
+		if err != nil {
+			log.Fatal(err)
+		}
+		h, msg, err := openbmp.Parse(frame)
+		if err != nil {
+			bad++
+			continue
+		}
+		s := sessions[h.RouterHash]
+		if s == nil {
+			s = bmp.NewSession(bmp.RoutesOptions{Router: h.RouterIP, PeerStates: true})
+			sessions[h.RouterHash] = s
+		}
+		m, err := bmp.ParseMessage(msg)
+		s.Each(m, err, count) // msg may be reused once Each returns
+	}
+	fmt.Println(len(sessions), "routers,", n, "routes,", bad, "errors")
+	// Output:
+	// 1 routers, 32 routes, 0 errors
+}
+
 // ExampleRoutesWith reads a byte stream of BMP messages, as a router's TCP
 // session carries them (here a file), and counts what comes out by Kind.
 // PeerStates yields a KindPeerState route for each Peer Up and Peer Down and
