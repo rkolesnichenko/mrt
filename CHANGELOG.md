@@ -8,6 +8,8 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-09
+
 ### Fixed
 
 - `mrt.Records` and `bmp.Messages` no longer lose a reader error that
@@ -67,9 +69,9 @@ a minor version may change the API.
   (`TestFramesAllocations`: 37 for 36 frames).
 - Tests: `TestFramesReaderError` puts the error at the end of each frame's
   prefix, inside the second one, and at each frame's end, also through
-  bufio buffers of 16 bytes and 64 KiB; `TestFramesReaderErrorResume` breaks after the
-  frame and ranges again; `TestFramesDataEOF` reads the same frames and
-  truncation errors from readers that return `io.EOF` or
+  bufio buffers of 16 bytes and 64 KiB; `TestFramesReaderErrorResume`
+  breaks after the frame and ranges again; `TestFramesDataEOF` reads the
+  same frames and truncation errors from readers that return `io.EOF` or
   `io.ErrUnexpectedEOF` with their last bytes; `TestFramesCutGzip` cuts a
   gzip capture.
 
@@ -844,7 +846,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/rkolesnichenko/mrt/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/rkolesnichenko/mrt/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/rkolesnichenko/mrt/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/rkolesnichenko/mrt/compare/v0.4.1...v0.4.2
