@@ -121,10 +121,13 @@ func (s *Session) Routes(m Message, err error) iter.Seq2[mrt.Route, error] {
 }
 
 // step is what one message yields, fixed when the message is applied to the
-// session.
+// session. It stays small (event is a pointer, set only for a Peer Up or Down
+// under PeerStates), so the closure Session.Routes returns holds it by value
+// and it does not move to the heap: a Route is over the 128 bytes the compiler
+// copies into a closure.
 type step struct {
 	err            error         // yielded as is
-	event          mrt.Route     // a KindPeerState route, when its Kind is set
+	event          *mrt.Route    // a KindPeerState route, or nil
 	m              Message       // a RouteMonitoring to decode, or nil
 	addPath, known bgp.FamilySet // for m: Session.lookup's answer
 }
@@ -149,7 +152,8 @@ func (s *Session) apply(msg Message, err error) step {
 	if !s.opts.PeerStates {
 		return step{}
 	}
-	return step{event: ev}
+	e := ev // ev itself stays on the stack: only this copy is allocated
+	return step{event: &e}
 }
 
 // emit yields what st holds. It returns false when yield did.
@@ -157,8 +161,8 @@ func (s *Session) emit(st step, yield func(mrt.Route, error) bool) bool {
 	switch {
 	case st.err != nil:
 		return yield(mrt.Route{}, st.err)
-	case st.event.Kind != 0:
-		return yield(st.event, nil)
+	case st.event != nil:
+		return yield(*st.event, nil)
 	case st.m != nil:
 		return s.monitoring(st.m.(RouteMonitoring), st.addPath, st.known, yield)
 	}

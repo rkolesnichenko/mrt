@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/rkolesnichenko/mrt"
 )
 
 // TestAllocations is the bmp allocation gate (see the root TestAllocations):
@@ -48,5 +50,24 @@ func TestAllocations(t *testing.T) {
 				t.Errorf("Messages: %.0f allocations for %d messages and %d errors, want at most %.0f (2 per message, %d per error)", got, msgs, errs, limit, perError)
 			}
 		})
+	}
+}
+
+// TestSessionRoutesAllocations: Session.Routes of a message that yields
+// nothing is one allocation, the returned sequence; what it holds of the
+// message is inside it. The sequence is called with a yield made once: a
+// range loop over it adds its own body's closure, which is the caller's.
+func TestSessionRoutesAllocations(t *testing.T) {
+	if raceEnabled {
+		t.Skip("the race detector inflates allocation")
+	}
+	m, err := ParseMessage([]byte{3, 0, 0, 0, 6, byte(TypeTermination)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewSession(RoutesOptions{PeerStates: true})
+	yield := func(mrt.Route, error) bool { return true }
+	if got := testing.AllocsPerRun(100, func() { s.Routes(m, nil)(yield) }); got != 1 {
+		t.Errorf("Session.Routes of a Termination: %v allocations, want 1", got)
 	}
 }

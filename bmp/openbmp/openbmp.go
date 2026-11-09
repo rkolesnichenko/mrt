@@ -160,8 +160,11 @@ func Parse(frame []byte) (Header, []byte, error) {
 func Frames(r io.Reader) iter.Seq2[[]byte, error] {
 	done := false
 	return func(yield func([]byte, error) bool) {
+		// head escapes to the heap (io.ReadFull takes an io.Reader), so it is
+		// declared once per range, not once per frame.
+		var head [prefixLen]byte
 		for !done {
-			frame, err := readFrame(r)
+			frame, err := readFrame(r, head[:])
 			if err != nil || frame == nil {
 				done = true
 				if err != nil {
@@ -176,9 +179,9 @@ func Frames(r io.Reader) iter.Seq2[[]byte, error] {
 	}
 }
 
-// readFrame returns nil, nil at a clean end.
-func readFrame(r io.Reader) ([]byte, error) {
-	head := make([]byte, prefixLen)
+// readFrame reads one frame, its prefix into head first. It returns nil, nil
+// at a clean end.
+func readFrame(r io.Reader, head []byte) ([]byte, error) {
 	n, err := io.ReadFull(r, head)
 	if n == 0 && err == io.EOF {
 		return nil, nil
@@ -196,15 +199,44 @@ func readFrame(r io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The rest grows with the bytes that arrive, not with the stated length.
-	rest, err := io.ReadAll(io.LimitReader(r, int64(total-prefixLen)))
-	if err != nil {
-		return nil, err
+	return readRest(r, head, total)
+}
+
+// smallFrame is the largest frame allocated in one piece before its bytes
+// are read.
+const smallFrame = 64 << 10
+
+// readRest reads the rest of a frame of total bytes that starts with head,
+// into one slice holding both. It follows bmp's readMessage: a frame up to
+// smallFrame is allocated exactly; a larger one starts at smallFrame and
+// doubles as bytes arrive, so a prefix that states more bytes than follow
+// allocates, in total, at most smallFrame or under four times the bytes
+// present, whichever is larger (CLAUDE.md principle 2).
+func readRest(r io.Reader, head []byte, total int) ([]byte, error) {
+	f := make([]byte, len(head), min(total, smallFrame))
+	copy(f, head)
+	for len(f) < total {
+		if len(f) == cap(f) {
+			g := make([]byte, len(f), min(2*cap(f), total))
+			copy(g, f)
+			f = g
+		}
+		// r.Read, not io.ReadFull: ReadFull drops an error that comes with
+		// the bytes that fill the buffer, and a reader that does not repeat
+		// it would lose it.
+		n, err := r.Read(f[len(f):cap(f)])
+		f = f[:len(f)+n]
+		if err == io.EOF {
+			if len(f) == total {
+				break
+			}
+			return nil, fmt.Errorf("%w: %d of %d bytes", ErrTruncated, len(f), total)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
-	if len(rest) != total-prefixLen {
-		return nil, fmt.Errorf("%w: %d of %d bytes", ErrTruncated, prefixLen+len(rest), total)
-	}
-	return append(head, rest...), nil
+	return f, nil
 }
 
 // frameLen checks a frame's stated header and message lengths and returns the
