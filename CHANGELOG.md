@@ -16,9 +16,9 @@ Tests and CI only; the module's code is unchanged.
   job's `setup-go` cache holds, but that cache is saved only when its key
   misses: when `go.mod`, `scripts/fuzz.sh`, Go or the runner image changes,
   and then by whichever of the two shards saves first (`gh cache list` showed
-  one entry per key and branch). The corpus now has a cache of its own, per
-  shard, under a key new on every run, saved when the job passes and
-  restored from the newest.
+  one entry per key and branch, `.data/gh-cache-list-v046.log`). The
+  corpus now has a cache of its own, per shard, under a key new on every
+  run, saved when the job passes and restored from the newest.
 - `FuzzDecompress` ran `DecompressWith` at Workers 2 only; it now takes
   Workers 1 to 8 from the fuzz input. Its seeds read
   `testdata/bzip2/zeros/zeros-1.bz2` (twelve blocks) at Workers 1, 2 and 8,
