@@ -10,6 +10,30 @@ a minor version may change the API.
 
 ### Fixed
 
+- `mrt.Records` and `bmp.Messages` no longer lose a reader error that
+  comes with the bytes completing a record or message. Both read through a
+  `bufio.Reader`, which hands a read at least as long as its buffer (4 KiB
+  by default, or the size of one the caller passes) straight to the
+  underlying reader and returns that reader's error with the bytes, once;
+  `io.ReadFull` dropped it, so a reader that did not return the error again
+  went on to the next bytes as if none had occurred. The skip of a record
+  or message over the length limit lost it the same way (`io.CopyN`). Such
+  an error is now held and returned by the next read, as bufio already did
+  for the reads it buffers: the record or message the bytes complete is
+  yielded, then the error ends the sequence. A reader that does return the
+  error again, and every read bufio buffered, behave as before; so do
+  readers that return `io.EOF` or `io.ErrUnexpectedEOF` with their last
+  bytes, such as `compress/gzip` over a cut file. One allocation more per
+  range, none per record (`.data/allocs-readers-v045.log`, go1.27.3
+  darwin/arm64: for example 4010 → 4011 over
+  `testdata/mrt/rv2-rib.20261015.1200.gz`, 44 → 45 over
+  `testdata/bmp/bmp-addpath.bmp`).
+- Tests: `TestRecordsReaderError` and `TestMessagesReaderError` put the
+  error at the end of each header and each record or message, for body
+  sizes from 100 bytes to 300 KiB, over bufio buffers of the default size,
+  16 bytes and 64 KiB, and for records skipped as too large;
+  `TestRecordsDataEOF`/`TestMessagesDataEOF` and
+  `TestRecordsCutGzip`/`TestMessagesCutGzip` pin the behaviour that stays.
 - `openbmp`: `Frames` no longer loses a reader error that comes with the
   bytes completing a frame's 12-byte prefix. It read the prefix with
   `io.ReadFull`, which drops such an error, so a reader that did not
