@@ -20,17 +20,18 @@ a minor version may change the API.
   The skip of a record or message over the length limit lost it the same
   way (`io.CopyN`). Such an error is now held and returned by the next
   read, as bufio already did for the reads it buffers: the record or
-  message the bytes complete is yielded, then the error ends the sequence. A reader that does return the
-  error again, and every read bufio buffered, behave as before; so do
-  readers that return `io.EOF` or `io.ErrUnexpectedEOF` with their last
-  bytes, such as `compress/gzip` over a cut file. One change besides: the
-  skip now reads through bufio's buffer, which gives up with
-  `io.ErrNoProgress` after 100 reads in a row that return no bytes and no
-  error, so such a reader now ends the stream there; `io.CopyN` kept
-  reading it. One allocation more per `Records` or `Messages` call, none per
-  record (`.data/allocs-readers-v045.log`, go1.27.3 darwin/arm64: for
-  example 4010 → 4011 over `testdata/mrt/rv2-rib.20261015.1200.gz`, 44 → 45
-  over `testdata/bmp/bmp-addpath.bmp`).
+  message the bytes complete is yielded, then the error ends the sequence.
+  A reader that does return the error again, and every read bufio
+  buffered, behave as before; so do readers that return `io.EOF` or
+  `io.ErrUnexpectedEOF` with their last bytes, such as `compress/gzip` over
+  a cut file. One change besides: the skip now reads through bufio's
+  buffer, which gives up with `io.ErrNoProgress` after 100 reads in a row
+  that return no bytes and no error, so such a reader now ends the stream
+  there; `io.CopyN` kept reading it. One allocation more per `Records` or
+  `Messages` call, none per record (`.data/allocs-readers-v045.log`,
+  go1.27.3 darwin/arm64: for example 4010 → 4011 over
+  `testdata/mrt/rv2-rib.20261015.1200.gz`, 44 → 45 over
+  `testdata/bmp/bmp-addpath.bmp`).
 - Tests: `TestRecordsReaderError` and `TestMessagesReaderError` put the
   error at the end of each header and each record or message, for body
   sizes from 100 bytes to 300 KiB, over bufio buffers of the default size,
@@ -40,19 +41,31 @@ a minor version may change the API.
   the record or message and range again, and get the error once;
   `TestRecordsDataEOF`/`TestMessagesDataEOF` and
   `TestRecordsCutGzip`/`TestMessagesCutGzip` pin the behaviour that stays.
-- `openbmp`: `Frames` no longer loses a reader error that comes with the
-  bytes completing a frame's 12-byte prefix. It read the prefix with
-  `io.ReadFull`, which drops such an error, so a reader that did not
-  return the error again went on to the next bytes as if none had
-  occurred. The prefix is now read as v0.4.3 reads the rest of the frame.
-  A reader that does return the error again with a prefix whose lengths
-  are bad now gets its own error rather than the length error. Other
-  errors are unchanged, as is the allocation count
+- `openbmp`: `Frames` holds a reader error the same way.
+  - It no longer loses one that comes with the bytes completing a frame's
+    12-byte prefix: the prefix was read with `io.ReadFull`, so a reader
+    that did not return the error again went on to the next bytes as if
+    none had occurred.
+  - A frame whose last bytes come with a reader error is now yielded, then
+    the error; v0.4.3 and v0.4.4 dropped the frame. The frames yielded no
+    longer depend on whether the reader is a `bufio.Reader`, which already
+    held such an error.
+  - A stream that ends inside a frame with `io.ErrUnexpectedEOF`, as
+    `compress/gzip` does over a cut file, now wraps `ErrTruncated`, as the
+    doc comment says; after the prefix it was the bare error. Over a gzip
+    of `testdata/bmp/obmp-v4-router.obmp` cut every 7 bytes, 21 of 159
+    cuts ended in `ErrTruncated` before, 159 now
+    (`.data/obmp-cutgzip-v045.log`).
+
+  Other errors are unchanged, as is the allocation count
   (`TestFramesAllocations`: 37 for 36 frames).
 - Tests: `TestFramesReaderError` puts the error inside and at the end of
-  each frame's prefix as well as at the frame's end; `TestFramesDataEOF`
-  reads the same frames and truncation errors from a reader that returns
-  `io.EOF` with its last bytes (`iotest.DataErrReader`).
+  each frame's prefix and at each frame's end, also through bufio buffers
+  of 16 bytes and 64 KiB; `TestFramesReaderErrorResume` breaks after the
+  frame and ranges again; `TestFramesDataEOF` reads the same frames and
+  truncation errors from readers that return `io.EOF` or
+  `io.ErrUnexpectedEOF` with their last bytes; `TestFramesCutGzip` cuts a
+  gzip capture.
 
 ## [0.4.4] - 2026-11-09
 

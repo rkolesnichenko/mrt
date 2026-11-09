@@ -156,15 +156,17 @@ func Parse(frame []byte) (Header, []byte, error) {
 // own buffer, self-delimited by the header and message lengths. A frame has no
 // resync point, so a bad prefix, a frame over MaxFrameLen or a stream that ends
 // inside a frame yields one error (the last wrapping ErrTruncated) and ends the
-// sequence. A clean end at a frame boundary ends it without an error.
+// sequence. A clean end at a frame boundary ends it without an error. A reader
+// error that comes with a frame's last bytes is yielded after that frame.
 func Frames(r io.Reader) iter.Seq2[[]byte, error] {
 	done := false
+	fr := &frameReader{r: r}
 	return func(yield func([]byte, error) bool) {
 		// head escapes to the heap (r.Read is an interface call), so it is
 		// declared once per range, not once per frame.
 		var head [prefixLen]byte
 		for !done {
-			frame, err := readFrame(r, head[:])
+			frame, err := fr.readFrame(head[:])
 			if err != nil || frame == nil {
 				done = true
 				if err != nil {
@@ -179,46 +181,66 @@ func Frames(r io.Reader) iter.Seq2[[]byte, error] {
 	}
 }
 
+// frameReader is the reader Frames reads, with the error that came with the
+// bytes completing a read held for the next read.
+type frameReader struct {
+	r   io.Reader
+	err error
+}
+
+// read fills p. It is io.ReadFull, except that an error the reader returns
+// with the bytes that complete p is held and returned by the next read, as
+// bufio does for the reads it buffers, not dropped: the frame those bytes
+// complete is yielded, and the error comes after it, whether or not r is a
+// bufio.Reader. bmp's and mrt's readers hold it the same way. An io.EOF that
+// ends p short is returned as it is; readFrame and readRest map it.
+func (fr *frameReader) read(p []byte) (int, error) {
+	if fr.err != nil && len(p) > 0 {
+		err := fr.err
+		fr.err = nil
+		return 0, err
+	}
+	n := 0
+	for n < len(p) {
+		k, err := fr.r.Read(p[n:])
+		n += k
+		if err != nil {
+			if n == len(p) {
+				fr.err = err
+				return n, nil
+			}
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+// cut reports whether err is the stream's end, which inside a frame is
+// ErrTruncated: io.EOF, or io.ErrUnexpectedEOF as compress/gzip returns over a
+// cut file.
+func cut(err error) bool { return err == io.EOF || err == io.ErrUnexpectedEOF }
+
 // readFrame reads one frame, its prefix into head first. It returns nil, nil
 // at a clean end.
-func readFrame(r io.Reader, head []byte) ([]byte, error) {
-	// r.Read, not io.ReadFull, for the reason given in readRest: an error
-	// that comes with the bytes completing the prefix is kept.
-	n := 0
-	var err error
-	for n < len(head) && err == nil {
-		var k int
-		k, err = r.Read(head[n:])
-		n += k
-	}
+func (fr *frameReader) readFrame(head []byte) ([]byte, error) {
+	n, err := fr.read(head)
 	if n == 0 && err == io.EOF {
 		return nil, nil
 	}
 	if k := min(n, len(magic)); !bytes.Equal(head[:k], magic[:k]) {
 		return nil, ErrNotOpenBMP
 	}
-	eof := err == io.EOF
-	if n < len(head) {
-		if eof || err == io.ErrUnexpectedEOF {
+	if err != nil {
+		if cut(err) {
 			return nil, fmt.Errorf("%w: %d bytes of the 12-byte prefix", ErrTruncated, n)
 		}
-		return nil, err
-	}
-	if err != nil && !eof {
-		// Before the length checks: the reader's error is the cause, as it
-		// is in readRest.
 		return nil, err
 	}
 	total, err := frameLen(binary.BigEndian.Uint16(head[6:]), binary.BigEndian.Uint32(head[8:]))
 	if err != nil {
 		return nil, err
 	}
-	if eof {
-		// The stream ended with the prefix; frameLen's minimum header is
-		// longer than the prefix, so the frame is cut.
-		return nil, fmt.Errorf("%w: %d of %d bytes", ErrTruncated, n, total)
-	}
-	return readRest(r, head, total)
+	return fr.readRest(head, total)
 }
 
 // smallFrame is the largest frame allocated in one piece before its bytes
@@ -231,7 +253,7 @@ const smallFrame = 64 << 10
 // doubles as bytes arrive, so a prefix that states more bytes than follow
 // allocates, in total, at most smallFrame or under four times the bytes
 // present, whichever is larger (CLAUDE.md principle 2).
-func readRest(r io.Reader, head []byte, total int) ([]byte, error) {
+func (fr *frameReader) readRest(head []byte, total int) ([]byte, error) {
 	f := make([]byte, len(head), min(total, smallFrame))
 	copy(f, head)
 	for len(f) < total {
@@ -240,18 +262,12 @@ func readRest(r io.Reader, head []byte, total int) ([]byte, error) {
 			copy(g, f)
 			f = g
 		}
-		// r.Read, not io.ReadFull: ReadFull drops an error that comes with
-		// the bytes that fill the buffer, and a reader that does not repeat
-		// it would lose it.
-		n, err := r.Read(f[len(f):cap(f)])
+		n, err := fr.read(f[len(f):cap(f)])
 		f = f[:len(f)+n]
-		if err == io.EOF {
-			if len(f) == total {
-				break
-			}
-			return nil, fmt.Errorf("%w: %d of %d bytes", ErrTruncated, len(f), total)
-		}
 		if err != nil {
+			if cut(err) {
+				return nil, fmt.Errorf("%w: %d of %d bytes", ErrTruncated, len(f), total)
+			}
 			return nil, err
 		}
 	}
