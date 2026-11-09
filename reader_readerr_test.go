@@ -66,7 +66,9 @@ func rangeRecords(r io.Reader, o Options) (recs int, errs []error) {
 // whether Records makes its own bufio.Reader or is handed one. Every record
 // whose bytes came before the error, or with it, is yielded first, as bufio
 // does for the reads it buffers: it holds the error for the next read. So is
-// ErrTooLarge for each record skipped as too large.
+// ErrTooLarge for each record skipped as too large. A 12-byte header read is
+// shorter than any bufio buffer, so the header cases pin behaviour that was
+// already right; the record cases are the ones a dropped error fails.
 func TestRecordsReaderError(t *testing.T) {
 	boom := errors.New("boom")
 	for _, size := range readerErrBodies {
@@ -112,6 +114,56 @@ func TestRecordsReaderError(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestRecordsReaderErrorET: the same for extended-timestamp records, whose
+// header is read in two parts.
+func TestRecordsReaderErrorET(t *testing.T) {
+	boom := errors.New("boom")
+	for _, size := range []int{10000, 70000} {
+		rec := frame(1, TypeISISET, 1, 5, randBody(size, int64(size)))
+		in := bytes.Join([][]byte{rec, rec}, nil)
+		for _, at := range []int{len(rec), 2 * len(rec)} {
+			r := &errAt{r: bytes.NewReader(in), at: int64(at), err: boom}
+			recs, errs := rangeRecords(r, Options{})
+			if want := at / len(rec); recs != want || len(errs) != 1 || !errors.Is(errs[0], boom) {
+				t.Errorf("%d-byte ET body, error at byte %d: %d records, errors %v; want %d records, then only %v", size, at, recs, errs, want, boom)
+			}
+		}
+	}
+}
+
+// TestRecordsReaderErrorResume: a range that breaks after the record whose
+// last bytes came with the error, ranged again, yields the error once; a
+// third range yields nothing.
+func TestRecordsReaderErrorResume(t *testing.T) {
+	boom := errors.New("boom")
+	rec := frame(1, TypeOSPFv2, 1, 0, randBody(10000, 1))
+	seq := Records(&errAt{r: bytes.NewReader(bytes.Join([][]byte{rec, rec}, nil)), at: int64(len(rec)), err: boom})
+	first := 0
+	for _, err := range seq {
+		if err != nil {
+			t.Fatalf("first range: %v", err)
+		}
+		first++
+		break
+	}
+	recs := 0
+	var errs []error
+	for _, err := range seq {
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		recs++
+	}
+	third := 0
+	for range seq {
+		third++
+	}
+	if first != 1 || recs != 0 || len(errs) != 1 || !errors.Is(errs[0], boom) || third != 0 {
+		t.Errorf("first range %d records; second %d records, errors %v; third %d results; want 1, then 0 and only %v, then 0", first, recs, errs, third, boom)
 	}
 }
 

@@ -188,6 +188,7 @@ func endErr(off int64, h Header, err error) error {
 
 // stream is the bufio.Reader that Records reads, with the error that came
 // with the bytes completing a read held for the next read.
+// bmp/reader.go has a copy of it and its methods; change both.
 type stream struct {
 	br  *bufio.Reader
 	err error
@@ -195,11 +196,11 @@ type stream struct {
 
 // readFull is io.ReadFull, except that an error the reader returns with the
 // bytes that complete p is held and returned by the next read, not dropped.
-// bufio does the same for the reads it buffers, but hands a read at least as
-// long as its buffer straight to the underlying reader and returns that
-// reader's error with the bytes, once; io.ReadFull drops it when the bytes
-// complete p. So the record those bytes complete is yielded, and the error
-// comes after it, whichever way bufio read them.
+// bufio does the same for the reads it buffers, but when its buffer is empty
+// it hands a read at least as long as the buffer straight to the underlying
+// reader and returns that reader's error with the bytes, once; io.ReadFull
+// drops it when the bytes complete p. So the record those bytes complete is
+// yielded, and the error comes after it, whichever way bufio read them.
 func (s *stream) readFull(p []byte) (int, error) {
 	if s.err != nil && len(p) > 0 {
 		err := s.err

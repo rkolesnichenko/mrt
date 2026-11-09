@@ -66,7 +66,9 @@ func rangeMessages(r io.Reader, o Options) (msgs int, errs []error) {
 // whether Messages makes its own bufio.Reader or is handed one. Every message
 // whose bytes came before the error, or with it, is yielded first, as bufio
 // does for the reads it buffers: it holds the error for the next read. So is
-// ErrTooLarge for each message skipped as too large.
+// ErrTooLarge for each message skipped as too large. A 6-byte header read is
+// shorter than any bufio buffer, so the header cases pin behaviour that was
+// already right; the message cases are the ones a dropped error fails.
 func TestMessagesReaderError(t *testing.T) {
 	boom := errors.New("boom")
 	for _, size := range readerErrBodies {
@@ -112,6 +114,39 @@ func TestMessagesReaderError(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestMessagesReaderErrorResume: a range that breaks after the message whose
+// last bytes came with the error, ranged again, yields the error once; a
+// third range yields nothing.
+func TestMessagesReaderErrorResume(t *testing.T) {
+	boom := errors.New("boom")
+	msg := bmpMsg(99, randBody(10000, 1))
+	seq := Messages(&errAt{r: bytes.NewReader(cat(msg, msg)), at: int64(len(msg)), err: boom})
+	first := 0
+	for _, err := range seq {
+		if err != nil {
+			t.Fatalf("first range: %v", err)
+		}
+		first++
+		break
+	}
+	msgs := 0
+	var errs []error
+	for _, err := range seq {
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		msgs++
+	}
+	third := 0
+	for range seq {
+		third++
+	}
+	if first != 1 || msgs != 0 || len(errs) != 1 || !errors.Is(errs[0], boom) || third != 0 {
+		t.Errorf("first range %d messages; second %d messages, errors %v; third %d results; want 1, then 0 and only %v, then 0", first, msgs, errs, third, boom)
 	}
 }
 
