@@ -8,6 +8,44 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-09
+
+Tests only; the module's code is unchanged.
+
+### Added
+
+- `FuzzBMPMatchesMRT` (`bmp`), the twelfth fuzz target: one fuzzed UPDATE,
+  passed through a BMP Route Monitoring after the peer's Peer Up and through
+  an MRT BGP4MP record of the matching subtype, gives the same routes
+  (prefix, path ID, peer address and AS, path, diagnostics) and the same
+  errors, in the same places and with the same cause. It covers 2- and
+  4-byte ASNs, ADD-PATH for every prefix family or none, an `Interner` on
+  either side, and a BGP header length beyond the bytes present (a cut
+  message, R17a) or short of them (trailing bytes).
+
+### Changed
+
+- `FuzzParseUpdate` held only that nothing panics. Under each of its four
+  contexts it now also holds:
+  - R17a: one `bgp/message-truncated` Error, at the cut, exactly when the
+    header states more bytes than the message holds;
+  - R17a's "as far as whole fields go": a message that frames soundly at its
+    full length, cut at up to 16 places, gives exactly the withdrawn
+    prefixes, attributes and NLRI of the full message that end at or before
+    the cut, and no NLRI fault the full message lacks;
+  - the attributes decoded through an `Interner`, twice so that the second
+    reuses its AS paths and community lists, deep-equal `Attrs.Decode`
+    (principle 8).
+- `FuzzDecodeAttrs` also decodes each block through one `Interner` under all
+  eight contexts, twice each, and requires each result to equal that
+  context's `Decode`; this covers the interner keeping RIB contexts apart.
+
+### Measured
+
+go1.27.3 darwin/arm64, `GOMAXPROCS=4`, 2 minutes each under memguard, no
+failure (`.data/fuzz-v044.log`): `FuzzBMPMatchesMRT` 1,844,202 executions,
+`FuzzParseUpdate` 1,876,788, `FuzzDecodeAttrs` 1,021,900.
+
 ## [0.4.3] - 2026-11-09
 
 ### Changed
@@ -741,7 +779,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/rkolesnichenko/mrt/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/rkolesnichenko/mrt/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/rkolesnichenko/mrt/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/rkolesnichenko/mrt/compare/v0.4.0...v0.4.1

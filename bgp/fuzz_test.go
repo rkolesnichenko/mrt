@@ -158,25 +158,181 @@ func (s *seeds) bgp4mp(body []byte, sub uint16, nMsg, nAttr *int) {
 	}
 }
 
+// FuzzParseUpdate holds, under each of the four contexts (AS4, ADD-PATH):
+//   - R17a: one DiagMessageTruncated Error, at the cut, exactly when the
+//     header states more bytes than msg holds;
+//   - R17a's "as far as whole fields go": a message whose framing is sound
+//     at its full length (no DiagUpdateLength), cut at up to 16 places past
+//     the header, gives exactly the withdrawn prefixes, attributes and NLRI
+//     of the full message that end at or before the cut, and no NLRI fault
+//     the full message lacks;
+//   - the interner invariant: the attributes decoded through an interner,
+//     twice so that the second reuses its AS paths and community lists,
+//     deep-equal Attrs.Decode.
 func FuzzParseUpdate(f *testing.F) {
 	for _, m := range loadSeeds(f).msgs {
 		f.Add(m)
 	}
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, msg []byte) {
+		// full is msg with its stated length set to its byte count.
+		var full []byte
+		if _, ok := isUpdate(msg); ok && len(msg) <= 0xffff {
+			full = bytes.Clone(msg)
+			binary.BigEndian.PutUint16(full[16:], uint16(len(full)))
+		}
+		in := bgp.NewInterner()
 		for bits := 0; bits < 4; bits++ {
 			ctx := bgp.Context{AS4: bits&1 != 0, AddPath: bits&2 != 0}
-			u, _ := bgp.ParseUpdate(msg, ctx)
-			u.Attrs.Decode()
+			u, diags := bgp.ParseUpdate(msg, ctx)
+			checkTruncated(t, msg, diags)
+			checkInterner(t, in, u.Attrs)
+			if full != nil {
+				checkCuts(t, full, ctx)
+			}
 		}
 		bgp.ParseMessageHeader(msg)
 	})
+}
+
+// isUpdate reports whether msg has a valid header of type UPDATE, and its
+// stated length.
+func isUpdate(msg []byte) (int, bool) {
+	h, err := bgp.ParseMessageHeader(msg)
+	return h.Length, err == nil && h.Type == bgp.MessageUpdate
+}
+
+func checkTruncated(t *testing.T, msg []byte, diags []bgp.Diagnostic) {
+	t.Helper()
+	n, ok := isUpdate(msg)
+	cut := ok && n > len(msg)
+	var got []bgp.Diagnostic
+	for _, d := range diags {
+		if d.Code == bgp.DiagMessageTruncated {
+			got = append(got, d)
+		}
+	}
+	switch {
+	case !cut && len(got) > 0:
+		t.Fatalf("message of %d bytes stating %d: %d %s diagnostics, want none", len(msg), n, len(got), bgp.DiagMessageTruncated)
+	case cut && (len(got) != 1 || got[0].Severity != bgp.SeverityError || got[0].Offset != len(msg)):
+		t.Fatalf("message cut at %d of %d bytes: %s diagnostics %+v, want one Error at %d", len(msg), n, bgp.DiagMessageTruncated, got, len(msg))
+	}
+}
+
+func checkInterner(t *testing.T, in *bgp.Interner, a bgp.Attrs) {
+	t.Helper()
+	want, wantD := a.Decode()
+	for round := range 2 {
+		p, d := in.Decode(a)
+		if !reflect.DeepEqual(*p, want) || !reflect.DeepEqual(d, wantD) {
+			t.Fatalf("block %x, round %d: interner gives %+v %v, Decode %+v %v", a.Raw(), round, *p, d, want, wantD)
+		}
+	}
+}
+
+// checkCuts compares full, an UPDATE whose stated length is its byte count,
+// with up to 16 cuts of itself (R17a). It needs full's framing sound: the
+// withdrawn routes and attributes end where their lengths say.
+func checkCuts(t *testing.T, full []byte, ctx bgp.Context) {
+	t.Helper()
+	fu, fd := bgp.ParseUpdate(full, ctx)
+	if count(fd, bgp.DiagUpdateLength) > 0 {
+		return
+	}
+	wEnd := 21 + int(binary.BigEndian.Uint16(full[19:]))
+	aStart := wEnd + 2
+	aEnd := aStart + int(binary.BigEndian.Uint16(full[wEnd:]))
+	wIn, aIn, nIn := nlriEnds(fu.Withdrawn, 21), attrEnds(fu.Attrs, aStart), nlriEnds(fu.Announced, aEnd)
+	step := max(1, (len(full)-19+15)/16)
+	for k := 19; k < len(full); k += step {
+		cu, cd := bgp.ParseUpdate(full[:k], ctx)
+		// Past the attributes field the block is whole, as its length frames
+		// it; inside it, only the attributes that frame and end by k.
+		wantA := fu.Attrs.Raw()
+		if k < aEnd {
+			wantA = wantA[:0]
+			if n := upTo(aIn, k); n > 0 {
+				wantA = fu.Attrs.Raw()[:aIn[n-1]-aStart]
+			}
+		}
+		wantW, wantN := fu.Withdrawn[:upTo(wIn, k)], fu.Announced[:upTo(nIn, k)]
+		if !sameNLRI(cu.Withdrawn, wantW) || !bytes.Equal(cu.Attrs.Raw(), wantA) || !sameNLRI(cu.Announced, wantN) {
+			t.Fatalf("cut at %d of %d: withdrawn %v, attributes %x, NLRI %v; want %v, %x, %v",
+				k, len(full), cu.Withdrawn, cu.Attrs.Raw(), cu.Announced, wantW, wantA, wantN)
+		}
+		if count(cd, bgp.DiagNLRILength) > count(fd, bgp.DiagNLRILength) {
+			t.Fatalf("cut at %d of %d: %s diagnostics %+v, the full message has %d", k, len(full), bgp.DiagNLRILength, cd, count(fd, bgp.DiagNLRILength))
+		}
+		checkTruncated(t, full[:k], cd)
+	}
+}
+
+// nlriEnds is where each prefix of ns, read from offset start, ends.
+func nlriEnds(ns []bgp.NLRI, start int) []int {
+	ends := make([]int, len(ns))
+	for i, n := range ns {
+		start += 1 + (n.Prefix.Bits()+7)/8
+		if n.HasPathID {
+			start += 4
+		}
+		ends[i] = start
+	}
+	return ends
+}
+
+// attrEnds is where each whole attribute of a, read from offset start,
+// ends. The walk stops where the framing breaks.
+func attrEnds(a bgp.Attrs, start int) []int {
+	var ends []int
+	off := start
+	for at, err := range a.All() {
+		if err != nil {
+			break
+		}
+		hdr := 3
+		if at.Flags&0x10 != 0 {
+			hdr = 4
+		}
+		off += hdr + len(at.Value)
+		ends = append(ends, off)
+	}
+	return ends
+}
+
+// upTo is the number of items, of ascending ends, that end at or before k.
+func upTo(ends []int, k int) int {
+	n := 0
+	for n < len(ends) && ends[n] <= k {
+		n++
+	}
+	return n
+}
+
+// sameNLRI is reflect.DeepEqual that treats nil and empty alike.
+func sameNLRI(a, b []bgp.NLRI) bool {
+	return len(a) == 0 && len(b) == 0 || reflect.DeepEqual(a, b)
+}
+
+// count is the number of diagnostics with code c.
+func count(ds []bgp.Diagnostic, c string) int {
+	n := 0
+	for _, d := range ds {
+		if d.Code == c {
+			n++
+		}
+	}
+	return n
 }
 
 func ctxFromBits(b uint8) bgp.Context {
 	return bgp.Context{AS4: b&1 != 0, AddPath: b&2 != 0, RIB: b&4 != 0}
 }
 
+// FuzzDecodeAttrs holds that Decode is repeatable and, through one interner
+// shared by all eight contexts (AS4, ADD-PATH, RIB), each decoded twice,
+// equals Decode: the interner keeps contexts apart, the RIB ones in its
+// whole-path index included.
 func FuzzDecodeAttrs(f *testing.F) {
 	for _, a := range loadSeeds(f).attrs {
 		f.Add(a, uint8(1))
@@ -189,6 +345,10 @@ func FuzzDecodeAttrs(f *testing.F) {
 		p2, d2 := attrs.Decode()
 		if !reflect.DeepEqual(p1, p2) || !reflect.DeepEqual(d1, d2) {
 			t.Fatalf("Decode twice differs")
+		}
+		in := bgp.NewInterner()
+		for b := range uint8(8) {
+			checkInterner(t, in, bgp.NewAttrs(data, ctxFromBits(b)))
 		}
 		for range attrs.All() {
 		}
