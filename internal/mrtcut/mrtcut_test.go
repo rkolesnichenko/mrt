@@ -186,4 +186,11 @@ func TestCPUProfile(t *testing.T) {
 	if fi.Size() == 0 {
 		t.Error("profile is empty")
 	}
+	// A profile that cannot be created is an error before anything runs.
+	bad := filepath.Join(t.TempDir(), "no", "such", "dir", "cpu.prof")
+	var stdout, stderr strings.Builder
+	if st := run([]string{"-cpuprofile", bad, "-count", in}, nil, &stdout, &stderr); st != 1 ||
+		stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), "mrtcut: ") || !strings.Contains(stderr.String(), "cpu.prof") {
+		t.Errorf("unwritable -cpuprofile: status %d, stdout %q, stderr %q; want 1, nothing, and an mrtcut: error naming the file", st, stdout.String(), stderr.String())
+	}
 }

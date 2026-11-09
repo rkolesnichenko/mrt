@@ -299,6 +299,21 @@ func padBlocks(in []byte, size int) ([]byte, error) {
 	return in, nil
 }
 
+// PadBlock returns in with the block that starts at bit start padded by pad
+// bytes (even), as padBlocks pads each block: no-op code-length deltas after
+// the first Huffman table's base length, so the block decodes as before and
+// the bits after the padding keep their alignment.
+func PadBlock(in []byte, start uint64, pad int) ([]byte, error) {
+	if pad <= 0 || pad%2 != 0 {
+		return nil, fmt.Errorf("bzcraft: padding of %d bytes; want a positive even number", pad)
+	}
+	at, err := basePoint(in, start)
+	if err != nil {
+		return nil, err
+	}
+	return insertPad(in, at, pad), nil
+}
+
 // basePoint returns the bit after the first Huffman table's base length in
 // the block that starts at bit start.
 func basePoint(in []byte, start uint64) (uint64, error) {

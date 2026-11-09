@@ -168,16 +168,6 @@ func bzip2Command(t testing.TB, level string, b []byte) []byte {
 	return out
 }
 
-// bitsAt returns the n bits of b at bit offset off.
-func bitsAt(b []byte, off uint64, n int) uint64 {
-	var v uint64
-	for i := uint64(0); i < uint64(n); i++ {
-		p := off + i
-		v = v<<1 | uint64(b[p/8]>>(7-p%8)&1)
-	}
-	return v
-}
-
 // blockMagics returns the bit offsets of every block magic and end magic in
 // b, found at every bit offset.
 func blockMagics(b []byte) (blocks, ends []uint64) {
@@ -198,70 +188,21 @@ func blockMagics(b []byte) (blocks, ends []uint64) {
 	return blocks, ends
 }
 
-// bitWriter appends bits, most significant first.
-type bitWriter struct {
-	b    []byte
-	acc  uint64
-	nacc uint
-}
-
-func (w *bitWriter) write(v uint64, n uint) {
-	w.acc = w.acc<<n | v&(1<<n-1)
-	w.nacc += n
-	for w.nacc >= 8 {
-		w.nacc -= 8
-		w.b = append(w.b, byte(w.acc>>w.nacc))
-	}
-}
-
 // benchPadBytes is how far paddedBench moves the bench file's blocks after
 // the first: past 8 MiB, in whole 0xBBBB words.
 const benchPadBytes = 8<<20 + 2
 
-// paddedBench is the bench file with its first block padded past 8 MiB, as
-// internal/bzip2's TestBlockSpanning8MiB builds it: no-op code-length deltas
-// ("1 0" then "1 1") after the first Huffman table's base length. A
-// speculative decode of that block runs out of its 8 MiB segment, so the
+// paddedBench is the bench file with its first block (at bit 32) padded past
+// 8 MiB by bzcraft.PadBlock, as internal/bzip2's TestBlockSpanning8MiB pads
+// one: no-op code-length deltas after the first Huffman table's base length.
+// A speculative decode of that block runs out of its 8 MiB segment, so the
 // chain decodes it itself (the chain-miss path).
 var paddedBench = sync.OnceValues(func() ([]byte, error) {
 	in, err := os.ReadFile(benchBz2)
 	if err != nil {
 		return nil, err
 	}
-	br := bzip2.NewBitReader(bytes.NewReader(in))
-	br.ReadBits64(32)
-	if br.ReadBits64(48) != bzip2.BlockMagic {
-		return nil, errors.New("no block magic at bit 32")
-	}
-	br.ReadBits64(32 + 1 + 24) // CRC, randomized, origPtr
-	used := br.ReadBits(16)
-	for i := 0; i < 16; i++ {
-		if used&(1<<(15-i)) != 0 {
-			br.ReadBits(16)
-		}
-	}
-	br.ReadBits(3) // number of trees
-	for n := br.ReadBits(15); n > 0; n-- {
-		for br.ReadBit() {
-		}
-	}
-	if base := br.ReadBits(5); base < 1 || base > 19 {
-		return nil, fmt.Errorf("first table's base length %d; the pairs need 1 to 19", base)
-	}
-	at := br.Offset()
-	const padBytes = benchPadBytes
-	w := &bitWriter{b: make([]byte, 0, len(in)+padBytes+8)}
-	for p := uint64(0); p < at; p++ {
-		w.write(bitsAt(in, p, 1), 1)
-	}
-	for i := 0; i < padBytes/2; i++ {
-		w.write(0xBBBB, 16) // four +1 -1 pairs
-	}
-	p := at
-	for ; p%8 != 0; p++ {
-		w.write(bitsAt(in, p, 1), 1)
-	}
-	return append(w.b, in[p/8:]...), nil
+	return bzcraft.PadBlock(in, 32, benchPadBytes)
 })
 
 // TestDecompressWithMatchesDecompress is spec §6.4 on bzip2: the testdata
