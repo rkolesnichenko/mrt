@@ -99,10 +99,9 @@ func (e *errAt) Read(p []byte) (int, error) {
 }
 
 // TestFramesReaderError: a reader error ends the sequence with that error,
-// whether or not the reader returns it again. An error that comes with a
-// frame's last bytes keeps that frame from being yielded; one that comes with
-// bytes of the next frame's 12-byte prefix, including the bytes that complete
-// it, comes after the first frame.
+// whether or not the reader returns it again. An error that comes with bytes
+// of a frame's 12-byte prefix, including the bytes that complete it, or with
+// the frame's last bytes, ends the sequence before that frame.
 func TestFramesReaderError(t *testing.T) {
 	boom := errors.New("boom")
 	for _, size := range []int{100, 300 << 10} {
@@ -150,6 +149,10 @@ func TestFramesDataEOF(t *testing.T) {
 		{"after the second prefix", append(bytes.Clone(f), f[:12]...), 1, fmt.Sprintf("%s: 12 of %d bytes", trunc, len(f))},
 		{"inside the frame", f[:len(f)-1], 0, fmt.Sprintf("%s: %d of %d bytes", trunc, len(f)-1, len(f))},
 		{"bad magic", append([]byte("OBMX"), f[4:12]...), 0, openbmp.ErrNotOpenBMP.Error()},
+		// A stream that ends with a prefix whose lengths are bad reports the
+		// lengths, not the cut.
+		{"bad header length", []byte("OBMP\x01\x07\x00\x10\x00\x00\x00\x00"), 0,
+			openbmp.ErrMalformed.Error() + ": stated header length 16 is below the minimum 78"},
 	} {
 		for _, r := range []struct {
 			name string

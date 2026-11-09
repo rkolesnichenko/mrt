@@ -205,6 +205,8 @@ func readFrame(r io.Reader, head []byte) ([]byte, error) {
 		return nil, err
 	}
 	if err != nil && !eof {
+		// Before the length checks: the reader's error is the cause, as it
+		// is in readRest.
 		return nil, err
 	}
 	total, err := frameLen(binary.BigEndian.Uint16(head[6:]), binary.BigEndian.Uint32(head[8:]))

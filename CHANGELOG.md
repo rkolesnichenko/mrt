@@ -15,7 +15,9 @@ a minor version may change the API.
   `io.ReadFull`, which drops such an error, so a reader that did not
   return the error again went on to the next bytes as if none had
   occurred. The prefix is now read as v0.4.3 reads the rest of the frame.
-  Other errors are unchanged, as is the allocation count
+  A reader that does return the error again with a prefix whose lengths
+  are bad now gets its own error rather than the length error. Other
+  errors are unchanged, as is the allocation count
   (`TestFramesAllocations`: 37 for 36 frames).
 - Tests: `TestFramesReaderError` puts the error inside and at the end of
   each frame's prefix as well as at the frame's end; `TestFramesDataEOF`
