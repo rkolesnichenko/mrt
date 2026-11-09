@@ -99,7 +99,9 @@ func FuzzMessages(f *testing.F) {
 
 // FuzzBMPRoutes holds that Routes never panics and that, under every
 // combination of PeerStates, EndOfRIB and RequirePeerUp, an interner changes
-// nothing: routes and error texts are deeply equal with and without one.
+// nothing: routes and error texts are deeply equal with and without one. So
+// are those Session.Each passes, one message at a time, and RoutesWith's,
+// with none of the options and with all three and an Interner.
 func FuzzBMPRoutes(f *testing.F) {
 	paths, err := filepath.Glob("../testdata/bmp/*.bmp")
 	if err != nil || len(paths) == 0 {
@@ -128,9 +130,36 @@ func FuzzBMPRoutes(f *testing.F) {
 			}
 			return out
 		}
+		// each is run through Session.Each, one message at a time.
+		each := func(o bmp.RoutesOptions) []outcome {
+			var out []outcome
+			s := bmp.NewSession(o)
+			for m, err := range bmp.MessagesWith(bytes.NewReader(in), bmp.Options{MaxMessageLen: 1 << 16}) {
+				s.Each(m, err, func(r mrt.Route, err error) bool {
+					oc := outcome{r: r}
+					if err != nil {
+						oc.err = err.Error()
+					}
+					out = append(out, oc)
+					return true
+				})
+			}
+			return out
+		}
 		for i := range 8 {
 			o := bmp.RoutesOptions{PeerStates: i&1 != 0, EndOfRIB: i&2 != 0, RequirePeerUp: i&4 != 0}
 			want := run(o)
+			// Each shares RoutesWith's code, so two option sets are enough:
+			// none, and all three with an Interner.
+			if i == 0 || i == 7 {
+				eo := o
+				if i == 7 {
+					eo.Interner = bgp.NewInterner()
+				}
+				if got := each(eo); !reflect.DeepEqual(got, want) {
+					t.Fatalf("options %+v: Session.Each per message differs from RoutesWith", eo)
+				}
+			}
 			o.Interner = bgp.NewInterner()
 			if got := run(o); !reflect.DeepEqual(got, want) {
 				t.Fatalf("options %+v: routes with an interner differ from those without", o)

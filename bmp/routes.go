@@ -120,6 +120,22 @@ func (s *Session) Routes(m Message, err error) iter.Seq2[mrt.Route, error] {
 	return func(yield func(mrt.Route, error) bool) { s.emit(st, yield) }
 }
 
+// Each is Routes without the sequence: it applies m and err to the session
+// as Routes does, then passes the routes and errors Routes would yield to
+// yield, in the same order, and returns false if yield returned false (yield
+// is then not called again), true otherwise. The message is applied even if
+// yield stops at once. Each allocates less than Routes, which builds a
+// sequence holding the message for every call; that is its only difference.
+//
+// Each has decoded the message by the time it returns, so the buffer given
+// to ParseMessage may be reused then. What yield is passed may still alias
+// m's bytes: without an Interner the paths, as Routes describes, and in any
+// case the Raw of a *MessageError. A path kept after the buffer changes must
+// come from an Interner or Path.Clone, an error's Raw from bytes.Clone.
+func (s *Session) Each(m Message, err error, yield func(mrt.Route, error) bool) bool {
+	return s.emit(s.apply(m, err), yield)
+}
+
 // step is what one message yields, fixed when the message is applied to the
 // session. It stays small (event is a pointer, set only for a Peer Up or Down
 // under PeerStates), so the closure Session.Routes returns holds it by value

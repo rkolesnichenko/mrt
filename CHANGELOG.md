@@ -8,6 +8,45 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-09
+
+### Added
+
+- `bmp.Session.Each(m, err, yield)`: `Session.Routes` with a callback in
+  place of the returned sequence, for the per-message Kafka step. It applies
+  the message to the session as `Routes` does, passes `yield` the same routes
+  and errors in the same order, and returns false if `yield` did. It has
+  decoded the message when it returns, so the buffer may then be reused;
+  what `yield` was passed may still alias it (paths without an `Interner`,
+  a `*MessageError`'s `Raw`). `BenchmarkBMP` in `internal/compare`
+  (go1.27.3 darwin/arm64, `GOMAXPROCS=4`, under memguard at normal
+  priority, median of 6; `.data/bench-each-v050.log`): 6.948 → 3.948
+  allocations and 459.3 → 355.2 bytes per message, 14.4% less time
+  (15.35 → 13.14 ms per pass over 50,085 messages). On a message that
+  yields nothing it allocates nothing, where `Routes` allocates its sequence
+  (`TestSessionEachAllocations`, with a capturing callback made per call).
+  `RoutesWith` already worked this way and is unchanged.
+  `ExampleSession_Each`; `BenchmarkBMP` has an `mrt-each` side and
+  `compare -bmp` an `mrt bmp.Session.Each` pass.
+- Tests: `TestRoutesWithMatchesSession` requires `Session.Each`, one
+  message at a time, to give exactly what `RoutesWith` gives under every
+  combination of `PeerStates`, `EndOfRIB` and `RequirePeerUp`, and
+  `FuzzBMPRoutes` with none of them and with all three and an `Interner`;
+  `TestSessionEach` covers a
+  `yield` that stops (on a Peer Up, whose state still applies, and in a
+  message of three routes); `TestSessionErrorPassThrough` covers errors.
+
+### Not done
+
+- The review's slab for RIB paths (one `[]bgp.Path` per RIB record), re-measured
+  on v0.4.6 against v0.4.6, alternating, under memguard at normal priority
+  (`.data/bench-slab-v046-summary.txt`,
+  `.data/pin-slab-v046.log`): allocations −31% on rv2-rib, −21% on rv6-rib
+  and −19% on rvwide-rib, but bytes +1.5% to +5.4% and time within the noise
+  (−1.2%, +0.2%, +1.4%; fixtures it does not touch moved up to +3.7%). A
+  consumer keeping one path per record would hold 18.7, 9.5 and 2.7 times as
+  much, since a kept path holds its record's slab.
+
 ## [0.4.6] - 2026-11-09
 
 Tests and CI only; the module's code is unchanged.
@@ -888,7 +927,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/rkolesnichenko/mrt/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/rkolesnichenko/mrt/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/rkolesnichenko/mrt/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/rkolesnichenko/mrt/compare/v0.4.3...v0.4.4

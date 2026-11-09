@@ -36,7 +36,8 @@ func benchStream(b *testing.B) [][]byte {
 
 // BenchmarkBMP decodes the same messages, already framed (a Kafka consumer's
 // input), with mrt (bmp.Session.Routes over bmp.ParseMessage, every route
-// yielded and its path decoded) and with gobgp (ParseBMPMessageWithOptions
+// yielded and its path decoded; mrt-each is the same through Session.Each)
+// and with gobgp (ParseBMPMessageWithOptions
 // with the Peer Up state of gobgpSession; it decodes every attribute and
 // NLRI). One iteration is the whole stream through one session. B/msg and
 // allocs/msg are TotalAlloc and Mallocs over the run per message decoded
@@ -50,6 +51,7 @@ func BenchmarkBMP(b *testing.B) {
 		walk func([][][]byte) (routes, errs int)
 	}{
 		{"mrt", walkMrtBMP},
+		{"mrt-each", walkMrtBMPEach},
 		{"gobgp", walkGobgpBMP},
 	} {
 		b.Run(side.name, func(b *testing.B) {

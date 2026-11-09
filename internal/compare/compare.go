@@ -289,6 +289,7 @@ func runBMP(path string, w io.Writer) int {
 	}
 	results := []result{
 		pass("mrt bmp.Session.Routes", walkMrtBMP),
+		pass("mrt bmp.Session.Each", walkMrtBMPEach),
 		pass("gobgp ParseBMPMessage", walkGobgpBMP),
 	}
 	var ours, theirs []string

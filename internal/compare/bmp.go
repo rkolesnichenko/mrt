@@ -664,3 +664,23 @@ func walkMrtBMP(streams [][][]byte) (routes, errs int) {
 	}
 	return routes, errs
 }
+
+// walkMrtBMPEach is walkMrtBMP through Session.Each.
+func walkMrtBMPEach(streams [][][]byte) (routes, errs int) {
+	for _, stream := range streams {
+		s := bmp.NewSession(bmp.RoutesOptions{})
+		for _, b := range stream {
+			m, err := bmp.ParseMessage(b)
+			s.Each(m, err, func(r mrt.Route, err error) bool {
+				switch {
+				case err != nil:
+					errs++
+				case r.Kind == mrt.KindAnnounce || r.Kind == mrt.KindWithdraw:
+					routes++
+				}
+				return true
+			})
+		}
+	}
+	return routes, errs
+}
