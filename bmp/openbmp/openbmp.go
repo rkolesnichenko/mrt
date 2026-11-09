@@ -160,7 +160,7 @@ func Parse(frame []byte) (Header, []byte, error) {
 func Frames(r io.Reader) iter.Seq2[[]byte, error] {
 	done := false
 	return func(yield func([]byte, error) bool) {
-		// head escapes to the heap (io.ReadFull takes an io.Reader), so it is
+		// head escapes to the heap (r.Read is an interface call), so it is
 		// declared once per range, not once per frame.
 		var head [prefixLen]byte
 		for !done {
@@ -182,22 +182,39 @@ func Frames(r io.Reader) iter.Seq2[[]byte, error] {
 // readFrame reads one frame, its prefix into head first. It returns nil, nil
 // at a clean end.
 func readFrame(r io.Reader, head []byte) ([]byte, error) {
-	n, err := io.ReadFull(r, head)
+	// r.Read, not io.ReadFull, for the reason given in readRest: an error
+	// that comes with the bytes completing the prefix is kept.
+	n := 0
+	var err error
+	for n < len(head) && err == nil {
+		var k int
+		k, err = r.Read(head[n:])
+		n += k
+	}
 	if n == 0 && err == io.EOF {
 		return nil, nil
 	}
 	if k := min(n, len(magic)); !bytes.Equal(head[:k], magic[:k]) {
 		return nil, ErrNotOpenBMP
 	}
-	if err != nil {
-		if err == io.ErrUnexpectedEOF || err == io.EOF {
+	eof := err == io.EOF
+	if n < len(head) {
+		if eof || err == io.ErrUnexpectedEOF {
 			return nil, fmt.Errorf("%w: %d bytes of the 12-byte prefix", ErrTruncated, n)
 		}
+		return nil, err
+	}
+	if err != nil && !eof {
 		return nil, err
 	}
 	total, err := frameLen(binary.BigEndian.Uint16(head[6:]), binary.BigEndian.Uint32(head[8:]))
 	if err != nil {
 		return nil, err
+	}
+	if eof {
+		// The stream ended with the prefix; frameLen's minimum header is
+		// longer than the prefix, so the frame is cut.
+		return nil, fmt.Errorf("%w: %d of %d bytes", ErrTruncated, n, total)
 	}
 	return readRest(r, head, total)
 }

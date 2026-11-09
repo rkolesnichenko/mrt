@@ -8,6 +8,20 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+### Fixed
+
+- `openbmp`: `Frames` no longer loses a reader error that comes with the
+  bytes completing a frame's 12-byte prefix. It read the prefix with
+  `io.ReadFull`, which drops such an error, so a reader that did not
+  return the error again went on to the next bytes as if none had
+  occurred. The prefix is now read as v0.4.3 reads the rest of the frame.
+  Other errors are unchanged, as is the allocation count
+  (`TestFramesAllocations`: 37 for 36 frames).
+- Tests: `TestFramesReaderError` puts the error inside and at the end of
+  each frame's prefix as well as at the frame's end; `TestFramesDataEOF`
+  reads the same frames and truncation errors from a reader that returns
+  `io.EOF` with its last bytes (`iotest.DataErrReader`).
+
 ## [0.4.4] - 2026-11-09
 
 Tests only; the module's code is unchanged.

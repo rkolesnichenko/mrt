@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"testing"
+	"testing/iotest"
 
 	"github.com/rkolesnichenko/mrt/bmp/openbmp"
 )
@@ -97,21 +98,80 @@ func (e *errAt) Read(p []byte) (int, error) {
 	return e.r.Read(p)
 }
 
-// TestFramesReaderError: a reader error that comes with a frame's last bytes
-// ends the sequence with that error, and the frame is not yielded, whether or
-// not the reader returns the error again.
+// TestFramesReaderError: a reader error ends the sequence with that error,
+// whether or not the reader returns it again. An error that comes with a
+// frame's last bytes keeps that frame from being yielded; one that comes with
+// bytes of the next frame's 12-byte prefix, including the bytes that complete
+// it, comes after the first frame.
 func TestFramesReaderError(t *testing.T) {
 	boom := errors.New("boom")
 	for _, size := range []int{100, 300 << 10} {
 		f := bigFrame(size)
 		in := bytes.Join([][]byte{f, f}, nil)
-		for _, sticky := range []bool{true, false} {
-			r := &errAt{r: bytes.NewReader(in), at: int64(len(f)), err: boom, sticky: sticky}
-			frames, errs := collect(t, r)
-			if len(frames) != 0 || len(errs) != 1 || errs[0] != boom {
-				t.Errorf("%d-byte message, sticky %v: %d frames, errors %v; want only %v", size, sticky, len(frames), errs, boom)
+		for _, c := range []struct {
+			name   string
+			at     int
+			frames int
+		}{
+			{"first prefix complete", 12, 0},
+			{"first frame complete", len(f), 0},
+			{"inside second prefix", len(f) + 5, 1},
+			{"second prefix complete", len(f) + 12, 1},
+		} {
+			for _, sticky := range []bool{true, false} {
+				r := &errAt{r: bytes.NewReader(in), at: int64(c.at), err: boom, sticky: sticky}
+				frames, errs := collect(t, r)
+				if len(frames) != c.frames || len(errs) != 1 || errs[0] != boom {
+					t.Errorf("%d-byte message, error at %s (byte %d), sticky %v: %d frames, errors %v; want %d frames, then only %v",
+						size, c.name, c.at, sticky, len(frames), errs, c.frames, boom)
+				}
 			}
 		}
+	}
+}
+
+// TestFramesDataEOF: a reader that returns io.EOF with its last bytes
+// (iotest.DataErrReader) reads the same frames and the same truncation errors
+// as one that returns io.EOF on its own, and a stream ending inside a prefix
+// is ErrTruncated also when the reader says io.ErrUnexpectedEOF.
+func TestFramesDataEOF(t *testing.T) {
+	f := bigFrame(100)
+	trunc := openbmp.ErrTruncated.Error()
+	for _, c := range []struct {
+		name   string
+		in     []byte
+		frames int
+		err    string // "" for no error
+	}{
+		{"two frames", bytes.Join([][]byte{f, f}, nil), 2, ""},
+		{"inside the prefix", f[:5], 0, trunc + ": 5 bytes of the 12-byte prefix"},
+		{"after the prefix", f[:12], 0, fmt.Sprintf("%s: 12 of %d bytes", trunc, len(f))},
+		{"inside the second prefix", append(bytes.Clone(f), f[:7]...), 1, trunc + ": 7 bytes of the 12-byte prefix"},
+		{"after the second prefix", append(bytes.Clone(f), f[:12]...), 1, fmt.Sprintf("%s: 12 of %d bytes", trunc, len(f))},
+		{"inside the frame", f[:len(f)-1], 0, fmt.Sprintf("%s: %d of %d bytes", trunc, len(f)-1, len(f))},
+		{"bad magic", append([]byte("OBMX"), f[4:12]...), 0, openbmp.ErrNotOpenBMP.Error()},
+	} {
+		for _, r := range []struct {
+			name string
+			r    io.Reader
+		}{
+			{"plain", bytes.NewReader(c.in)},
+			{"data with EOF", iotest.DataErrReader(bytes.NewReader(c.in))},
+			{"one byte with EOF", iotest.DataErrReader(oneByte{bytes.NewReader(c.in)})},
+		} {
+			frames, errs := collect(t, r.r)
+			var got string
+			if len(errs) > 0 {
+				got = errs[0].Error()
+			}
+			if len(frames) != c.frames || len(errs) > 1 || got != c.err {
+				t.Errorf("%s, %s reader: %d frames, errors %v; want %d frames, error %q", c.name, r.name, len(frames), errs, c.frames, c.err)
+			}
+		}
+	}
+	r := &errAt{r: bytes.NewReader(f), at: 5, err: io.ErrUnexpectedEOF, sticky: true}
+	if frames, errs := collect(t, r); len(frames) != 0 || len(errs) != 1 || errs[0].Error() != trunc+": 5 bytes of the 12-byte prefix" {
+		t.Errorf("io.ErrUnexpectedEOF inside the prefix: %d frames, errors %v; want ErrTruncated", len(frames), errs)
 	}
 }
 
