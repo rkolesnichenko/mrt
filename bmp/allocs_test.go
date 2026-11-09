@@ -73,7 +73,10 @@ func TestSessionRoutesAllocations(t *testing.T) {
 }
 
 // TestSessionEachAllocations: Session.Each of a message that yields nothing
-// allocates nothing, where Session.Routes allocates its sequence.
+// allocates nothing, where Session.Routes allocates its sequence. The yield
+// is a closure that captures a variable and is made on every call, as a
+// caller's would be: it stays on the stack only while Each does not let it
+// escape.
 func TestSessionEachAllocations(t *testing.T) {
 	if raceEnabled {
 		t.Skip("the race detector inflates allocation")
@@ -83,8 +86,10 @@ func TestSessionEachAllocations(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := NewSession(RoutesOptions{PeerStates: true})
-	yield := func(mrt.Route, error) bool { return true }
-	if got := testing.AllocsPerRun(100, func() { s.Each(m, nil, yield) }); got != 0 {
+	n := 0
+	if got := testing.AllocsPerRun(100, func() {
+		s.Each(m, nil, func(mrt.Route, error) bool { n++; return true })
+	}); got != 0 {
 		t.Errorf("Session.Each of a Termination: %v allocations, want 0", got)
 	}
 }

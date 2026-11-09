@@ -128,9 +128,10 @@ func (s *Session) Routes(m Message, err error) iter.Seq2[mrt.Route, error] {
 // sequence holding the message for every call; that is its only difference.
 //
 // Each has decoded the message by the time it returns, so the buffer given
-// to ParseMessage may be reused then. Without an Interner the paths passed
-// to yield alias m's bytes, as Routes describes: a path kept after the buffer
-// changes must come from an Interner or Path.Clone.
+// to ParseMessage may be reused then. What yield is passed may still alias
+// m's bytes: without an Interner the paths, as Routes describes, and in any
+// case the Raw of a *MessageError. A path kept after the buffer changes must
+// come from an Interner or Path.Clone, an error's Raw from bytes.Clone.
 func (s *Session) Each(m Message, err error, yield func(mrt.Route, error) bool) bool {
 	return s.emit(s.apply(m, err), yield)
 }
