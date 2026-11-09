@@ -32,8 +32,10 @@ a minor version may change the API.
     `Routes` without one and now costs −1% to +26%; on RIB files it saves
     more than before. Time not measured.
   - Held memory, every path kept with the `Interner` alive, is 0.3% to 0.8%
-    higher on the same fixtures (`.data/held-interner-v051.log`): a kept
-    path now has `Decode`'s arrays, whose allocations may be larger than
+    higher on six of the fixtures, whose three runs each agree within 0.4%;
+    on rv6-rib and rv6-tabledump runs vary by 2% to 3%, more than any change
+    (`.data/held-interner-v051-summary.txt`). A kept path now has `Decode`'s
+    arrays, whose allocations may be larger than
     their length (an AS path's object is sized to an allocation class, with
     up to three unused ASN slots), where the clone's were exact.
   - The `TestAllocations` ceilings for `Routes` with an `Interner` are
