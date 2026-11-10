@@ -203,7 +203,10 @@ func (s *stream) discard(n int64) (int64, error) {
 // there are bytes to read: the error held from the read that filled the
 // last buffer, else the reader's own end, which Peek finds without reading
 // past an error. readMessage calls it before growing its buffer, so that a body
-// ending where the buffer is full is not given room it will not fill.
+// ending where the buffer is full is not given room it will not fill. A
+// reader that returns no bytes and no error 100 times in a row there ends
+// the stream with io.ErrNoProgress (bufio's limit), as it does in discard;
+// readFull would have kept calling it.
 func (s *stream) end() error {
 	if s.err != nil {
 		err := s.err

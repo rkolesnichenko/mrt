@@ -15,13 +15,20 @@ a minor version may change the API.
   reader double the buffer once more (allocating and copying) before it
   found the end. `Records`' and `bmp.Messages`' readers now ask their
   `bufio.Reader` first: an error held from the read that filled the buffer,
-  then `Peek(1)`, which returns the end without reading past an error. A
-  body of 65,536 bytes after a 12-byte header kept a 163,840-byte buffer
-  rather than 65,548, one of 163,828 a 401,408-byte buffer rather than
-  163,840 (`.data/grow-red-v061.log`). `openbmp.Frames` reads a plain
-  `io.Reader`, so only an error that comes with the last bytes is caught
-  there; one returned by the next `Read` still costs the doubling. A body
-  that ends mid-buffer had already paid for its last growth, so the
+  then `Peek(1)`, which returns the end without reading past an error. In
+  the tests (go1.27.3), a body of 65,536 bytes after a 12-byte header kept
+  a 163,840-byte buffer rather than 65,548, and one of 163,828 a
+  401,408-byte buffer rather than 163,840 (`.data/grow-red-v061.log`); where
+  the boundaries fall depends on the header's length and Go's growth rule.
+  A reader that, just there, returns no bytes and no error 100 times in a
+  row now ends the stream with `io.ErrNoProgress`, as skipping an oversized
+  record already did.
+- `openbmp.Frames` reads a plain `io.Reader`, so only an error that comes
+  with the last bytes is caught there: on the old code, a frame ending at
+  its full 64 KiB buffer allocated about 198 KB a read, one ending a byte
+  earlier about 67 KB (`.data/grow-openbmp-v061.log`). An error returned by
+  the next `Read` still costs the doubling.
+- A body that ends mid-buffer had already paid for its last growth, so the
   documented worst case (about four times the bytes present) is unchanged.
   `TestReadRecordGrowsOnlyForBytes`, `TestReadMessageGrowsOnlyForBytes` and
   `TestReadRestHeldErrorNoGrow` fail on the old code and under five
