@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -192,5 +193,21 @@ func TestCPUProfile(t *testing.T) {
 	if st := run([]string{"-cpuprofile", bad, "-count", in}, nil, &stdout, &stderr); st != 1 ||
 		stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), "mrtcut: ") || !strings.Contains(stderr.String(), "cpu.prof") {
 		t.Errorf("unwritable -cpuprofile: status %d, stdout %q, stderr %q; want 1, nothing, and an mrtcut: error naming the file", st, stdout.String(), stderr.String())
+	}
+}
+
+// TestCountManyProcs: with GOMAXPROCS above mrt.MaxWorkers, mrtcut still
+// decompresses a bzip2 input (state-changes.mrt at level 1), with MaxWorkers
+// workers. Not parallel: it sets GOMAXPROCS.
+func TestCountManyProcs(t *testing.T) {
+	in := filepath.Join("..", "..", "testdata", "bzip2", "level1.bz2")
+	var want bytes.Buffer
+	if st := run([]string{"-count", in}, nil, &want, io.Discard); st != 0 {
+		t.Fatal(st)
+	}
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(mrt.MaxWorkers + 1))
+	var stdout, stderr bytes.Buffer
+	if st := run([]string{"-count", in}, nil, &stdout, &stderr); st != 0 || stdout.String() != want.String() || !strings.Contains(want.String(), "records ") {
+		t.Errorf("GOMAXPROCS %d: status %d, stderr %q, output:\n%s\nwant:\n%s", mrt.MaxWorkers+1, st, stderr.String(), stdout.String(), want.String())
 	}
 }

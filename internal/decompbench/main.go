@@ -74,7 +74,7 @@ import (
 )
 
 func main() {
-	workers := flag.Int("workers", runtime.GOMAXPROCS(0), "DecompressWith's Workers")
+	workers := flag.Int("workers", min(runtime.GOMAXPROCS(0), mrt.MaxWorkers), "DecompressWith's Workers")
 	blocks := flag.Bool("blocks", false, "print the decoded block sizes of each file, and the speculative cap")
 	memMode := flag.Bool("mem", false, "sample the heap while reading each file once with DecompressWith")
 	crafted := flag.Bool("crafted", false, "with -mem: add the internal/bzcraft inputs")

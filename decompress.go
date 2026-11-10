@@ -35,12 +35,22 @@ func Decompress(r io.Reader) (io.Reader, error) {
 type DecompressOptions struct {
 	// Workers is how many goroutines decompress a bzip2 input in parallel;
 	// for gzip, any Workers > 0 runs decompression one goroutine ahead of
-	// the reader. 0 is Decompress: no goroutines.
+	// the reader. 0 is Decompress: no goroutines. At most MaxWorkers.
 	Workers int
 	// Context stops every goroutine DecompressWith started when it is
 	// cancelled; Read then returns Context.Err(). Required when Workers > 0.
 	Context context.Context
 }
+
+// MaxWorkers is the largest DecompressOptions.Workers DecompressWith
+// accepts; a count above it is an error, not a cap. Every worker is a
+// goroutine, all started at the first parallel block whatever the input's
+// size, and the reader's bound grows by about 17 MB a worker
+// (DecompressWith). 256 is far above the counts measured (4 and 14) and
+// keeps the reader's window bound within an int on 32-bit platforms (it
+// passes math.MaxInt there from 508 workers). A caller that sizes Workers
+// from GOMAXPROCS passes min(runtime.GOMAXPROCS(0), MaxWorkers).
+const MaxWorkers = 256
 
 const (
 	// gzipQueueBytes is the most decompressed output the gzip readahead
@@ -56,6 +66,7 @@ const (
 var (
 	errNegativeWorkers = errors.New("mrt: DecompressOptions.Workers is negative")
 	errNilContext      = errors.New("mrt: DecompressOptions.Workers > 0 needs a Context")
+	errTooManyWorkers  = errors.New("mrt: DecompressOptions.Workers is over MaxWorkers")
 )
 
 // DecompressWith is Decompress with options. DecompressWith(r,
@@ -65,8 +76,8 @@ var (
 // result gives the bytes Decompress gives, then an error where Decompress
 // fails. A broken gzip header is returned as the error, as Decompress
 // returns it. Uncompressed input is returned as Decompress returns it, and no
-// goroutine starts. Workers < 0, or Workers > 0 with a nil Context, is an
-// error.
+// goroutine starts. Workers < 0 or over MaxWorkers, or Workers > 0 with a
+// nil Context, is an error.
 //
 // Before it returns, DecompressWith reads the first bytes of r and, for gzip,
 // the whole gzip header, so r must be ready to be read.
@@ -99,6 +110,8 @@ func decompressWith(r io.Reader, opts DecompressOptions, hooks *bzip2Hooks) (io.
 	switch {
 	case opts.Workers < 0:
 		return nil, errNegativeWorkers
+	case opts.Workers > MaxWorkers:
+		return nil, errTooManyWorkers
 	case opts.Workers > 0 && opts.Context == nil:
 		return nil, errNilContext
 	case opts.Workers == 0:

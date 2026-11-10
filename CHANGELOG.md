@@ -8,6 +8,37 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-10
+
+### Added
+
+- `MaxWorkers` (256), the largest `DecompressOptions.Workers` that
+  `DecompressWith` accepts. 256 is far above the counts measured (4 and 14)
+  and keeps the bzip2 reader's window bound within an `int` on 32-bit
+  platforms (it passes `math.MaxInt` there from 508 workers).
+
+### Changed
+
+- `DecompressWith` returns an error for `Workers` over `MaxWorkers`, as it
+  does for a negative count; a caller that sizes it from `GOMAXPROCS` passes
+  `min(runtime.GOMAXPROCS(0), mrt.MaxWorkers)`. Unlimited, every worker was
+  a goroutine started at the first parallel block whatever the input's
+  size: on a 234-byte bzip2 input (`testdata/bzip2/multi-stream.bz2`, 364
+  bytes decompressed) a million workers passed 3 GB in 5 s
+  and 2^40 reached 2,991 MB (memguard stopped both, the second on memory
+  pressure), and 2^46 panicked in `make`
+  ("makechan: size out of range"), against the never-panic rule; on 64-bit
+  platforms counts past `math.MaxInt/2` decoded correctly only because the
+  doubled limit wrapped negative and no job was dispatched
+  (`.data/workers-panic-probe-v054.log`). `TestDecompressWithOptions` checks
+  that 257, 2^20, `math.MaxInt/2 + 1` and `math.MaxInt` are errors, and that `MaxWorkers` itself gives `Decompress`'s bytes (a check
+  of `>=` fails it, `.data/workers-sabotage-v060.log`).
+- `mrtdump` and `mrtcut` (and `internal/heldsize`, `internal/decompbench`'s
+  default, `BenchmarkDecompressWith`) use `min(GOMAXPROCS, MaxWorkers)` workers, so they still run with
+  `GOMAXPROCS` over 256: `TestMrtdumpManyProcs` and `TestCountManyProcs`,
+  on a bzip2 input, failed with the error before
+  (`.data/workers-cmds-red-v060.log`).
+
 ## [0.5.3] - 2026-11-10
 
 ### Fixed
@@ -1070,7 +1101,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/rkolesnichenko/mrt/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/rkolesnichenko/mrt/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/rkolesnichenko/mrt/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/rkolesnichenko/mrt/compare/v0.5.0...v0.5.1
