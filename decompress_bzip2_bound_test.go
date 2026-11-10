@@ -3,6 +3,7 @@ package mrt
 import (
 	"math"
 	"math/big"
+	"slices"
 	"testing"
 )
 
@@ -25,7 +26,11 @@ func TestWindowBoundSaturates(t *testing.T) {
 	// The last count whose bound fits, and the first that saturates.
 	const fixed = 2*(maxSegment+chainSlack) + fillSize
 	edge := (math.MaxInt - fixed) / (2 << 21)
-	for _, w := range []int{0, 1, 14, 507, 508, 509, 1 << 20, edge, edge + 1, math.MaxInt >> 22, math.MaxInt>>22 + 1, math.MaxInt / 4, math.MaxInt / 2, math.MaxInt} {
+	// Sorted, for the check that the bound never falls: where the rows lie
+	// depends on the platform (edge is 507 on 32-bit ones).
+	rows := []int{0, 1, 14, 507, 508, 509, 1 << 20, edge, edge + 1, math.MaxInt >> 22, math.MaxInt>>22 + 1, math.MaxInt / 4, math.MaxInt / 2, math.MaxInt}
+	slices.Sort(rows)
+	for _, w := range rows {
 		want := exact(w)
 		if want.Cmp(limit) > 0 {
 			want = limit
