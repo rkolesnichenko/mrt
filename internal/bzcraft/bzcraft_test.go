@@ -88,6 +88,48 @@ func TestBuilt(t *testing.T) {
 	}
 }
 
+// TestBoundLoad checks BoundLoad against its doc: 25 equal streams of one
+// block each, every copy 4 MiB or one byte less, each block's plaintext 1,150
+// bytes and its compressed size under maxSegment (a segment of just under
+// 4 MiB), and the whole decoding through compress/bzip2 to 28,750 bytes.
+func TestBoundLoad(t *testing.T) {
+	const plain = 1150
+	in := built(t, BoundLoad)
+	if len(in) > boundCopies*boundUnit || len(in) < boundCopies*(boundUnit-1) {
+		t.Errorf("%d bytes, want %d copies of %d bytes or one less", len(in), boundCopies, boundUnit)
+	}
+	// Under -race the walk of all 25 takes about 40 s: three streams, each a
+	// whole one, then do.
+	copies := boundCopies
+	if raceEnabled {
+		copies = 3
+	}
+	starts, ends, sizes, err := Blocks(in[:copies*(len(in)/boundCopies)])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sizes) != copies {
+		t.Fatalf("%d blocks, want %d", len(sizes), copies)
+	}
+	for i := range sizes {
+		n := (ends[i] - starts[i]) / 8
+		if sizes[i] != plain || n >= maxSegment || n < boundUnit-1024 {
+			t.Errorf("block %d: %d bytes of plaintext, %d compressed; want %d, just under %d", i, sizes[i], n, plain, boundUnit)
+		}
+		// The copies are equal (bytes.Repeat); each block follows its
+		// stream's 32-bit header.
+		if want := uint64(i)*uint64(len(in)/boundCopies)*8 + 32; starts[i] != want {
+			t.Errorf("block %d starts at bit %d, want %d", i, starts[i], want)
+		}
+	}
+	if !raceEnabled {
+		n, err := io.Copy(io.Discard, bzip2.NewReader(bytes.NewReader(in)))
+		if err != nil || n != boundCopies*plain {
+			t.Errorf("compress/bzip2: %d bytes, error %v; want %d", n, err, boundCopies*plain)
+		}
+	}
+}
+
 // runBlocks checks that every block is at most SpecCap and, but for the last,
 // at least min bytes.
 func runBlocks(t *testing.T, sizes []int, min int) {

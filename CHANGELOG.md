@@ -8,6 +8,50 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-10
+
+### Fixed
+
+- `DecompressWith`'s bzip2 window bound overflowed `int` on 32-bit
+  platforms from 508 workers (2 × (8 MiB + Workers × 2 MiB + 16) + 64 KiB
+  passes 2^31 − 1 there). Wrapped negative, it made the window grow by one
+  read's room at a time, recopying the whole window on every read. It now
+  saturates at `math.MaxInt`, as does the doubling of the window's capacity
+  (which wrapped the same way past half of `math.MaxInt`), and the pump's
+  limits on jobs, look-ahead and marks are computed in `int64`. On 64-bit
+  platforms only absurd counts were affected (from about 2^41 workers).
+  `TestWindowBoundSaturates` checks the bound against the exact value from
+  `math/big` for counts up to `math.MaxInt` (red on 64-bit before the fix;
+  on 32-bit, CI's linux/386 job runs it), `TestGrowDoublesAtManyWorkers`
+  that a full 1 MiB window
+  still doubles (before the fix it grew to 1 MiB + 64 KiB;
+  `.data/windowbound-red-v053.log`), and `TestGrowCapSaturates` the
+  doubling past half of `math.MaxInt`. `Workers` itself has no upper limit:
+  it is the number of goroutines and sizes a channel of twice as many jobs.
+
+### Tests
+
+- The seven test gaps left since v0.3.2. The five new tests each fail under
+  a sabotage of what they cover (`.data/gaps-sabotage-v053.log`); the
+  `paddedBench` change is shown by its output's equality, and the rewrap
+  has nothing to fail:
+  - `TestGzipReadaheadChunks`: the gzip readahead hands out at most
+    `gzipQueueBytes/gzipChunkBytes` distinct chunks of `gzipChunkBytes`
+    over 2 MiB (`TestDecompressWithGzipQueue` checked only the constants);
+  - `TestGrowLeavesRoomForRead` also requires that grow never more than
+    doubles a window beyond one read's room, so small windows stay small;
+  - `TestReapTakesFinishedZombies`: `reap` subtracts a finished result's
+    bytes and its job, and keeps the pending ones in order;
+  - `paddedBench` is built by a new `bzcraft.PadBlock`, which gives the
+    same 8,561,662 bytes as the copy of bzcraft's padding it replaces
+    (`.data/padbench-same-v053.log`);
+  - `TestBoundLoad` checks `bzcraft.BoundLoad` against its doc (25 equal
+    one-block streams of 4 MiB less a byte, 1,150 bytes of plaintext each,
+    28,750 in all; under `-race` three streams, 4.7 s instead of 39 s;
+    `.data/boundload-test-v053.log`, `.data/boundload-race-v053.log`);
+  - `TestCPUProfile` also covers a profile that cannot be created;
+  - the long comment line in `internal/bzip2/block.go` is rewrapped.
+
 ## [0.5.2] - 2026-11-09
 
 Tests and CI only; the module's code is unchanged.
@@ -1026,7 +1070,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/rkolesnichenko/mrt/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/rkolesnichenko/mrt/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/rkolesnichenko/mrt/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/rkolesnichenko/mrt/compare/v0.4.6...v0.5.0

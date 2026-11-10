@@ -23,6 +23,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -374,9 +375,11 @@ func (z *parallelBzip2) pump() {
 	for {
 		z.scan()
 		z.reap()
-		if z.dispatch() || z.outstanding >= 2*z.workers || z.srcErr != nil ||
-			z.winEnd()-z.rpos >= maxSegment+int64(2*z.workers)<<20 ||
-			len(z.marks) > 4*z.workers+markSlack {
+		// In int64, so that they cannot wrap on 32-bit platforms.
+		w := int64(z.workers)
+		if z.dispatch() || int64(z.outstanding) >= 2*w || z.srcErr != nil ||
+			z.winEnd()-z.rpos >= maxSegment+w<<21 ||
+			int64(len(z.marks)) > 4*w+markSlack {
 			return
 		}
 		z.fill()
@@ -419,7 +422,7 @@ func (z *parallelBzip2) dispatch() (held bool) {
 	}
 	end := z.winEnd()
 	for i := z.undispatched(); i < len(z.marks); i = z.undispatched() {
-		if z.outstanding >= 2*z.workers {
+		if int64(z.outstanding) >= 2*int64(z.workers) {
 			return false
 		}
 		m := &z.marks[i]
@@ -568,14 +571,25 @@ func (z *parallelBzip2) fill() {
 // never past windowBound, which the window never needs: append's own growth
 // would carry it up to a quarter past what it needs, and so past the bound.
 func (z *parallelBzip2) grow() {
-	need := len(z.win) + fillSize
-	if need <= cap(z.win) {
+	if len(z.win)+fillSize <= cap(z.win) {
 		return
 	}
-	c := min(max(2*cap(z.win), need), max(windowBound(z.workers), need))
-	win := make([]byte, len(z.win), c)
+	win := make([]byte, len(z.win), growCap(len(z.win), cap(z.win), windowBound(z.workers)))
 	copy(win, z.win)
 	z.win = win
+}
+
+// growCap is the capacity grow gives a window of length n and capacity c
+// that has no room for a read: double, but at least room for the read and at
+// most bound unless the read needs more. The doubling saturates, as the bound
+// does: wrapped negative, it would leave only the read's room.
+func growCap(n, c, bound int) int {
+	need := n + fillSize
+	dbl := math.MaxInt
+	if c <= math.MaxInt/2 {
+		dbl = 2 * c
+	}
+	return min(max(dbl, need), max(bound, need))
 }
 
 // windowBound is the most bytes the window needs at the given Workers, from
@@ -586,8 +600,17 @@ func (z *parallelBzip2) grow() {
 // the bytes before them are at least compactMin and half the window, so the
 // window is then under twice what it keeps, or compactMin more: under
 // 2 × (lead + chainSlack). One read then adds at most fillSize.
+//
+// The bound saturates at math.MaxInt, which on 32-bit platforms it passes
+// from 508 workers: wrapped negative, it made grow add one read's room at a
+// time and recopy the window on every read.
 func windowBound(workers int) int {
-	return 2*(maxSegment+workers<<21+chainSlack) + fillSize
+	const fixed = 2*(maxSegment+chainSlack) + fillSize
+	const perWorker = 2 << 21 // 2 × 2 MiB
+	if int64(workers) > (math.MaxInt-fixed)/perWorker {
+		return math.MaxInt
+	}
+	return fixed + workers*perWorker
 }
 
 // compact drops the window's bytes that nothing needs: those behind the chain,
