@@ -129,7 +129,7 @@ func open(name string, stdin io.Reader) (io.Reader, func(), error) {
 		in, closer = f, func() { f.Close() }
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	r, err := mrt.DecompressWith(in, mrt.DecompressOptions{Workers: runtime.GOMAXPROCS(0), Context: ctx})
+	r, err := mrt.DecompressWith(in, mrt.DecompressOptions{Workers: min(runtime.GOMAXPROCS(0), mrt.MaxWorkers), Context: ctx})
 	if err != nil {
 		cancel()
 		closer()

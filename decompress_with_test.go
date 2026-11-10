@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -576,9 +577,12 @@ func TestDecompressWithOptions(t *testing.T) {
 
 	ctx := context.Background()
 	for name, in := range map[string][]byte{"bzip2": bz, "raw": raw} {
-		for _, opts := range []mrt.DecompressOptions{{Workers: 1}, {Workers: -1}, {Workers: -1, Context: ctx}} {
+		for _, opts := range []mrt.DecompressOptions{
+			{Workers: 1}, {Workers: -1}, {Workers: -1, Context: ctx},
+			{Workers: mrt.MaxWorkers + 1, Context: ctx}, {Workers: 1 << 46, Context: ctx}, {Workers: math.MaxInt, Context: ctx},
+		} {
 			if r, err := mrt.DecompressWith(bytes.NewReader(in), opts); err == nil || r != nil {
-				t.Errorf("%s, Workers %d, Context %v: reader %v, error %v; want an error", name, opts.Workers, opts.Context, r, err)
+				t.Errorf("%s, Workers %d, Context %v: a reader %t, error %v; want only an error", name, opts.Workers, opts.Context, r != nil, err)
 			}
 		}
 	}
@@ -613,6 +617,17 @@ func TestDecompressWithOptions(t *testing.T) {
 	}
 	if n := runtime.NumGoroutine(); n != base {
 		t.Errorf("raw with Workers 4: %d goroutines, %d before", n, base)
+	}
+
+	// MaxWorkers itself is accepted, gives Decompress's bytes, and its
+	// goroutines end with the output.
+	want, wantErr := decompressed(bytes.NewReader(bz), 0, false)
+	got, err := decompressed(bytes.NewReader(bz), mrt.MaxWorkers, false)
+	if err != nil || wantErr != nil || !bytes.Equal(got, want) {
+		t.Errorf("bzip2 with MaxWorkers: %d bytes, error %v; Decompress: %d bytes, error %v", len(got), err, len(want), wantErr)
+	}
+	if n := waitGoroutines(base); n != base {
+		t.Errorf("bzip2 with MaxWorkers: %d goroutines after EOF, %d before", n, base)
 	}
 }
 

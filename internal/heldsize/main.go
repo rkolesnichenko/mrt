@@ -88,7 +88,7 @@ func (s *state) file(name string) error {
 	defer f.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	r, err := mrt.DecompressWith(f, mrt.DecompressOptions{Workers: runtime.GOMAXPROCS(0), Context: ctx})
+	r, err := mrt.DecompressWith(f, mrt.DecompressOptions{Workers: min(runtime.GOMAXPROCS(0), mrt.MaxWorkers), Context: ctx})
 	if err != nil {
 		return err
 	}

@@ -119,7 +119,7 @@ func (d *dumper) file(name string, stdin io.Reader) int {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	r, err := mrt.DecompressWith(in, mrt.DecompressOptions{Workers: runtime.GOMAXPROCS(0), Context: ctx})
+	r, err := mrt.DecompressWith(in, mrt.DecompressOptions{Workers: min(runtime.GOMAXPROCS(0), mrt.MaxWorkers), Context: ctx})
 	if err != nil {
 		fmt.Fprintf(d.errw, "mrtdump: %s: %v\n", name, err)
 		return exitRead

@@ -5,6 +5,7 @@ const KindEndOfRIB Kind = 5
 const KindPeerState Kind = 4
 const KindRIB Kind = 1
 const KindWithdraw Kind = 3
+const MaxWorkers = 256
 const PeerGlobal PeerType = 0
 const PeerLocRIB PeerType = 3
 const PeerLocal PeerType = 2
