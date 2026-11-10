@@ -8,6 +8,8 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-10
+
 ### Fixed
 
 - `DecompressWith`'s bzip2 window bound overflowed `int` on 32-bit
@@ -1068,7 +1070,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/rkolesnichenko/mrt/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/rkolesnichenko/mrt/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/rkolesnichenko/mrt/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/rkolesnichenko/mrt/compare/v0.4.6...v0.5.0
