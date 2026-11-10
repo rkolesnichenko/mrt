@@ -25,9 +25,9 @@ a minor version may change the API.
   documented worst case (about four times the bytes present) is unchanged.
   `TestReadRecordGrowsOnlyForBytes`, `TestReadMessageGrowsOnlyForBytes` and
   `TestReadRestHeldErrorNoGrow` fail on the old code and under five
-  sabotages: no `Peek`, `Peek` before the held error (which then returns
-  an `io.EOF` read past the reader's own error), and no held check in
-  openbmp (`.data/grow-sabotage-v061.log`).
+  sabotages: in each of the two readers, no `Peek`, and `Peek` before the
+  held error (which then returns an `io.EOF` read past the reader's own
+  error); and no held check in openbmp (`.data/grow-sabotage-v061.log`).
 
 ## [0.6.0] - 2026-11-10
 
