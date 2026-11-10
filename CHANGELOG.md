@@ -8,6 +8,8 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-10
+
 ### Fixed
 
 - A record, BMP message or OpenBMP frame stated longer than the bytes left,
@@ -1129,7 +1131,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/rkolesnichenko/mrt/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/rkolesnichenko/mrt/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/rkolesnichenko/mrt/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/rkolesnichenko/mrt/compare/v0.5.1...v0.5.2
