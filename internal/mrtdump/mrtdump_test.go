@@ -497,12 +497,12 @@ func TestMrtdumpWriteErrorStops(t *testing.T) {
 }
 
 // TestMrtdumpManyProcs: with GOMAXPROCS above mrt.MaxWorkers, mrtdump still
-// decompresses its input, with MaxWorkers workers. Not parallel: it sets
-// GOMAXPROCS.
+// decompresses a bzip2 input (state-changes.mrt at level 1), with MaxWorkers
+// workers. Not parallel: it sets GOMAXPROCS.
 func TestMrtdumpManyProcs(t *testing.T) {
-	_, want, _ := run(t, nil, "-m", synthetic+"nh32.mrt")
+	_, want, _ := run(t, nil, "-m", synthetic+"state-changes.mrt")
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(mrt.MaxWorkers + 1))
-	code, out, errs := run(t, nil, "-m", synthetic+"nh32.mrt")
+	code, out, errs := run(t, nil, "-m", "../../testdata/bzip2/level1.bz2")
 	if code != 0 || errs != "" {
 		t.Errorf("GOMAXPROCS %d: exit %d, stderr %q", mrt.MaxWorkers+1, code, errs)
 	}

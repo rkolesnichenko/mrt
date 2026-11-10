@@ -21,19 +21,21 @@ a minor version may change the API.
   does for a negative count; a caller that sizes it from `GOMAXPROCS` passes
   `min(runtime.GOMAXPROCS(0), mrt.MaxWorkers)`. Unlimited, every worker was
   a goroutine started at the first parallel block whatever the input's
-  size: on a 364-byte bzip2 input a million workers passed 3 GB in 5 s
+  size: on a 234-byte bzip2 input (`testdata/bzip2/multi-stream.bz2`, 364
+  bytes decompressed) a million workers passed 3 GB in 5 s
   and 2^40 reached 2,991 MB (memguard stopped both, the second on memory
   pressure), and 2^46 panicked in `make`
-  ("makechan: size out of range"), against the never-panic rule; counts past
-  `math.MaxInt/2` decoded correctly only because the doubled limit wrapped
-  negative and no job was dispatched (`.data/workers-panic-probe-v054.log`).
-  `TestDecompressWithOptions` checks that 257, 2^46 and `math.MaxInt` are
-  errors, and that `MaxWorkers` itself gives `Decompress`'s bytes (a check
-  of `>=` fails it, `.data/workers-sabotage-v054.log`).
+  ("makechan: size out of range"), against the never-panic rule; on 64-bit
+  platforms counts past `math.MaxInt/2` decoded correctly only because the
+  doubled limit wrapped negative and no job was dispatched
+  (`.data/workers-panic-probe-v054.log`). `TestDecompressWithOptions` checks
+  that 257, 2^20, `math.MaxInt/2 + 1` and `math.MaxInt` are errors, and that `MaxWorkers` itself gives `Decompress`'s bytes (a check
+  of `>=` fails it, `.data/workers-sabotage-v060.log`).
 - `mrtdump` and `mrtcut` (and `internal/heldsize`, `internal/decompbench`'s
-  default) use `min(GOMAXPROCS, MaxWorkers)` workers, so they still run with
-  `GOMAXPROCS` over 256: `TestMrtdumpManyProcs` and `TestCountManyProcs`
-  failed with the error before (`.data/workers-cmds-red-v054.log`).
+  default, `BenchmarkDecompressWith`) use `min(GOMAXPROCS, MaxWorkers)` workers, so they still run with
+  `GOMAXPROCS` over 256: `TestMrtdumpManyProcs` and `TestCountManyProcs`,
+  on a bzip2 input, failed with the error before
+  (`.data/workers-cmds-red-v060.log`).
 
 ## [0.5.3] - 2026-11-10
 

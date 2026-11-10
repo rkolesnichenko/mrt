@@ -579,7 +579,8 @@ func TestDecompressWithOptions(t *testing.T) {
 	for name, in := range map[string][]byte{"bzip2": bz, "raw": raw} {
 		for _, opts := range []mrt.DecompressOptions{
 			{Workers: 1}, {Workers: -1}, {Workers: -1, Context: ctx},
-			{Workers: mrt.MaxWorkers + 1, Context: ctx}, {Workers: 1 << 46, Context: ctx}, {Workers: math.MaxInt, Context: ctx},
+			{Workers: mrt.MaxWorkers + 1, Context: ctx}, {Workers: 1 << 20, Context: ctx},
+			{Workers: math.MaxInt/2 + 1, Context: ctx}, {Workers: math.MaxInt, Context: ctx},
 		} {
 			if r, err := mrt.DecompressWith(bytes.NewReader(in), opts); err == nil || r != nil {
 				t.Errorf("%s, Workers %d, Context %v: a reader %t, error %v; want only an error", name, opts.Workers, opts.Context, r != nil, err)

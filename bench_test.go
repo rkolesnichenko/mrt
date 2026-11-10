@@ -141,7 +141,7 @@ func BenchmarkBzip2(b *testing.B) {
 	}
 }
 
-// BenchmarkDecompressWith: DecompressWith (GOMAXPROCS workers) of the same
+// BenchmarkDecompressWith: DecompressWith (GOMAXPROCS workers, at most MaxWorkers) of the same
 // bzip2 file to io.Discard; compare with BenchmarkBzip2.
 func BenchmarkDecompressWith(b *testing.B) {
 	const path = "testdata/bench/rv2-updates-et.20261015.1200.bz2"
@@ -165,7 +165,7 @@ func BenchmarkDecompressWith(b *testing.B) {
 	run := func(w io.Writer) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		r, err := mrt.DecompressWith(bytes.NewReader(compressed), mrt.DecompressOptions{Workers: runtime.GOMAXPROCS(0), Context: ctx})
+		r, err := mrt.DecompressWith(bytes.NewReader(compressed), mrt.DecompressOptions{Workers: min(runtime.GOMAXPROCS(0), mrt.MaxWorkers), Context: ctx})
 		if err != nil {
 			b.Fatal(err)
 		}
