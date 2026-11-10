@@ -252,12 +252,21 @@ const smallFrame = 64 << 10
 // smallFrame is allocated exactly; a larger one starts at smallFrame and
 // doubles as bytes arrive, so a prefix that states more bytes than follow
 // allocates, in total, at most smallFrame or under four times the bytes
-// present, whichever is larger (CLAUDE.md principle 2).
+// present, whichever is larger (CLAUDE.md principle 2). A frame whose
+// reader returns its error with the bytes that fill the buffer is not given
+// room for more.
 func (fr *frameReader) readRest(head []byte, total int) ([]byte, error) {
 	f := make([]byte, len(head), min(total, smallFrame))
 	copy(f, head)
 	for len(f) < total {
 		if len(f) == cap(f) {
+			// An error held from the read that filled f needs no more room:
+			// return it before growing. Without bufio there is no Peek, so an
+			// end that comes on the next Read still costs one growth.
+			if err := fr.err; err != nil {
+				fr.err = nil
+				return nil, restErr(err, len(f), total)
+			}
 			g := make([]byte, len(f), min(2*cap(f), total))
 			copy(g, f)
 			f = g
@@ -265,13 +274,18 @@ func (fr *frameReader) readRest(head []byte, total int) ([]byte, error) {
 		n, err := fr.read(f[len(f):cap(f)])
 		f = f[:len(f)+n]
 		if err != nil {
-			if cut(err) {
-				return nil, fmt.Errorf("%w: %d of %d bytes", ErrTruncated, len(f), total)
-			}
-			return nil, err
+			return nil, restErr(err, len(f), total)
 		}
 	}
 	return f, nil
+}
+
+// restErr is the error of a frame of total bytes that err ended after got.
+func restErr(err error, got, total int) error {
+	if cut(err) {
+		return fmt.Errorf("%w: %d of %d bytes", ErrTruncated, got, total)
+	}
+	return err
 }
 
 // frameLen checks a frame's stated header and message lengths and returns the

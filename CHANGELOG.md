@@ -8,6 +8,27 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+### Fixed
+
+- A record, BMP message or OpenBMP frame stated longer than the bytes left,
+  whose bytes ended exactly where the reading buffer was full, made the
+  reader double the buffer once more (allocating and copying) before it
+  found the end. `Records`' and `bmp.Messages`' readers now ask their
+  `bufio.Reader` first: an error held from the read that filled the buffer,
+  then `Peek(1)`, which returns the end without reading past an error. A
+  body of 65,536 bytes after a 12-byte header kept a 163,840-byte buffer
+  rather than 65,548, one of 163,828 a 401,408-byte buffer rather than
+  163,840 (`.data/grow-red-v061.log`). `openbmp.Frames` reads a plain
+  `io.Reader`, so only an error that comes with the last bytes is caught
+  there; one returned by the next `Read` still costs the doubling. A body
+  that ends mid-buffer had already paid for its last growth, so the
+  documented worst case (about four times the bytes present) is unchanged.
+  `TestReadRecordGrowsOnlyForBytes`, `TestReadMessageGrowsOnlyForBytes` and
+  `TestReadRestHeldErrorNoGrow` fail on the old code and under five
+  sabotages: no `Peek`, `Peek` before the held error (which then returns
+  an `io.EOF` read past the reader's own error), and no held check in
+  openbmp (`.data/grow-sabotage-v061.log`).
+
 ## [0.6.0] - 2026-11-10
 
 ### Added
