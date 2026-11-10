@@ -8,6 +8,36 @@ a minor version may change the API.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-10
+
+### Fixed
+
+- A record, BMP message or OpenBMP frame stated longer than the bytes left,
+  whose bytes ended exactly where the reading buffer was full, made the
+  reader double the buffer once more (allocating and copying) before it
+  found the end. `Records`' and `bmp.Messages`' readers now ask their
+  `bufio.Reader` first: an error held from the read that filled the buffer,
+  then `Peek(1)`, which returns the end without reading past an error. In
+  the tests (go1.27.3), a body of 65,536 bytes after a 12-byte header kept
+  a 163,840-byte buffer rather than 65,548, and one of 163,828 a
+  401,408-byte buffer rather than 163,840 (`.data/grow-red-v061.log`); where
+  the boundaries fall depends on the header's length and Go's growth rule.
+  A reader that, just there, returns no bytes and no error 100 times in a
+  row now ends the stream with `io.ErrNoProgress`, as skipping an oversized
+  record already did.
+- `openbmp.Frames` reads a plain `io.Reader`, so only an error that comes
+  with the last bytes is caught there: on the old code, a frame ending at
+  its full 64 KiB buffer allocated about 198 KB a read, one ending a byte
+  earlier about 67 KB (`.data/grow-openbmp-v061.log`). An error returned by
+  the next `Read` still costs the doubling.
+- A body that ends mid-buffer had already paid for its last growth, so the
+  documented worst case (about four times the bytes present) is unchanged.
+  `TestReadRecordGrowsOnlyForBytes`, `TestReadMessageGrowsOnlyForBytes` and
+  `TestReadRestHeldErrorNoGrow` fail on the old code and under five
+  sabotages: in each of the two readers, no `Peek`, and `Peek` before the
+  held error (which then returns an `io.EOF` read past the reader's own
+  error); and no held check in openbmp (`.data/grow-sabotage-v061.log`).
+
 ## [0.6.0] - 2026-11-10
 
 ### Added
@@ -1101,7 +1131,8 @@ First release. Every figure below comes from a command run on
 - RFC 7606 actions (treat-as-withdraw and so on) are not applied; the
   diagnostics carry the faults.
 
-[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/rkolesnichenko/mrt/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/rkolesnichenko/mrt/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/rkolesnichenko/mrt/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/rkolesnichenko/mrt/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/rkolesnichenko/mrt/compare/v0.5.1...v0.5.2

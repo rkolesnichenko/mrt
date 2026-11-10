@@ -199,6 +199,24 @@ func (s *stream) discard(n int64) (int64, error) {
 	return got, nil
 }
 
+// end returns the error the next read would return with no bytes, or nil if
+// there are bytes to read: the error held from the read that filled the
+// last buffer, else the reader's own end, which Peek finds without reading
+// past an error. readMessage calls it before growing its buffer, so that a body
+// ending where the buffer is full is not given room it will not fill. A
+// reader that returns no bytes and no error 100 times in a row there ends
+// the stream with io.ErrNoProgress (bufio's limit), as it does in discard;
+// readFull would have kept calling it.
+func (s *stream) end() error {
+	if s.err != nil {
+		err := s.err
+		s.err = nil
+		return err
+	}
+	_, err := s.br.Peek(1)
+	return err
+}
+
 // smallBody is the largest body allocated in one piece before any of it is read.
 const smallBody = 64 << 10
 
@@ -206,7 +224,8 @@ const smallBody = 64 << 10
 // a copy of reader.go:readRecord in package mrt, growth rule included: a body
 // up to smallBody is allocated exactly; a larger one doubles as bytes arrive,
 // so a header that lies about its length allocates, in total, about four
-// times the bytes present, and under five.
+// times the bytes present, and under five. A body that ends where the buffer
+// is full is returned without growing it once more (stream.end).
 // It returns the number of body bytes consumed.
 func readMessage(s *stream, hdr []byte, bodyLen int64) ([]byte, int64, error) {
 	if bodyLen <= smallBody {
@@ -221,6 +240,9 @@ func readMessage(s *stream, hdr []byte, bodyLen int64) ([]byte, int64, error) {
 	for got < bodyLen {
 		chunk := int64(cap(raw) - len(raw))
 		if chunk == 0 {
+			if err := s.end(); err != nil {
+				return raw, got, err
+			}
 			chunk = int64(len(raw))
 		}
 		chunk = min(chunk, bodyLen-got)
